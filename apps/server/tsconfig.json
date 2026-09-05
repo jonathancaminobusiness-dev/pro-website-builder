@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "composite": true, "rootDir": "src", "outDir": "dist", "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo" },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/domain" }, { "path": "../../packages/export" }, { "path": "../../packages/linter" },
+    { "path": "../../packages/orchestrator" }, { "path": "../../packages/providers" }, { "path": "../../packages/render-hub" }, { "path": "../../packages/renderer" }
+  ]
+}

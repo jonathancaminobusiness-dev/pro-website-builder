@@ -1,0 +1,19 @@
+{
+  "name": "@pwb/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "tsc -p tsconfig.json", "dev": "tsx src/index.ts" },
+  "dependencies": {
+    "@pwb/domain": "workspace:*",
+    "@pwb/export": "workspace:*",
+    "@pwb/linter": "workspace:*",
+    "@pwb/orchestrator": "workspace:*",
+    "@pwb/providers": "workspace:*",
+    "@pwb/render-hub": "workspace:*",
+    "@pwb/renderer": "workspace:*",
+    "better-sqlite3": "^12.0.0",
+    "drizzle-orm": "^0.44.0"
+  },
+  "devDependencies": { "@types/better-sqlite3": "^7.6.13", "tsx": "^4.19.0" }
+}

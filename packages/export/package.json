@@ -1,0 +1,9 @@
+{
+  "name": "@pwb/export",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": ".",
+  "types": "./dist/index.d.ts",
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "dependencies": { "@pwb/domain": "workspace:*", "@pwb/renderer": "workspace:*" }
+}
