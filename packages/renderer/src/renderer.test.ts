@@ -10,6 +10,7 @@ describe('deterministic renderer', () => {
     expect(result.css).toContain('--color-ink: #18252d');
     expect(result.css).toContain('@container');
     expect(result.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
+    expect(result.routes[0]!.html).toContain('<!doctype html>');
     expect(result.html).not.toContain('<script');
   });
 

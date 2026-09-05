@@ -67,6 +67,7 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
 
 export function renderDesign(ir: DesignIR): RenderedDocument {
   const values = resolveTokens(ir.tokens).values;
-  const routes = ir.pages.routes.map((page) => ({ route: page.route, title: page.title, html: renderPage(page, values) }));
-  return { html: routes[0]?.html ?? '<main></main>', css: renderCss(ir, values), routes, irHash: hashJson(ir), rendererVersion: RENDERER_VERSION };
+  const css = renderCss(ir, values);
+  const routes = ir.pages.routes.map((page) => ({ route: page.route, title: page.title, html: `<!doctype html><html lang="${escapeHtml(ir.identity.meta.locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body>${renderPage(page, values)}</body></html>` }));
+  return { html: routes[0]?.html ?? '<!doctype html><main></main>', css, routes, irHash: hashJson(ir), rendererVersion: RENDERER_VERSION };
 }

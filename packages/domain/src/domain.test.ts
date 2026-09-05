@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   DesignIRSchema,
+  CritiqueReportSchema,
+  FindingSchema,
   IdentitySpecSchema,
   PatchSchema,
   createFixtureIR,
@@ -43,5 +45,10 @@ describe('domain contracts', () => {
 
   it('hashes equivalent objects deterministically', () => {
     expect(hashJson({ b: 2, a: 1 })).toBe(hashJson({ a: 1, b: 2 }));
+  });
+
+  it('validates review contracts without granting agents mutation authority', () => {
+    const finding = FindingSchema.parse({ id: 'TOK-001', severity: 'error', path: '/tokens', message: 'Use a token.' });
+    expect(CritiqueReportSchema.parse({ stage: 'prototype', findings: [finding], score: 0.8, summary: 'Typed review.' }).findings).toHaveLength(1);
   });
 });

@@ -4,6 +4,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Add durable project-specific notes here as they are discovered through real work.
 
+- Use Corepack commands from `README.md` because pnpm is not assumed to be globally installed.
+- Keep generated sites flowing through `packages/domain` → `packages/orchestrator` → `packages/renderer`; agents must not write HTML/JSX directly.
+- The server/API and isolated preview ports, provider safety boundary, and fixture CLI are documented in `README.md` and `apps/server/src/index.ts`.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

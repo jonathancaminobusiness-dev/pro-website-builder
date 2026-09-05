@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR, type AgentTask } from '@pwb/domain';
+import { createFixtureIR, hashJson, type AgentTask } from '@pwb/domain';
 import { FakeModelProvider } from '@pwb/providers';
 import { Applier, PatchGate, RunPlanner, Scheduler, VersionStore } from './index.js';
 
@@ -48,6 +48,7 @@ describe('orchestrator', () => {
     const next = applier.apply(proposal);
     expect(next.parentId).toBe(root.id);
     expect(next.id).not.toBe(root.id);
+    expect(next.hash).toBe(hashJson(next.ir));
     expect(store.get(root.id)?.hash).toBe(root.hash);
     expect(next.inverse.operations[0]?.op).toBe('replace');
   });
