@@ -24,8 +24,7 @@ export async function exportStatic(rendered: RenderedDocument, ir: DesignIR, roo
   }
   const digest = hashJson({ irHash: rendered.irHash, rendererVersion: rendered.rendererVersion, routes: rendered.routes, css: rendered.css, assets: ir.assets });
   const directory = join(rootDir, digest);
-  await mkdir(join(directory, 'assets'), { recursive: true });
-  await writeFile(join(directory, 'assets', 'styles.css'), rendered.css, 'utf8');
+  await mkdir(directory, { recursive: true });
   for (const route of rendered.routes) {
     const file = join(directory, routePath(route.route));
     await mkdir(join(file, '..'), { recursive: true });

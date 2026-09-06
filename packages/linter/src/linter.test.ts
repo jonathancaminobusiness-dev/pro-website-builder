@@ -13,10 +13,10 @@ describe('identity linter', () => {
   it('reports a forbidden default that a token-only document hides behind a token', () => {
     const ir = createFixtureIR();
     ir.identity.forbiddenDefaults.fonts.push('system-ui');
-    (ir.tokens as { type: { body: { $value: string } } }).type.body.$value = 'system-ui, sans-serif';
+    (ir.identity.tokens as { type: { body: { $value: string } } }).type.body.$value = 'system-ui, sans-serif';
     const report = lintDesign(ir);
     const def = report.findings.find((finding) => finding.id === 'DEF-010');
-    expect(def).toMatchObject({ path: '/tokens/type/body', stage: 'prototype', severity: 'error' });
+    expect(def).toMatchObject({ path: '/identity/tokens/type/body', stage: 'prototype', severity: 'error' });
     expect(report.errorCount).toBe(1);
   });
 
@@ -37,11 +37,11 @@ describe('identity linter', () => {
 
   it('reports tokens that collide on or break out of a CSS custom property', () => {
     const ir = createFixtureIR();
-    (ir.tokens as { color: Record<string, unknown> }).color['ink-strong'] = { $value: '#000000', $type: 'color' };
-    (ir.tokens as { color: { ink: Record<string, unknown> } }).color.ink = { strong: { $value: '#ffffff', $type: 'color' } };
+    (ir.identity.tokens as { color: Record<string, unknown> }).color['ink-strong'] = { $value: '#000000', $type: 'color' };
+    (ir.identity.tokens as { color: { ink: Record<string, unknown> } }).color.ink = { strong: { $value: '#ffffff', $type: 'color' } };
     expect(lintDesign(ir).findings.some((item) => item.id === 'TOK-004' && /compile to the CSS custom property/.test(item.message))).toBe(true);
     const injected = createFixtureIR();
-    (injected.tokens as { color: { accent: { $value: string } } }).color.accent.$value = '#000</style>';
+    (injected.identity.tokens as { color: { accent: { $value: string } } }).color.accent.$value = '#000</style>';
     expect(lintDesign(injected).findings.some((item) => item.id === 'TOK-004' && /cannot be emitted into CSS/.test(item.message))).toBe(true);
   });
 

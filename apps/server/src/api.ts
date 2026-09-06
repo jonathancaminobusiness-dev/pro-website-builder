@@ -34,7 +34,7 @@ export function createApiServer(options: ApiOptions): Server {
         if (request.method === 'GET' && !action) { send(response, 200, run.snapshot()); return; }
         if (request.method !== 'POST') { send(response, 405, { error: 'Method not allowed.' }); return; }
         if (action === 'stage') { send(response, 200, await run.runNext()); return; }
-        if (action === 'cancel') { run.cancel(); send(response, 200, run.snapshot()); return; }
+        if (action === 'cancel') { await run.cancel(); send(response, 200, run.snapshot()); return; }
         if (action === 'restart') { await run.restart(); send(response, 200, run.snapshot()); return; }
         if (action === 'approve') {
           const input = await body(request);
@@ -52,13 +52,6 @@ export function createApiServer(options: ApiOptions): Server {
           send(response, 200, await run.reject(stage, 'captain', typeof input.rationale === 'string' ? input.rationale : undefined));
           return;
         }
-      }
-      const projectMatch = /^\/api\/projects\/([^/]+)$/.exec(pathname);
-      if (request.method === 'GET' && projectMatch) {
-        const run = [...options.runs.values()].find((candidate) => candidate.snapshot().projectId === decodeURIComponent(projectMatch[1]!));
-        if (!run) { send(response, 404, { error: 'Project not found.' }); return; }
-        send(response, 200, run.snapshot());
-        return;
       }
       send(response, 404, { error: 'Not found.' });
     } catch (error) { send(response, 500, { error: error instanceof Error ? error.message : 'Internal error.' }); }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR } from '@pwb/domain';
-import { FakeModelProvider, HiggsfieldMcpProvider, idempotencyKey } from './index.js';
+import { createFixtureIR, idempotencyKey } from '@pwb/domain';
+import { FakeModelProvider, HiggsfieldMcpProvider } from './index.js';
 
 describe('providers', () => {
   it('returns typed deterministic proposals from the fake model', async () => {
@@ -24,8 +24,10 @@ describe('providers', () => {
     expect(calls).toEqual([{ prompt: 'paper texture', model: 'higgsfield', aspect: '1:1', idempotency_key: 'digest' }]);
   });
 
-  it('derives an idempotency key without including credentials', () => {
+  it('derives an idempotency key without including credentials', async () => {
     const key = idempotencyKey({ stage: 'identity', role: 'director', baseVersionId: 'v0', inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake' });
+    const proposed = await new FakeModelProvider().propose({ id: 'task-1', stage: 'identity', role: 'director', state: 'queued', lane: 'claude', baseVersionId: 'v0', inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake', deadlineMs: 5000, allowedPaths: ['/reviewRecord'], brief: 'fixture' });
+    expect(proposed.proposal?.idempotencyKey).toBe(key);
     expect(key).toHaveLength(64);
     expect(key).not.toMatch(/token|secret|key/i);
     expect(createFixtureIR().meta.projectId).toBe('fixture-project');

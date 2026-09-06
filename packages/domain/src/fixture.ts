@@ -45,7 +45,7 @@ export function createFixtureIR(): DesignIR {
   const node = (id: string, kind: 'stack' | 'grid' | 'cluster' | 'media' | 'type' | 'surface' | 'ornament' | 'component', semantic: string, props: Record<string, string | number | boolean>, slots: Record<string, string[]> = {}) => ({ id, kind, semantic, props, slots, responsive: [] });
   return {
     meta: { id: 'fixture-ir', projectId: 'fixture-project', versionId: 'v0', rendererVersion: 'renderer-0.1', createdAt: '2026-09-05T00:00:00.000Z' },
-    identity, tokens: identity.tokens,
+    identity,
     pages: { routes: [
       { id: 'page-home', route: '/', title: 'Oficina — início', rootNodeId: 'home-root', nodes: [node('home-root', 'stack', 'main', { gap: '{space.lg}', color: '{color.ink}', background: '{color.paper}' }, { children: ['home-title', 'home-proof'] }), node('home-title', 'type', 'h1', { text: 'Toda escolha tem motivo.', color: '{color.ink}', font: '{type.display}' }), node('home-proof', 'surface', 'section', { text: 'Processo rastreável.', background: '{color.accent}', radius: '{radius.card}', padding: '{space.md}' })] },
       { id: 'page-proof', route: '/proof', title: 'Oficina — prova', rootNodeId: 'proof-root', nodes: [node('proof-root', 'stack', 'main', { gap: '{space.md}', color: '{color.ink}', background: '{color.paper}' }, { children: ['proof-title'] }), node('proof-title', 'type', 'h1', { text: 'Prova antes do brilho.', color: '{color.ink}', font: '{type.display}' })] },

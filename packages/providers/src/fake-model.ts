@@ -1,4 +1,4 @@
-import { hashJson, type AgentResult, type AgentTask } from '@pwb/domain';
+import { idempotencyKey, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { ModelProvider } from './model.js';
 
 export class FakeModelProvider implements ModelProvider {
@@ -17,7 +17,7 @@ export class FakeModelProvider implements ModelProvider {
         confidence: 1,
         stage: task.stage,
         role: task.role,
-        idempotencyKey: hashJson([task.stage, task.role, task.baseVersionId, task.inputDigest, task.promptVersion, task.modelAlias]),
+        idempotencyKey: idempotencyKey(task),
       },
     };
   }

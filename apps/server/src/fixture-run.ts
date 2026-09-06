@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createFixtureIR, type Approval } from '@pwb/domain';
 import { exportStatic, type ExportManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
-import { Applier, PatchGate, RunPlanner, type VersionRecord, VersionStore } from '@pwb/orchestrator';
+import { Applier, PatchGate, RunPlanner, Scheduler, type VersionRecord, VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import type { ProjectRepository } from './db/repository.js';
@@ -34,6 +34,7 @@ export class FixtureRun {
   private readonly store = new VersionStore();
   private readonly applier = new Applier(this.store, new PatchGate());
   private readonly planner = new RunPlanner();
+  private readonly scheduler = new Scheduler();
   private readonly approvals: Approval[] = [];
   private currentVersion!: VersionRecord;
   private rendered!: RenderedDocument;
@@ -76,23 +77,33 @@ export class FixtureRun {
     await this.record('task.queued', { taskId: task.id, stage: task.stage, baseVersionId: task.baseVersionId });
     if (!this.started) { this.started = true; await this.record('run.started', { stage: task.stage }); }
     await this.record('task.started', { taskId: task.id, stage: task.stage });
-    const result = await this.options.provider.propose(task);
-    if (this.cancelRequested) { this.status = 'cancelled'; await this.record('task.cancelled', { taskId: task.id, stage: task.stage }); return this.snapshot(); }
-    if (!result.proposal) {
+    const scheduled = await this.scheduler.run([task], (item, signal) => this.options.provider.propose(item, signal), { edges: plan.edges });
+    const outcome = scheduled.results[0];
+    if (this.cancelRequested || outcome?.state === 'cancelled') return this.cancelStage(task);
+    const proposal = outcome?.state === 'succeeded' ? outcome.value?.proposal : undefined;
+    if (!proposal) {
       this.status = 'failed';
-      await this.record('task.failed', { taskId: task.id, stage: task.stage, reason: result.summary });
-      throw new Error('Fixture provider returned no proposal.');
+      const reason = outcome?.error instanceof Error ? outcome.error.message : outcome?.value?.summary ?? 'The stage produced no proposal.';
+      await this.record('task.failed', { taskId: task.id, stage: task.stage, reason });
+      throw new Error(`Stage ${task.stage} produced no proposal: ${reason}`);
     }
-    const next = this.applier.apply(result.proposal, task.allowedPaths);
-    await ignoringDuplicate(this.options.repository.savePatch(result.proposal, this.runId()));
+    renderDesign(this.applier.dryRun(proposal, task.allowedPaths).next);
+    const next = this.applier.apply(proposal, task.allowedPaths);
+    await ignoringDuplicate(this.options.repository.savePatch(proposal, this.runId()));
     await ignoringDuplicate(this.options.repository.saveVersion({ id: next.id, projectId: this.projectId(), ...(next.parentId ? { parentId: next.parentId } : {}), hash: next.hash, ir: next.ir }));
     this.currentVersion = next;
     this.rendered = renderDesign(next.ir);
     this.lintErrorCount = lintDesign(next.ir).errorCount;
-    this.status = 'needs_review';
     await this.record('patch.applied', { taskId: task.id, stage: task.stage, baseVersionId: task.baseVersionId, versionId: next.id });
     await this.record('version.created', { versionId: next.id, hash: next.hash });
     await this.record('task.succeeded', { taskId: task.id, stage: task.stage, versionId: next.id });
+    if (this.cancelRequested) {
+      this.cancelRequested = false;
+      this.statusBeforeCancel = 'needs_review';
+      this.status = 'cancelled';
+      return this.snapshot();
+    }
+    this.status = 'needs_review';
     return this.snapshot();
   }
 
@@ -126,7 +137,22 @@ export class FixtureRun {
   }
 
   async runAll(): Promise<FixtureSnapshot> { while (this.stageIndex < 3) { await this.runNext(); if (this.status === 'cancelled') break; const stage = this.currentStage; if (!stage) throw new Error('Run did not produce a gate.'); await this.approve(stage, 'captain'); } return this.snapshot(); }
-  cancel(): void { if (this.status !== 'succeeded' && this.status !== 'cancelled') { this.statusBeforeCancel = this.status; this.cancelRequested = true; this.status = 'cancelled'; } }
+  async cancel(): Promise<FixtureSnapshot> {
+    this.requireInitialized();
+    if (this.status === 'succeeded' || this.status === 'cancelled') return this.snapshot();
+    this.statusBeforeCancel = this.status;
+    this.cancelRequested = true;
+    this.status = 'cancelled';
+    await this.record('run.cancelled', { status: this.statusBeforeCancel, stage: this.currentStage });
+    return this.snapshot();
+  }
+
+  private async cancelStage(task: { id: string; stage: Stage }): Promise<FixtureSnapshot> {
+    this.cancelRequested = false;
+    this.status = 'cancelled';
+    await this.record('task.cancelled', { taskId: task.id, stage: task.stage });
+    return this.snapshot();
+  }
   async restart(): Promise<FixtureSnapshot> {
     this.requireInitialized();
     if (this.status !== 'cancelled') return this.snapshot();

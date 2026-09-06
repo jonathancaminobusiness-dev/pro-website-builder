@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
-import { AgentResultSchema, schemaJson, type AgentResult, type AgentTask } from '@pwb/domain';
+import { AgentResultSchema, idempotencyKey, schemaJson, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
@@ -33,7 +33,8 @@ export class ClaudeRunner implements ModelProvider {
         ], { shell: false, timeout: this.options.timeoutMs, signal, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
         const raw: unknown = JSON.parse(stdout);
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
-        return AgentResultSchema.parse(structured);
+        const result = AgentResultSchema.parse(structured);
+        return result.proposal ? { ...result, proposal: { ...result.proposal, idempotencyKey: idempotencyKey(task) } } : result;
       } catch (error) {
         const details = error as { code?: unknown; signal?: unknown; killed?: unknown; name?: unknown };
         const code = details.code === undefined ? '' : String(details.code);

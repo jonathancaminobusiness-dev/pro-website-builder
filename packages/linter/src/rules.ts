@@ -25,7 +25,7 @@ function tokenOnly(ir: DesignIR): LintIssue[] {
 function aliasesAndRefs(ir: DesignIR): LintIssue[] {
   const issues: LintIssue[] = [];
   let resolved: ReturnType<typeof resolveTokens> | undefined;
-  try { resolved = resolveTokens(ir.tokens); } catch (error) { issues.push({ path: '/tokens', message: error instanceof Error ? error.message : 'Token aliases are invalid.' }); }
+  try { resolved = resolveTokens(ir.identity.tokens); } catch (error) { issues.push({ path: '/identity/tokens', message: error instanceof Error ? error.message : 'Token aliases are invalid.' }); }
   for (const { path, value } of visualProps(ir)) {
     if (typeof value !== 'string') continue;
     const match = /^\{([^}]+)\}$/.exec(value);
@@ -37,18 +37,18 @@ function aliasesAndRefs(ir: DesignIR): LintIssue[] {
 function forbiddenDefaults(ir: DesignIR): LintIssue[] {
   const defaults = [...ir.identity.forbiddenDefaults.fonts, ...ir.identity.forbiddenDefaults.palettes, ...ir.identity.forbiddenDefaults.motifs];
   let resolved: ReturnType<typeof resolveTokens>;
-  try { resolved = resolveTokens(ir.tokens); } catch { return []; }
+  try { resolved = resolveTokens(ir.identity.tokens); } catch { return []; }
   const issues: LintIssue[] = [];
   for (const [path, value] of Object.entries(resolved.values)) {
     if (typeof value !== 'string') continue;
     const match = defaults.find((candidate) => value.toLowerCase().includes(candidate.toLowerCase()));
-    if (match) issues.push({ path: `/tokens/${path.replaceAll('.', '/')}`, message: `Forbidden default detected: ${match}.` });
+    if (match) issues.push({ path: `/identity/tokens/${path.replaceAll('.', '/')}`, message: `Forbidden default detected: ${match}.` });
   }
   return issues;
 }
 
 function identityTokenRoles(ir: DesignIR): LintIssue[] {
-  const paths = flattenTokens(ir.tokens);
+  const paths = flattenTokens(ir.identity.tokens);
   return Object.entries(ir.identity.tokenRoles)
     .filter(([, path]) => !paths.has(path))
     .map(([role, path]) => ({ path: `/identity/tokenRoles/${role}`, message: `Token role ${role} points at ${path}, which the document does not define.` }));
@@ -56,8 +56,8 @@ function identityTokenRoles(ir: DesignIR): LintIssue[] {
 
 function emittableTokens(ir: DesignIR): LintIssue[] {
   let resolved: ReturnType<typeof resolveTokens>;
-  try { resolved = resolveTokens(ir.tokens); } catch { return []; }
-  return cssTokenIssues(resolved.values).map((issue) => ({ path: `/tokens/${issue.path.replaceAll('.', '/')}`, message: issue.message }));
+  try { resolved = resolveTokens(ir.identity.tokens); } catch { return []; }
+  return cssTokenIssues(resolved.values).map((issue) => ({ path: `/identity/tokens/${issue.path.replaceAll('.', '/')}`, message: issue.message }));
 }
 
 export const ruleRegistry: LintRule[] = [

@@ -2,8 +2,8 @@ import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FakeModelProvider } from '@pwb/providers';
-import { openDatabase, ProjectRepository } from './db/repository.js';
+import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
+import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
 
 describe('phase 0 fixture run', () => {
@@ -16,7 +16,7 @@ describe('phase 0 fixture run', () => {
     expect(snapshot.status).toBe('succeeded');
     expect(snapshot.approvals).toHaveLength(3);
     expect(snapshot.exportManifest?.routes).toEqual(['/', '/proof', '/contact']);
-    expect(await readdir(snapshot.exportManifest!.directory)).toEqual(expect.arrayContaining(['index.html', 'manifest.json', 'assets', 'proof', 'contact']));
+    expect((await readdir(snapshot.exportManifest!.directory)).sort()).toEqual(['contact', 'index.html', 'manifest.json', 'proof']);
     db.sqlite.close();
   });
 
@@ -57,7 +57,7 @@ describe('phase 0 fixture run', () => {
     await run.initialize('run-restart');
     const pending = await run.runNext();
     expect(pending.status).toBe('needs_review');
-    run.cancel();
+    await run.cancel();
     expect(run.snapshot().status).toBe('cancelled');
     const restarted = await run.restart();
     expect(restarted.status).toBe('needs_review');
@@ -68,12 +68,56 @@ describe('phase 0 fixture run', () => {
     db.sqlite.close();
   });
 
+  it('honours a cancel that lands while the stage is being persisted', async () => {
+    const db = openDatabase(':memory:');
+    class CancellingRepository extends ProjectRepository {
+      constructor(database: LocalDatabase, private readonly beforeSave: () => Promise<unknown>) { super(database); }
+      override async savePatch(patch: Parameters<ProjectRepository['savePatch']>[0], runId: string): Promise<void> {
+        await this.beforeSave();
+        await super.savePatch(patch, runId);
+      }
+    }
+    let run!: FixtureRun;
+    let cancelOnce = true;
+    const repository = new CancellingRepository(db, async () => { if (!cancelOnce) return; cancelOnce = false; await run.cancel(); });
+    run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-race-')), 'exports'), provider: new FakeModelProvider() });
+    await run.initialize('run-race');
+    const raced = await run.runNext();
+    expect(raced.status).toBe('cancelled');
+    const restarted = await run.restart();
+    expect(restarted.status).toBe('needs_review');
+    expect(restarted.currentStage).toBe('identity');
+    expect((await run.approve('identity', 'captain')).approvals).toHaveLength(1);
+    const nextStage = await run.runNext();
+    expect(nextStage.status).toBe('needs_review');
+    expect(nextStage.currentStage).toBe('prototype');
+    db.sqlite.close();
+  });
+
+  it('never commits a token rename that the identity contract no longer resolves', async () => {
+    const db = openDatabase(':memory:');
+    const renamer: ModelProvider = {
+      async propose(task) {
+        return { taskId: task.id, status: 'succeeded', summary: 'Rename a token', proposal: { op: 'proposal', operations: [{ op: 'remove', path: '/identity/tokens/color/ink' }], baseVersionId: task.baseVersionId, touchedPaths: ['/identity/tokens/color/ink'], rationale: 'Rename the ink token', confidence: 1, stage: task.stage, role: task.role, idempotencyKey: `rename-${task.stage}` } };
+      },
+    };
+    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-rename-')), 'exports'), provider: renamer });
+    await run.initialize('run-rename');
+    const before = run.snapshot();
+    await expect(run.runNext()).rejects.toThrow(/color\.ink/);
+    const after = run.snapshot();
+    expect(after.currentVersion.id).toBe(before.currentVersion.id);
+    expect(after.rendered).toEqual(before.rendered);
+    expect(after.status).toBe('queued');
+    db.sqlite.close();
+  });
+
   it('cancels before apply and restarts from the same immutable revision', async () => {
     const db = openDatabase(':memory:');
     const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: '/tmp/pwb-fixture-test', provider: new FakeModelProvider() });
     await run.initialize('run-2');
     const rootId = run.snapshot().currentVersion.id;
-    run.cancel();
+    await run.cancel();
     expect(run.snapshot().status).toBe('cancelled');
     expect(run.snapshot().currentVersion.id).toBe(rootId);
     await run.restart();

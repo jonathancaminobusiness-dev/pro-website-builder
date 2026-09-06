@@ -36,8 +36,10 @@ function cssValue(value: string | number | boolean, values: Record<string, strin
   throw new Error(`Raw visual value is not token-backed: ${node.id}.${key}`);
 }
 
+const propertyAliases: Record<string, string> = { background: 'background-color', radius: 'border-radius', font: 'font-family', motion: 'transition-duration', shadow: 'box-shadow' };
+
 function propertyName(key: string): string {
-  return ({ background: 'background-color', radius: 'border-radius', font: 'font-family', motion: 'transition-duration' } as Record<string, string>)[key] ?? key;
+  return propertyAliases[key] ?? key.replaceAll(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
 function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<string, string | number | boolean>): string {
@@ -81,7 +83,7 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
 }
 
 export function renderDesign(ir: DesignIR): RenderedDocument {
-  const values = resolveTokens(ir.tokens).values;
+  const values = resolveTokens(ir.identity.tokens).values;
   const css = renderCss(ir, values);
   const routes = ir.pages.routes.map((page) => ({ route: page.route, title: page.title, html: `<!doctype html><html lang="${escapeHtml(ir.identity.meta.locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(page.title)}</title><style>${css}</style></head><body>${renderPage(page, values)}</body></html>` }));
   return { html: routes[0]?.html ?? '<!doctype html><main></main>', css, routes, irHash: hashJson(ir), rendererVersion: RENDERER_VERSION };

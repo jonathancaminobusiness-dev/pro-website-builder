@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { identitySpecSchema } from './identity.js';
-import { tokenGroupSchema } from './tokens.js';
 
 export const nodeKindSchema = z.enum(['stack', 'grid', 'cluster', 'media', 'type', 'surface', 'ornament', 'component']);
 export const visualValueSchema = z.union([z.string(), z.number(), z.boolean()]);
@@ -56,7 +55,6 @@ export const assetSchema = z.object({
 export const designIRSchema = z.object({
   meta: z.object({ id: z.string(), projectId: z.string(), versionId: z.string(), rendererVersion: z.string(), createdAt: z.string() }),
   identity: identitySpecSchema,
-  tokens: tokenGroupSchema,
   pages: z.object({ routes: z.array(pageSchema) }),
   assets: z.object({ items: z.array(assetSchema) }),
   stateFixtures: z.record(z.object({ description: z.string(), values: z.record(visualValueSchema) })),
