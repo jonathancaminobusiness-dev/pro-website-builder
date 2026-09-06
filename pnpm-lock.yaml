@@ -115,6 +115,7 @@ importers:
       '@pwb/domain':
         specifier: workspace:*
         version: link:../domain
+    devDependencies:
       '@pwb/providers':
         specifier: workspace:*
         version: link:../providers

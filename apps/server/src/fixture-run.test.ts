@@ -50,6 +50,24 @@ describe('phase 0 fixture run', () => {
     db.sqlite.close();
   });
 
+  it('keeps a pending captain gate across cancel and restart', async () => {
+    const db = openDatabase(':memory:');
+    const repository = new ProjectRepository(db);
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-restart-')), 'exports'), provider: new FakeModelProvider() });
+    await run.initialize('run-restart');
+    const pending = await run.runNext();
+    expect(pending.status).toBe('needs_review');
+    run.cancel();
+    expect(run.snapshot().status).toBe('cancelled');
+    const restarted = await run.restart();
+    expect(restarted.status).toBe('needs_review');
+    expect(restarted.currentStage).toBe('identity');
+    expect(restarted.currentVersion.id).toBe(pending.currentVersion.id);
+    expect((await repository.listEvents('run-restart')).map((event) => event.type)).toContain('run.restarted');
+    expect((await run.approve('identity', 'captain')).approvals).toHaveLength(1);
+    db.sqlite.close();
+  });
+
   it('cancels before apply and restarts from the same immutable revision', async () => {
     const db = openDatabase(':memory:');
     const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: '/tmp/pwb-fixture-test', provider: new FakeModelProvider() });
@@ -58,7 +76,7 @@ describe('phase 0 fixture run', () => {
     run.cancel();
     expect(run.snapshot().status).toBe('cancelled');
     expect(run.snapshot().currentVersion.id).toBe(rootId);
-    run.restart();
+    await run.restart();
     expect((await run.runAll()).status).toBe('succeeded');
     db.sqlite.close();
   });

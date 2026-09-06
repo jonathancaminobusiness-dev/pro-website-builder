@@ -1,4 +1,4 @@
-import { hashJson, resolveTokens, slotChildIds, visualPropKeys, type DesignIR, type Page, type PageNode } from '@pwb/domain';
+import { cssCustomPropertyName, cssTokenIssues, hashJson, resolveTokens, slotChildIds, visualPropKeys, type DesignIR, type IdentitySpec, type Page, type PageNode } from '@pwb/domain';
 
 export const RENDERER_VERSION = 'renderer-0.1.0';
 
@@ -20,15 +20,17 @@ function escapeHtml(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }
 
-function cssName(path: string): string {
-  return `--${path.replaceAll('.', '-')}`;
+function roleVar(identity: IdentitySpec, role: keyof IdentitySpec['tokenRoles'], values: Record<string, string | number | boolean>): string {
+  const path = identity.tokenRoles[role];
+  if (!(path in values)) throw new Error(`Token role ${role} points at ${path}, which the document does not define.`);
+  return `var(${cssCustomPropertyName(path)})`;
 }
 
 function cssValue(value: string | number | boolean, values: Record<string, string | number | boolean>, node: PageNode, key: string): string {
   if (typeof value === 'string' && /^\{[^}]+\}$/.test(value)) {
     const path = value.slice(1, -1);
     if (!(path in values)) throw new Error(`Unresolved token reference ${value} on ${node.id}.${key}`);
-    return `var(${cssName(path)})`;
+    return `var(${cssCustomPropertyName(path)})`;
   }
   if (node.signedException) return String(value);
   throw new Error(`Raw visual value is not token-backed: ${node.id}.${key}`);
@@ -63,17 +65,24 @@ function renderPage(page: Page, values: Record<string, string | number | boolean
   const root = byId.get(page.rootNodeId);
   if (!root) throw new Error(`Page ${page.id} has no node ${page.rootNodeId} to use as its root.`);
   const body = renderNode(root, byId, values);
-  return `<main data-page-id="${escapeHtml(page.id)}" data-route="${escapeHtml(page.route)}"><h1 class="sr-only">${escapeHtml(page.title)}</h1>${body}</main>`;
+  return `<main data-page-id="${escapeHtml(page.id)}" data-route="${escapeHtml(page.route)}">${body}</main>`;
 }
 
 function renderCss(ir: DesignIR, values: Record<string, string | number | boolean>): string {
-  const vars = Object.entries(values).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([path, value]) => `    ${cssName(path)}: ${String(value)};`).join('\n');
-  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: var(--color-paper); color: var(--color-ink); }\n  body { margin: 0; font-family: var(--type-body); }\n  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }\n  main { container-type: inline-size; min-height: 100vh; padding: var(--space-md); }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: var(--space-lg); } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }\n}`;
+  const issues = cssTokenIssues(values);
+  if (issues[0]) throw new Error(issues[0].message);
+  const vars = Object.entries(values).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([path, value]) => `    ${cssCustomPropertyName(path)}: ${String(value)};`).join('\n');
+  const surface = roleVar(ir.identity, 'surface', values);
+  const text = roleVar(ir.identity, 'text', values);
+  const bodyTypeface = roleVar(ir.identity, 'bodyTypeface', values);
+  const baseSpacing = roleVar(ir.identity, 'baseSpacing', values);
+  const sectionSpacing = roleVar(ir.identity, 'sectionSpacing', values);
+  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; }\n  main { container-type: inline-size; min-height: 100vh; padding: ${baseSpacing}; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }\n}`;
 }
 
 export function renderDesign(ir: DesignIR): RenderedDocument {
   const values = resolveTokens(ir.tokens).values;
   const css = renderCss(ir, values);
-  const routes = ir.pages.routes.map((page) => ({ route: page.route, title: page.title, html: `<!doctype html><html lang="${escapeHtml(ir.identity.meta.locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body>${renderPage(page, values)}</body></html>` }));
+  const routes = ir.pages.routes.map((page) => ({ route: page.route, title: page.title, html: `<!doctype html><html lang="${escapeHtml(ir.identity.meta.locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(page.title)}</title><style>${css}</style></head><body>${renderPage(page, values)}</body></html>` }));
   return { html: routes[0]?.html ?? '<!doctype html><main></main>', css, routes, irHash: hashJson(ir), rendererVersion: RENDERER_VERSION };
 }

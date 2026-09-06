@@ -4,12 +4,14 @@ import { PREVIEW_ORIGIN, previewHeaders } from './security.js';
 
 export interface PreviewServer { server: Server; origin: string; start(): Promise<void>; close(): Promise<void>; }
 
-export function createPreviewServer(getRendered: () => RenderedDocument | undefined, port = 4311): PreviewServer {
+export function createPreviewServer(getRendered: (versionId: string) => RenderedDocument | undefined, port = 4311): PreviewServer {
   const server = createServer((request, response) => {
-    const document = getRendered();
-    if (!document) { response.writeHead(404, previewHeaders()).end('Preview unavailable'); return; }
     const pathname = new URL(request.url ?? '/', PREVIEW_ORIGIN).pathname;
-    const route = pathname.replace(/^\/preview\/[^/]+/, '') || '/';
+    const requested = /^\/preview\/([^/]+)(\/.*)?$/.exec(pathname);
+    if (!requested) { response.writeHead(404, previewHeaders()).end('Preview unavailable'); return; }
+    const document = getRendered(requested[1]!);
+    if (!document) { response.writeHead(404, previewHeaders()).end('Preview unavailable'); return; }
+    const route = requested[2] || '/';
     const match = document.routes.find((candidate) => candidate.route === route);
     if (!match) { response.writeHead(404, previewHeaders()).end('Route unavailable'); return; }
     response.writeHead(200, previewHeaders()).end(match.html);

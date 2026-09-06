@@ -17,7 +17,10 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   const repository = new ProjectRepository(database);
   const runs = new Map<string, FixtureRun>();
   const api = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository, exportRoot, provider }); await run.initialize(id); runs.set(id, run); return run; } });
-  const preview = createPreviewServer(() => [...runs.values()][0]?.snapshot().rendered, options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311));
+  const preview = createPreviewServer((versionId) => {
+    for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return snapshot.rendered; }
+    return undefined;
+  }, options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311));
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);
   await new Promise<void>((resolve) => api.listen(apiPort, '127.0.0.1', resolve));
   await preview.start();

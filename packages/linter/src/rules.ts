@@ -1,4 +1,4 @@
-import { resolveTokens, visualPropKeys, type DesignIR } from '@pwb/domain';
+import { cssTokenIssues, flattenTokens, resolveTokens, visualPropKeys, type DesignIR } from '@pwb/domain';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export interface LintIssue { path: string; message: string; suggestedPatch?: unknown; }
@@ -47,9 +47,24 @@ function forbiddenDefaults(ir: DesignIR): LintIssue[] {
   return issues;
 }
 
+function identityTokenRoles(ir: DesignIR): LintIssue[] {
+  const paths = flattenTokens(ir.tokens);
+  return Object.entries(ir.identity.tokenRoles)
+    .filter(([, path]) => !paths.has(path))
+    .map(([role, path]) => ({ path: `/identity/tokenRoles/${role}`, message: `Token role ${role} points at ${path}, which the document does not define.` }));
+}
+
+function emittableTokens(ir: DesignIR): LintIssue[] {
+  let resolved: ReturnType<typeof resolveTokens>;
+  try { resolved = resolveTokens(ir.tokens); } catch { return []; }
+  return cssTokenIssues(resolved.values).map((issue) => ({ path: `/tokens/${issue.path.replaceAll('.', '/')}`, message: issue.message }));
+}
+
 export const ruleRegistry: LintRule[] = [
   { id: 'TOK-001', stage: 'identity', severity: 'error', detect: tokenOnly },
   { id: 'TOK-002', stage: 'identity', severity: 'error', detect: aliasesAndRefs },
+  { id: 'TOK-003', stage: 'identity', severity: 'error', detect: identityTokenRoles },
+  { id: 'TOK-004', stage: 'identity', severity: 'error', detect: emittableTokens },
   { id: 'DEF-010', stage: 'prototype', severity: 'error', detect: forbiddenDefaults },
 ];
 

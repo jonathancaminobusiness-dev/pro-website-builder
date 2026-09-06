@@ -42,7 +42,7 @@ Run the deterministic fixture without starting the UI:
 corepack pnpm run:fixture
 ```
 
-The command writes a local SQLite database under `.treehouse/` and a content-addressed export under `exports/`. Set `PWB_DB_PATH` and `PWB_EXPORT_ROOT` to use explicit locations, and `PWB_MODEL_PROVIDER` to choose the model provider.
+The command writes a local SQLite database under `.treehouse/` and a content-addressed export under `exports/`. Set `PWB_DB_PATH` and `PWB_EXPORT_ROOT` to use explicit locations, and `PWB_MODEL_PROVIDER` to choose the model provider. Add `--render` to also drive the approved home route through the Playwright `RenderHub` (screenshot, DOM, accessibility snapshot, hash cache under `PWB_RENDER_CACHE`).
 
 Start the local API and preview, then the Studio in another terminal:
 
@@ -51,7 +51,7 @@ corepack pnpm --filter @pwb/server dev
 corepack pnpm --filter @pwb/studio dev
 ```
 
-The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:4311`, and Vite serves the Studio on its normal development port. The Studio copy is pt-BR; code and technical identifiers remain English.
+The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:4311`, and Vite serves the Studio on `http://127.0.0.1:5173`. That Studio origin is the only one allowed to send state-changing requests or frame the preview; `PWB_STUDIO_ORIGIN` overrides it for the Playwright run, which serves the built Studio on `4173`. The Studio copy is pt-BR; code and technical identifiers remain English.
 
 ## Real local Claude Code
 
@@ -61,6 +61,6 @@ Higgsfield is an optional asynchronous raster boundary. If its MCP is not config
 
 ## Quality and security checks
 
-The test suite covers schema validation, alias cycles/orphans, byte-stable rendering, token-only linting, forbidden defaults, CAS/overlap rejection, semaphore limits, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, export licenses, the full fixture journey, cancellation/restart, and scans of database/log/export data for secret-like values.
+The test suite covers schema validation, page-graph integrity, alias cycles/orphans, byte-stable rendering, token-only linting, identity token roles, CSS-emittable tokens, forbidden defaults, CAS/overlap rejection, semaphore limits and deadlines, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, export licenses, the full fixture journey, cancellation/restart, and scans of database/log/export data for secret-like values. `corepack pnpm test:e2e` additionally drives the Studio through all three gates and exercises `RenderHub` against a live browser; run `corepack pnpm build` first so `vite preview` has a bundle to serve.
 
 Fase 0 intentionally does not include parallel identity directions, critic agents, the full linter catalog, Postgres, SaaS authentication, Yjs/CRDT collaboration, Astro output, or Lighthouse.

@@ -12,13 +12,14 @@ describe('preview origin', () => {
     const root = await mkdtemp(join(tmpdir(), 'pwb-preview-'));
     const rendered = renderDesign(createFixtureIR());
     const exported = await exportStatic(rendered, createFixtureIR(), root);
-    const preview = createPreviewServer(() => rendered, 4312);
+    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 4312);
     await preview.start();
     try {
       const response = await fetch(`${preview.origin}/preview/v0/proof`);
       expect(await response.text()).toBe(await readFile(join(exported.directory, 'proof', 'index.html'), 'utf8'));
       expect(response.headers.get('content-security-policy')).toContain("script-src 'none'");
-      expect(response.headers.get('content-security-policy')).toContain('frame-ancestors http://127.0.0.1:5173 http://127.0.0.1:4173');
+      expect(response.headers.get('content-security-policy')).toContain('frame-ancestors http://127.0.0.1:5173');
+      expect((await fetch(`${preview.origin}/preview/v-other/proof`)).status).toBe(404);
       const malformed = await fetch(`${preview.origin}/preview/v0/%`);
       expect(malformed.status).toBe(404);
       expect((await fetch(`${preview.origin}/preview/v0/proof`)).status).toBe(200);

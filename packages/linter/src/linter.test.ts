@@ -28,6 +28,23 @@ describe('identity linter', () => {
     expect(findings.every((finding) => finding.stage === 'identity')).toBe(true);
   });
 
+  it('reports an identity token role that the document does not define', () => {
+    const ir = createFixtureIR();
+    ir.identity.tokenRoles.bodyTypeface = 'type.absent';
+    const finding = lintDesign(ir).findings.find((item) => item.id === 'TOK-003');
+    expect(finding).toMatchObject({ path: '/identity/tokenRoles/bodyTypeface', severity: 'error' });
+  });
+
+  it('reports tokens that collide on or break out of a CSS custom property', () => {
+    const ir = createFixtureIR();
+    (ir.tokens as { color: Record<string, unknown> }).color['ink-strong'] = { $value: '#000000', $type: 'color' };
+    (ir.tokens as { color: { ink: Record<string, unknown> } }).color.ink = { strong: { $value: '#ffffff', $type: 'color' } };
+    expect(lintDesign(ir).findings.some((item) => item.id === 'TOK-004' && /compile to the CSS custom property/.test(item.message))).toBe(true);
+    const injected = createFixtureIR();
+    (injected.tokens as { color: { accent: { $value: string } } }).color.accent.$value = '#000</style>';
+    expect(lintDesign(injected).findings.some((item) => item.id === 'TOK-004' && /cannot be emitted into CSS/.test(item.message))).toBe(true);
+  });
+
   it('does not lint page prose as if it were a visual value', () => {
     const ir = createFixtureIR();
     ir.pages.routes[0]!.nodes[1]!.props.text = 'Trocamos a Inter-only hero por uma fonte autoral, sem {nome do cliente}.';

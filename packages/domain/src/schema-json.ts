@@ -3,7 +3,6 @@ import { agentResultSchema, agentTaskSchema, patchSchema } from './agent.js';
 import { approvalSchema } from './approval.js';
 import { designIRSchema } from './ir.js';
 import { identitySpecSchema } from './identity.js';
-import { CritiqueReportSchema, FindingSchema } from './review.js';
 
 export const schemaJson = {
   AgentTask: zodToJsonSchema(agentTaskSchema, 'AgentTask'),
@@ -12,6 +11,4 @@ export const schemaJson = {
   Approval: zodToJsonSchema(approvalSchema, 'Approval'),
   IdentitySpec: zodToJsonSchema(identitySpecSchema, 'IdentitySpec'),
   DesignIR: zodToJsonSchema(designIRSchema, 'DesignIR'),
-  Finding: zodToJsonSchema(FindingSchema, 'Finding'),
-  CritiqueReport: zodToJsonSchema(CritiqueReportSchema, 'CritiqueReport'),
 };

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
+import { ZodError } from 'zod';
 import { AgentResultSchema, schemaJson, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
 
@@ -34,11 +35,17 @@ export class ClaudeRunner implements ModelProvider {
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
         return AgentResultSchema.parse(structured);
       } catch (error) {
-        const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : '';
-        if (code === 'ABORT_ERR' || code === 'SIGTERM') throw error;
+        const details = error as { code?: unknown; signal?: unknown; killed?: unknown; name?: unknown };
+        const code = details.code === undefined ? '' : String(details.code);
+        if (code === 'ABORT_ERR' || details.name === 'AbortError') throw error;
+        const signal = details.signal === undefined || details.signal === null ? '' : String(details.signal);
+        if (signal || details.killed === true) return { taskId: task.id, status: 'failed', summary: `The Claude Code process was terminated by ${signal || 'a timeout'}.`, errorCode: signal || 'TIMEOUT' };
+        if (error instanceof SyntaxError || error instanceof ZodError) {
+          if (!correction) { correction = true; continue; }
+          return { taskId: task.id, status: 'needs_review', summary: 'Claude returned an invalid structured proposal.', errorCode: 'SCHEMA_INVALID' };
+        }
         if (transientCodes.has(code) && attempt < 2) { await new Promise((resolve) => setTimeout(resolve, 30 * (attempt + 1))); continue; }
-        if (!correction) { correction = true; continue; }
-        return { taskId: task.id, status: 'needs_review', summary: 'Claude returned an invalid structured proposal.', errorCode: code || 'SCHEMA_INVALID' };
+        return { taskId: task.id, status: 'failed', summary: `The Claude Code process failed with ${code || 'an unknown error'}.`, errorCode: code || 'PROCESS_FAILED' };
       }
     }
     return { taskId: task.id, status: 'failed', summary: 'Claude process did not complete.', errorCode: 'RUNNER_EXHAUSTED' };

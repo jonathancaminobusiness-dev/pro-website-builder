@@ -45,6 +45,7 @@ export class FixtureRun {
   private lintErrorCount = 0;
   private initialized = false;
   private started = false;
+  private statusBeforeCancel: FixtureStatus = 'queued';
   private runIdentifier = '';
 
   constructor(private readonly options: { repository: ProjectRepository; exportRoot: string; provider: ModelProvider }) {}
@@ -125,8 +126,15 @@ export class FixtureRun {
   }
 
   async runAll(): Promise<FixtureSnapshot> { while (this.stageIndex < 3) { await this.runNext(); if (this.status === 'cancelled') break; const stage = this.currentStage; if (!stage) throw new Error('Run did not produce a gate.'); await this.approve(stage, 'captain'); } return this.snapshot(); }
-  cancel(): void { if (this.status !== 'succeeded') { this.cancelRequested = true; this.status = 'cancelled'; } }
-  restart(): void { if (this.status === 'cancelled') { this.cancelRequested = false; this.status = 'queued'; } }
+  cancel(): void { if (this.status !== 'succeeded' && this.status !== 'cancelled') { this.statusBeforeCancel = this.status; this.cancelRequested = true; this.status = 'cancelled'; } }
+  async restart(): Promise<FixtureSnapshot> {
+    this.requireInitialized();
+    if (this.status !== 'cancelled') return this.snapshot();
+    this.cancelRequested = false;
+    this.status = this.statusBeforeCancel;
+    await this.record('run.restarted', { status: this.status, stage: this.currentStage });
+    return this.snapshot();
+  }
   snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
   private async record(type: string, payload: Record<string, unknown>): Promise<void> { await this.options.repository.appendEvent({ id: randomUUID(), runId: this.runId(), type, payload }); }
   private runId(): string { return this.runIdentifier; }

@@ -1,14 +1,10 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { readFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { DesignIRSchema, type AgentTask, type DesignIR, type Patch } from '@pwb/domain';
 import * as schema from './schema.js';
 
 export interface LocalDatabase { sqlite: Database.Database; orm: BetterSQLite3Database<typeof schema>; }
-const migrationsPath = join(dirname(fileURLToPath(import.meta.url)), 'migrations', '0000_phase0.sql');
-const fallbackMigration = `PRAGMA journal_mode = WAL;
+const migration = `PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, parent_id TEXT, hash TEXT NOT NULL, ir TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -22,7 +18,7 @@ export function openDatabase(filename: string): LocalDatabase {
   const sqlite = new Database(filename);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
-  sqlite.exec(existsSync(migrationsPath) ? readFileSync(migrationsPath, 'utf8') : fallbackMigration);
+  sqlite.exec(migration);
   return { sqlite, orm: drizzle(sqlite, { schema }) };
 }
 

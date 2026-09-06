@@ -3,7 +3,7 @@ import { designIRSchema } from './ir.js';
 import { identitySpecSchema } from './identity.js';
 
 export const stageSchema = z.enum(['identity', 'prototype', 'finalization']);
-export const taskRoleSchema = z.enum(['director', 'composer', 'compiler', 'critic']);
+export const taskRoleSchema = z.enum(['director', 'composer', 'compiler']);
 export const taskStateSchema = z.enum(['queued', 'running', 'cancel_requested', 'cancelled', 'succeeded', 'failed', 'needs_review']);
 export const taskLaneSchema = z.enum(['claude', 'raster']);
 

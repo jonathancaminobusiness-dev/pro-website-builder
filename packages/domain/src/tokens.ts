@@ -29,17 +29,35 @@ function isToken(value: Token | TokenGroup): value is Token {
   return typeof value === 'object' && value !== null && '$value' in value;
 }
 
-function flatten(group: TokenGroup, prefix = '', result = new Map<string, Token>()): Map<string, Token> {
+export function flattenTokens(group: TokenGroup, prefix = '', result = new Map<string, Token>()): Map<string, Token> {
   for (const [key, value] of Object.entries(group)) {
     const path = prefix ? `${prefix}.${key}` : key;
     if (isToken(value)) result.set(path, value);
-    else flatten(value, path, result);
+    else flattenTokens(value, path, result);
   }
   return result;
 }
 
+export function cssCustomPropertyName(path: string): string {
+  return `--${path.replaceAll('.', '-')}`;
+}
+
+export function cssTokenIssues(values: Record<string, string | number | boolean>): Array<{ path: string; message: string }> {
+  const issues: Array<{ path: string; message: string }> = [];
+  const owners = new Map<string, string>();
+  for (const [path, value] of Object.entries(values)) {
+    const name = cssCustomPropertyName(path);
+    if (!/^--[A-Za-z0-9-]+$/.test(name)) issues.push({ path, message: `Token ${path} cannot become a CSS custom property.` });
+    const owner = owners.get(name);
+    if (owner === undefined) owners.set(name, path);
+    else issues.push({ path, message: `Tokens ${owner} and ${path} both compile to the CSS custom property ${name}.` });
+    if (typeof value === 'string' && /[<>;{}]/.test(value)) issues.push({ path, message: `Token ${path} holds characters that cannot be emitted into CSS.` });
+  }
+  return issues;
+}
+
 export function resolveTokens(tokens: TokenTree): ResolvedTokenSet {
-  const flat = flatten(tokens);
+  const flat = flattenTokens(tokens);
   const values: Record<string, string | number | boolean> = {};
   const types: Record<string, z.infer<typeof tokenTypeSchema> | undefined> = {};
   const resolving: string[] = [];

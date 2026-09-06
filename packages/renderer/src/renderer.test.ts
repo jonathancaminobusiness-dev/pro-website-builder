@@ -32,4 +32,29 @@ describe('deterministic renderer', () => {
     ir.pages.routes[0]!.nodes[0]!.props.color = '#ff00ff';
     expect(() => renderDesign(ir)).toThrow(/token/i);
   });
+
+  it('names the page once, in the document title', () => {
+    const html = renderDesign(createFixtureIR()).routes[0]!.html;
+    expect(html).toContain('<title>Oficina — início</title>');
+    expect(html.match(/<h1/g)).toHaveLength(1);
+  });
+
+  it('builds the base layer from the identity token roles', () => {
+    const ir = createFixtureIR();
+    ir.identity.tokenRoles.surface = 'color.accent';
+    expect(renderDesign(ir).css).toContain('background: var(--color-accent)');
+    ir.identity.tokenRoles.surface = 'color.absent';
+    expect(() => renderDesign(ir)).toThrow(/color\.absent/);
+  });
+
+  it('refuses token values and token names that cannot be emitted into CSS', () => {
+    const escaped = createFixtureIR();
+    (escaped.tokens as { color: { accent: { $value: string } } }).color.accent.$value = "#000</style><script>alert(1)</script><style>";
+    expect(() => renderDesign(escaped)).toThrow(/cannot be emitted into CSS/i);
+    const colliding = createFixtureIR();
+    (colliding.tokens as { color: Record<string, unknown> }).color['ink-strong'] = { $value: '#000000', $type: 'color' };
+    (colliding.tokens as { color: { ink: Record<string, unknown> } }).color.ink = { strong: { $value: '#ffffff', $type: 'color' } };
+    colliding.identity.tokenRoles.text = 'color.ink-strong';
+    expect(() => renderDesign(colliding)).toThrow(/compile to the CSS custom property/i);
+  });
 });

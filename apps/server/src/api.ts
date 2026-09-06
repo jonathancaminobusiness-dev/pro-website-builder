@@ -1,11 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { FixtureRun } from './fixture-run.js';
-import { STUDIO_ORIGIN, STUDIO_ORIGINS } from './security.js';
+import { STUDIO_ORIGIN } from './security.js';
 
 interface ApiOptions { runs: Map<string, FixtureRun>; createRun: (id: string) => Promise<FixtureRun>; }
 const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' };
-const allowedOrigins = new Set<string>(STUDIO_ORIGINS);
+const allowedOrigins = new Set<string>([STUDIO_ORIGIN]);
 function allowedOrigin(origin: string | undefined): string { return origin && allowedOrigins.has(origin) ? origin : STUDIO_ORIGIN; }
 
 function send(response: ServerResponse, status: number, body: unknown): void { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...corsHeaders }); response.end(JSON.stringify(body)); }
@@ -35,7 +35,7 @@ export function createApiServer(options: ApiOptions): Server {
         if (request.method !== 'POST') { send(response, 405, { error: 'Method not allowed.' }); return; }
         if (action === 'stage') { send(response, 200, await run.runNext()); return; }
         if (action === 'cancel') { run.cancel(); send(response, 200, run.snapshot()); return; }
-        if (action === 'restart') { run.restart(); send(response, 200, run.snapshot()); return; }
+        if (action === 'restart') { await run.restart(); send(response, 200, run.snapshot()); return; }
         if (action === 'approve') {
           const input = await body(request);
           if (input.approverRole !== 'captain') { send(response, 403, { error: 'Only the captain can approve v1 gates.' }); return; }

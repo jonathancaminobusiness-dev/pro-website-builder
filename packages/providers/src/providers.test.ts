@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
-import { FakeModelProvider, FakeRasterProvider, HiggsfieldMcpProvider, idempotencyKey } from './index.js';
+import { FakeModelProvider, HiggsfieldMcpProvider, idempotencyKey } from './index.js';
 
 describe('providers', () => {
   it('returns typed deterministic proposals from the fake model', async () => {
@@ -11,16 +11,17 @@ describe('providers', () => {
     expect(result.proposal?.operations[0]?.path).toBe('/reviewRecord/findings');
   });
 
-  it('deduplicates raster jobs and marks missing Higgsfield setup', async () => {
+  it('marks missing Higgsfield setup and forwards the idempotency digest when configured', async () => {
     const job = { id: 'asset-job', digest: 'digest', prompt: 'paper texture', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' };
-    const fake = new FakeRasterProvider();
-    expect((await fake.submit(job)).status).toBe('succeeded');
-    expect((await fake.submit(job)).id).toBe((await fake.submit(job)).id);
-    expect((await new HiggsfieldMcpProvider({ configured: false }).submit(job)).status).toBe('not_configured');
-    const configured = new HiggsfieldMcpProvider({ configured: true, transport: { callTool: async () => ({ uri: 'higgsfield://asset', license: 'provider terms' }) } });
+    const unconfigured = await new HiggsfieldMcpProvider({ configured: false }).submit(job);
+    expect(unconfigured.status).toBe('not_configured');
+    expect(unconfigured.provenance.status).toBe('not_configured');
+    const calls: Array<Record<string, unknown>> = [];
+    const configured = new HiggsfieldMcpProvider({ configured: true, transport: { callTool: async (_name, arguments_) => { calls.push(arguments_); return { uri: 'higgsfield://asset', license: 'provider terms' }; } } });
     const generated = await configured.submit(job);
     expect(generated.status).toBe('succeeded');
     expect(generated.provenance).toMatchObject({ prompt: 'paper texture', model: 'higgsfield', license: 'provider terms', identityVersionId: 'v0' });
+    expect(calls).toEqual([{ prompt: 'paper texture', model: 'higgsfield', aspect: '1:1', idempotency_key: 'digest' }]);
   });
 
   it('derives an idempotency key without including credentials', () => {
