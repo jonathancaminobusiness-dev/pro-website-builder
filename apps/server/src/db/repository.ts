@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY NOT NULL, project_id TE
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, stage TEXT NOT NULL, role TEXT NOT NULL, state TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS patches (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, project_id TEXT NOT NULL, stage TEXT NOT NULL, approver_role TEXT NOT NULL, version_id TEXT NOT NULL, version_hash TEXT NOT NULL, decision TEXT NOT NULL, rationale TEXT NOT NULL, valid INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, project_id TEXT NOT NULL, stage TEXT NOT NULL, approver_role TEXT NOT NULL, version_id TEXT NOT NULL, version_hash TEXT NOT NULL, decision TEXT NOT NULL, rationale TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, provenance TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);`;
 
@@ -43,12 +43,14 @@ export class ProjectRepository {
   async savePatch(patch: Patch, runId: string): Promise<void> { await this.write(() => { this.db.orm.insert(schema.patches).values({ id: patch.idempotencyKey ?? `${runId}-${patch.baseVersionId}`, runId, baseVersionId: patch.baseVersionId, payload: JSON.stringify(patch), createdAt: new Date().toISOString() }).run(); }); }
   async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(DesignIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }
   async getVersion(id: string): Promise<{ id: string; projectId: string; parentId: string | null; hash: string; ir: DesignIR } | undefined> { const row = this.db.sqlite.prepare('SELECT id, project_id as projectId, parent_id as parentId, hash, ir FROM versions WHERE id = ?').get(id) as { id: string; projectId: string; parentId: string | null; hash: string; ir: string } | undefined; return row ? { ...row, ir: DesignIRSchema.parse(JSON.parse(row.ir)) } : undefined; }
-  async createApproval(input: ApprovalInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.approvals).values({ ...input, createdAt: new Date().toISOString(), valid: 1 }).run(); }); }
-  async invalidateApprovalsForVersion(projectId: string, versionId: string): Promise<void> { await this.write(() => { this.db.sqlite.prepare('UPDATE approvals SET valid = 0 WHERE project_id = ? AND version_id = ?').run(projectId, versionId); }); }
-  async listApprovals(projectId: string): Promise<Array<{ id: string; valid: boolean }>> { return this.db.sqlite.prepare('SELECT id, valid FROM approvals WHERE project_id = ? ORDER BY rowid').all(projectId).map((row) => ({ id: String((row as { id: string }).id), valid: Boolean((row as { valid: number }).valid) })); }
+  async createApproval(input: ApprovalInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.approvals).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
+  async listApprovals(projectId: string): Promise<Array<{ id: string; stage: string; decision: string }>> { return this.db.sqlite.prepare('SELECT id, stage, decision FROM approvals WHERE project_id = ? ORDER BY rowid').all(projectId) as Array<{ id: string; stage: string; decision: string }>; }
   async appendEvent(input: EventInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.events).values({ id: input.id, runId: input.runId, type: input.type, payload: JSON.stringify(input.payload), createdAt: new Date().toISOString() }).run(); }); }
   async listEvents(runId: string): Promise<Array<{ id: string; type: string; payload: Record<string, unknown> }>> { return this.db.sqlite.prepare('SELECT id, type, payload FROM events WHERE run_id = ? ORDER BY rowid').all(runId).map((row) => { const item = row as { id: string; type: string; payload: string }; return { id: item.id, type: item.type, payload: JSON.parse(item.payload) as Record<string, unknown> }; }); }
-  dump(): string { return JSON.stringify(this.db.sqlite.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name").all()); }
+  dump(): string {
+    const tables = (this.db.sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string }>).map((table) => table.name);
+    return JSON.stringify(Object.fromEntries(tables.map((table) => [table, this.db.sqlite.prepare(`SELECT * FROM "${table}"`).all()])));
+  }
 }
 
 export function scanSecrets(text: string): string[] {

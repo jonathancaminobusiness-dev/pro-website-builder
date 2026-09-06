@@ -20,6 +20,17 @@ describe('static export', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('refuses to write a route that escapes the export root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pwb-export-'));
+    try {
+      const ir = createFixtureIR();
+      const rendered = renderDesign(ir);
+      rendered.routes[0]!.route = '/../../pwned';
+      await expect(exportStatic(rendered, ir, root)).rejects.toThrow(/escapes the export root/i);
+      await expect(readFile(join(root, '..', '..', 'pwned', 'index.html'), 'utf8')).rejects.toThrow();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('refuses assets without a license record', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pwb-export-'));
     try {

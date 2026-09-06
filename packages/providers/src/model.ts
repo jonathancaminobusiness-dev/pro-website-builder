@@ -8,5 +8,4 @@ export interface ClaudeRunnerOptions {
   executable?: string;
   timeoutMs?: number;
   maxTurns?: number;
-  maxOutputTokens?: number;
 }

@@ -19,6 +19,36 @@ describe('phase 0 fixture run', () => {
     db.sqlite.close();
   });
 
+  it('writes an append-only event log for the whole journey', async () => {
+    const db = openDatabase(':memory:');
+    const repository = new ProjectRepository(db);
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-events-')), 'exports') });
+    await run.initialize('run-events');
+    await run.runAll();
+    const events = await repository.listEvents('run-events');
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(['run.created', 'run.started', 'task.queued', 'task.started', 'task.succeeded', 'patch.applied', 'version.created', 'approval.recorded', 'run.finished']));
+    expect(events.at(-1)?.type).toBe('run.finished');
+    expect(events.filter((event) => event.type === 'approval.recorded')).toHaveLength(3);
+    db.sqlite.close();
+  });
+
+  it('lets the captain re-run a stage that was rejected', async () => {
+    const db = openDatabase(':memory:');
+    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-reject-')), 'exports') });
+    await run.initialize('run-reject');
+    await run.runNext();
+    const rejected = await run.reject('identity', 'captain');
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.approvals.at(-1)?.decision).toBe('rejected');
+    const rerun = await run.runNext();
+    expect(rerun.status).toBe('needs_review');
+    expect(rerun.currentStage).toBe('identity');
+    expect(rerun.currentVersion.id).not.toBe(rejected.currentVersion.id);
+    expect((await run.runAll()).status).toBe('succeeded');
+    db.sqlite.close();
+  });
+
   it('cancels before apply and restarts from the same immutable revision', async () => {
     const db = openDatabase(':memory:');
     const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: '/tmp/pwb-fixture-test' });

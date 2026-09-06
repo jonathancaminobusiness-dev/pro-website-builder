@@ -19,6 +19,7 @@ button { font: inherit; cursor: pointer; }
 .section-heading { align-items: flex-start; margin-bottom: 24px; }
 .section-heading h2 { margin-top: 5px; font-size: 1.25rem; letter-spacing: -.04em; }
 .status-needs_review { color: #a84f37; border-color: #dca58e; }
+.status-rejected { color: #8c3a2c; border-color: #c98d7c; }
 .stage-list { display: grid; gap: 9px; }
 .stage-row { position: relative; display: grid; grid-template-columns: 36px minmax(0, 1fr) 8px; gap: 12px; align-items: center; padding: 14px 12px; border-radius: 13px; color: #697579; }
 .stage-row.active { color: #18252d; background: #f4efe6; }

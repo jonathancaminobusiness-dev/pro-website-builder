@@ -16,6 +16,8 @@ describe('phase 0 secret boundary', () => {
     await collect(snapshot.exportManifest!.directory);
     const bundle = (await Promise.all(files.map((file) => readFile(file, 'utf8')))).join('\n');
     const dump = new ProjectRepository(database).dump();
+    expect(dump).toContain(snapshot.currentVersion.id);
+    expect(dump).toContain(snapshot.currentVersion.ir.identity.content.message);
     const logs = JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id });
     expect(scanSecrets(dump + bundle + logs)).toEqual([]);
     database.sqlite.close();

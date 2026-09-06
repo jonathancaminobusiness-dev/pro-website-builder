@@ -13,7 +13,9 @@ export interface ExportManifest {
 }
 
 function routePath(route: string): string {
-  return route === '/' ? 'index.html' : `${route.replace(/^\//, '').replace(/\/$/, '')}/index.html`;
+  const segments = route.split('/').filter((segment) => segment !== '');
+  if (segments.some((segment) => segment === '.' || segment === '..')) throw new Error(`Cannot export a route that escapes the export root: ${route}`);
+  return [...segments, 'index.html'].join('/');
 }
 
 export async function exportStatic(rendered: RenderedDocument, ir: DesignIR, rootDir: string): Promise<ExportManifest> {

@@ -10,5 +10,6 @@ test('captain can drive the fixture through all three gates', async ({ page }) =
   }
   await expect(page.getByRole('button', { name: 'Export concluído' })).toBeVisible();
   await expect(page.locator('iframe[title="Preview do site"]')).toHaveAttribute('sandbox', '');
+  await expect(page.frameLocator('iframe[title="Preview do site"]').locator('main[data-route="/"]')).toBeVisible();
   await expect(page.locator('.qa-chip')).toContainText('0 erros');
 });

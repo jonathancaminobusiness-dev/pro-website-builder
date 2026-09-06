@@ -1,10 +1,10 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 export const projects = sqliteTable('projects', { id: text('id').primaryKey(), name: text('name').notNull(), createdAt: text('created_at').notNull() });
 export const versions = sqliteTable('versions', { id: text('id').primaryKey(), projectId: text('project_id').notNull(), parentId: text('parent_id'), hash: text('hash').notNull(), ir: text('ir').notNull(), createdAt: text('created_at').notNull() });
 export const runs = sqliteTable('runs', { id: text('id').primaryKey(), projectId: text('project_id').notNull(), state: text('state').notNull(), createdAt: text('created_at').notNull() });
 export const tasks = sqliteTable('tasks', { id: text('id').primaryKey(), runId: text('run_id').notNull(), stage: text('stage').notNull(), role: text('role').notNull(), state: text('state').notNull(), baseVersionId: text('base_version_id').notNull(), payload: text('payload').notNull() });
 export const patches = sqliteTable('patches', { id: text('id').primaryKey(), runId: text('run_id').notNull(), baseVersionId: text('base_version_id').notNull(), payload: text('payload').notNull(), createdAt: text('created_at').notNull() });
-export const approvals = sqliteTable('approvals', { id: text('id').primaryKey(), runId: text('run_id').notNull(), projectId: text('project_id').notNull(), stage: text('stage').notNull(), approverRole: text('approver_role').notNull(), versionId: text('version_id').notNull(), versionHash: text('version_hash').notNull(), decision: text('decision').notNull(), rationale: text('rationale').notNull(), valid: integer('valid').notNull().default(1), createdAt: text('created_at').notNull() });
+export const approvals = sqliteTable('approvals', { id: text('id').primaryKey(), runId: text('run_id').notNull(), projectId: text('project_id').notNull(), stage: text('stage').notNull(), approverRole: text('approver_role').notNull(), versionId: text('version_id').notNull(), versionHash: text('version_hash').notNull(), decision: text('decision').notNull(), rationale: text('rationale').notNull(), createdAt: text('created_at').notNull() });
 export const assets = sqliteTable('assets', { id: text('id').primaryKey(), projectId: text('project_id').notNull(), provenance: text('provenance').notNull() });
 export const events = sqliteTable('events', { id: text('id').primaryKey(), runId: text('run_id').notNull(), type: text('type').notNull(), payload: text('payload').notNull(), createdAt: text('created_at').notNull() });

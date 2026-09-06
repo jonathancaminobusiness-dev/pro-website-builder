@@ -22,13 +22,17 @@ describe('sqlite persistence', () => {
     db.sqlite.close();
   });
 
-  it('marks approvals invalid when a dependent token version changes', async () => {
+  it('records captain decisions in order for a project', async () => {
     const db = openDatabase(':memory:');
     const repo = new ProjectRepository(db);
     await repo.createProject({ id: 'project-1', name: 'Fixture' });
-    await repo.createApproval({ id: 'approval-1', runId: 'run-1', projectId: 'project-1', stage: 'identity', approverRole: 'captain', versionId: 'v0', versionHash: 'hash-v0', decision: 'approved', rationale: 'Captain approved' });
-    await repo.invalidateApprovalsForVersion('project-1', 'v0');
-    expect((await repo.listApprovals('project-1'))[0]?.valid).toBe(false);
+    await repo.createApproval({ id: 'approval-1', runId: 'run-1', projectId: 'project-1', stage: 'identity', approverRole: 'captain', versionId: 'v0', versionHash: 'hash-v0', decision: 'rejected', rationale: 'Captain asked for a revision' });
+    await repo.createApproval({ id: 'approval-2', runId: 'run-1', projectId: 'project-1', stage: 'identity', approverRole: 'captain', versionId: 'v1', versionHash: 'hash-v1', decision: 'approved', rationale: 'Captain approved' });
+    expect(await repo.listApprovals('project-1')).toEqual([
+      { id: 'approval-1', stage: 'identity', decision: 'rejected' },
+      { id: 'approval-2', stage: 'identity', decision: 'approved' },
+    ]);
+    db.sqlite.close();
   });
 
   it('detects secret-like values in persisted text without inspecting native login state', () => {

@@ -4,6 +4,11 @@ import { tokenGroupSchema } from './tokens.js';
 
 export const nodeKindSchema = z.enum(['stack', 'grid', 'cluster', 'media', 'type', 'surface', 'ornament', 'component']);
 export const visualValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+export const visualPropKeys = new Set(['color', 'background', 'backgroundColor', 'padding', 'paddingBlock', 'paddingInline', 'gap', 'radius', 'font', 'fontSize', 'shadow', 'motion', 'width', 'height', 'margin', 'maxWidth']);
+
+export const routeSchema = z.string()
+  .regex(/^\/[A-Za-z0-9\-._~/]*$/, 'Route must start with / and use unreserved path characters.')
+  .refine((route) => route.split('/').every((segment) => segment !== '.' && segment !== '..'), 'Route segments must not traverse directories.');
 
 export const pageNodeSchema = z.object({
   id: z.string(),
@@ -16,7 +21,7 @@ export const pageNodeSchema = z.object({
 });
 
 export const pageSchema = z.object({
-  id: z.string(), route: z.string().regex(/^\//), title: z.string(), rootNodeId: z.string(), nodes: z.array(pageNodeSchema),
+  id: z.string(), route: routeSchema, title: z.string(), rootNodeId: z.string(), nodes: z.array(pageNodeSchema),
 });
 
 export const assetSchema = z.object({

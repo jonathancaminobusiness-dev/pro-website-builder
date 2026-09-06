@@ -5,7 +5,7 @@ import { FakeModelProvider, FakeRasterProvider, HiggsfieldMcpProvider, idempoten
 describe('providers', () => {
   it('returns typed deterministic proposals from the fake model', async () => {
     const provider = new FakeModelProvider();
-    const result = await provider.propose({ id: 'task-1', stage: 'identity', role: 'director', state: 'queued', baseVersionId: 'v0', inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake', deadlineMs: 5000, allowedPaths: ['/reviewRecord'], brief: 'fixture' });
+    const result = await provider.propose({ id: 'task-1', stage: 'identity', role: 'director', state: 'queued', lane: 'claude', baseVersionId: 'v0', inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake', deadlineMs: 5000, allowedPaths: ['/reviewRecord'], brief: 'fixture' });
     expect(result.status).toBe('succeeded');
     expect(result.proposal?.baseVersionId).toBe('v0');
     expect(result.proposal?.operations[0]?.path).toBe('/reviewRecord/findings');

@@ -1,4 +1,4 @@
-import { hashJson, resolveTokens, type DesignIR, type Page, type PageNode } from '@pwb/domain';
+import { hashJson, resolveTokens, visualPropKeys, type DesignIR, type Page, type PageNode } from '@pwb/domain';
 
 export const RENDERER_VERSION = 'renderer-0.1.0';
 
@@ -15,8 +15,6 @@ export interface RenderedDocument {
   irHash: string;
   rendererVersion: string;
 }
-
-const visualKeys = new Set(['color', 'background', 'backgroundColor', 'padding', 'paddingBlock', 'paddingInline', 'gap', 'radius', 'font', 'fontSize', 'shadow', 'motion', 'width', 'height', 'margin', 'maxWidth']);
 
 function escapeHtml(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -41,7 +39,7 @@ function propertyName(key: string): string {
 }
 
 function renderNode(node: PageNode, values: Record<string, string | number | boolean>): string {
-  const styleEntries = Object.entries(node.props).filter(([key]) => visualKeys.has(key));
+  const styleEntries = Object.entries(node.props).filter(([key]) => visualPropKeys.has(key));
   const styles = styleEntries.map(([key, value]) => `${propertyName(key)}:${cssValue(value, values, node, key)}`).join(';');
   const styleAttribute = styles ? ` style="${escapeHtml(styles)}"` : '';
   const common = ` data-node-id="${escapeHtml(node.id)}" data-node-kind="${escapeHtml(node.kind)}"${styleAttribute}`;
@@ -61,7 +59,7 @@ function renderPage(page: Page, values: Record<string, string | number | boolean
 }
 
 function renderCss(ir: DesignIR, values: Record<string, string | number | boolean>): string {
-  const vars = Object.entries(values).sort(([a], [b]) => a.localeCompare(b)).map(([path, value]) => `    ${cssName(path)}: ${String(value)};`).join('\n');
+  const vars = Object.entries(values).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([path, value]) => `    ${cssName(path)}: ${String(value)};`).join('\n');
   return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: var(--color-paper); color: var(--color-ink); }\n  body { margin: 0; font-family: var(--type-body); }\n  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }\n  main { container-type: inline-size; min-height: 100vh; padding: var(--space-md); }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: var(--space-lg); } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }\n}`;
 }
 

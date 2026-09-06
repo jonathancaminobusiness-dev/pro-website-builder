@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { FixtureRun } from './fixture-run.js';
+import { STUDIO_ORIGIN, STUDIO_ORIGINS } from './security.js';
 
 interface ApiOptions { runs: Map<string, FixtureRun>; createRun: (id: string) => Promise<FixtureRun>; }
 const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' };
-const allowedOrigins = new Set(['http://127.0.0.1:5173', 'http://127.0.0.1:4173']);
-function allowedOrigin(origin: string | undefined): string { return origin && allowedOrigins.has(origin) ? origin : 'http://127.0.0.1:5173'; }
+const allowedOrigins = new Set<string>(STUDIO_ORIGINS);
+function allowedOrigin(origin: string | undefined): string { return origin && allowedOrigins.has(origin) ? origin : STUDIO_ORIGIN; }
 
 function send(response: ServerResponse, status: number, body: unknown): void { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...corsHeaders }); response.end(JSON.stringify(body)); }
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> { const chunks: Buffer[] = []; for await (const chunk of request) { chunks.push(Buffer.from(chunk)); if (Buffer.concat(chunks).length > 64 * 1024) throw new Error('Request body too large.'); } const text = Buffer.concat(chunks).toString('utf8'); return text ? JSON.parse(text) as Record<string, unknown> : {}; }
@@ -15,6 +16,7 @@ export function createApiServer(options: ApiOptions): Server {
     response.setHeader('Access-Control-Allow-Origin', allowedOrigin(request.headers.origin));
     if (request.method === 'OPTIONS') { response.writeHead(204, corsHeaders).end(); return; }
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    if (request.method === 'POST' && !allowedOrigins.has(request.headers.origin ?? '')) { send(response, 403, { error: 'State-changing requests must come from the local studio origin.' }); return; }
     try {
       if (request.method === 'GET' && pathname === '/health') { response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', ...corsHeaders }).end('ok'); return; }
       if (request.method === 'POST' && pathname === '/api/runs') {

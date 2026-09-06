@@ -11,7 +11,7 @@ export class ClaudeRunner implements ModelProvider {
   private readonly options: Required<ClaudeRunnerOptions>;
 
   constructor(options: ClaudeRunnerOptions = {}) {
-    this.options = { executable: 'claude', timeoutMs: 8 * 60_000, maxTurns: 1, maxOutputTokens: 16_000, ...options };
+    this.options = { executable: 'claude', timeoutMs: 8 * 60_000, maxTurns: 1, ...options };
   }
 
   async checkAvailable(): Promise<boolean> {
@@ -28,7 +28,7 @@ export class ClaudeRunner implements ModelProvider {
         const prompt = correction ? `${task.brief}\nReturn only JSON matching the supplied schema. Correct the previous schema violation.` : task.brief;
         const { stdout } = await execFileAsync(this.options.executable, [
           '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(schemaJson.AgentResult),
-          '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.options.maxTurns), '--max-output-tokens', String(this.options.maxOutputTokens),
+          '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.options.maxTurns),
         ], { shell: false, timeout: this.options.timeoutMs, signal, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
         const raw: unknown = JSON.parse(stdout);
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
