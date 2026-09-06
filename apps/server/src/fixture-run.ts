@@ -3,7 +3,7 @@ import { createFixtureIR, type Approval } from '@pwb/domain';
 import { exportStatic, type ExportManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, RunPlanner, type VersionRecord, VersionStore } from '@pwb/orchestrator';
-import { FakeModelProvider } from '@pwb/providers';
+import type { ModelProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import type { ProjectRepository } from './db/repository.js';
 
@@ -33,7 +33,6 @@ export interface FixtureSnapshot {
 export class FixtureRun {
   private readonly store = new VersionStore();
   private readonly applier = new Applier(this.store, new PatchGate());
-  private readonly provider = new FakeModelProvider();
   private readonly planner = new RunPlanner();
   private readonly approvals: Approval[] = [];
   private currentVersion!: VersionRecord;
@@ -48,7 +47,7 @@ export class FixtureRun {
   private started = false;
   private runIdentifier = '';
 
-  constructor(private readonly options: { repository: ProjectRepository; exportRoot: string }) {}
+  constructor(private readonly options: { repository: ProjectRepository; exportRoot: string; provider: ModelProvider }) {}
 
   async initialize(runId: string): Promise<void> {
     this.runIdentifier = runId;
@@ -76,14 +75,14 @@ export class FixtureRun {
     await this.record('task.queued', { taskId: task.id, stage: task.stage, baseVersionId: task.baseVersionId });
     if (!this.started) { this.started = true; await this.record('run.started', { stage: task.stage }); }
     await this.record('task.started', { taskId: task.id, stage: task.stage });
-    const result = await this.provider.propose(task);
+    const result = await this.options.provider.propose(task);
     if (this.cancelRequested) { this.status = 'cancelled'; await this.record('task.cancelled', { taskId: task.id, stage: task.stage }); return this.snapshot(); }
     if (!result.proposal) {
       this.status = 'failed';
       await this.record('task.failed', { taskId: task.id, stage: task.stage, reason: result.summary });
       throw new Error('Fixture provider returned no proposal.');
     }
-    const next = this.applier.apply(result.proposal);
+    const next = this.applier.apply(result.proposal, task.allowedPaths);
     await ignoringDuplicate(this.options.repository.savePatch(result.proposal, this.runId()));
     await ignoringDuplicate(this.options.repository.saveVersion({ id: next.id, projectId: this.projectId(), ...(next.parentId ? { parentId: next.parentId } : {}), hash: next.hash, ir: next.ir }));
     this.currentVersion = next;

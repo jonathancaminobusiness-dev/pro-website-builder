@@ -4,6 +4,6 @@
   "include": ["src"],
   "references": [
     { "path": "../../packages/domain" }, { "path": "../../packages/export" }, { "path": "../../packages/linter" },
-    { "path": "../../packages/orchestrator" }, { "path": "../../packages/providers" }, { "path": "../../packages/render-hub" }, { "path": "../../packages/renderer" }
+    { "path": "../../packages/orchestrator" }, { "path": "../../packages/providers" }, { "path": "../../packages/renderer" }
   ]
 }

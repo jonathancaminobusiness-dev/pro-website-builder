@@ -2,6 +2,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { FakeModelProvider } from '@pwb/providers';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
@@ -13,7 +14,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-'));
     const db = openDatabase(join(dir, 'api.sqlite'));
     const runs = new Map<string, FixtureRun>();
-    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(dir, 'exports') }); await run.initialize(id); runs.set(id, run); return run; } });
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
@@ -31,7 +32,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-'));
     const db = openDatabase(join(dir, 'csrf.sqlite'));
     const runs = new Map<string, FixtureRun>();
-    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(dir, 'exports') }); await run.initialize(id); runs.set(id, run); return run; } });
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;

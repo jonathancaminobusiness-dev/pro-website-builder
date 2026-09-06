@@ -17,6 +17,10 @@ describe('providers', () => {
     expect((await fake.submit(job)).status).toBe('succeeded');
     expect((await fake.submit(job)).id).toBe((await fake.submit(job)).id);
     expect((await new HiggsfieldMcpProvider({ configured: false }).submit(job)).status).toBe('not_configured');
+    const configured = new HiggsfieldMcpProvider({ configured: true, transport: { callTool: async () => ({ uri: 'higgsfield://asset', license: 'provider terms' }) } });
+    const generated = await configured.submit(job);
+    expect(generated.status).toBe('succeeded');
+    expect(generated.provenance).toMatchObject({ prompt: 'paper texture', model: 'higgsfield', license: 'provider terms', identityVersionId: 'v0' });
   });
 
   it('derives an idempotency key without including credentials', () => {

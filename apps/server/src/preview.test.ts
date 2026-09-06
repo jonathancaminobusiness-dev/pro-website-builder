@@ -19,6 +19,9 @@ describe('preview origin', () => {
       expect(await response.text()).toBe(await readFile(join(exported.directory, 'proof', 'index.html'), 'utf8'));
       expect(response.headers.get('content-security-policy')).toContain("script-src 'none'");
       expect(response.headers.get('content-security-policy')).toContain('frame-ancestors http://127.0.0.1:5173 http://127.0.0.1:4173');
+      const malformed = await fetch(`${preview.origin}/preview/v0/%`);
+      expect(malformed.status).toBe(404);
+      expect((await fetch(`${preview.origin}/preview/v0/proof`)).status).toBe(200);
     } finally { await preview.close(); await rm(root, { recursive: true, force: true }); }
   });
 });

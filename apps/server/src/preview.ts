@@ -10,7 +10,7 @@ export function createPreviewServer(getRendered: () => RenderedDocument | undefi
     if (!document) { response.writeHead(404, previewHeaders()).end('Preview unavailable'); return; }
     const pathname = new URL(request.url ?? '/', PREVIEW_ORIGIN).pathname;
     const route = pathname.replace(/^\/preview\/[^/]+/, '') || '/';
-    const match = document.routes.find((candidate) => candidate.route === decodeURIComponent(route));
+    const match = document.routes.find((candidate) => candidate.route === route);
     if (!match) { response.writeHead(404, previewHeaders()).end('Route unavailable'); return; }
     response.writeHead(200, previewHeaders()).end(match.html);
   });

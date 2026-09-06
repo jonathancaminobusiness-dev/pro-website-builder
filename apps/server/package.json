@@ -10,7 +10,6 @@
     "@pwb/linter": "workspace:*",
     "@pwb/orchestrator": "workspace:*",
     "@pwb/providers": "workspace:*",
-    "@pwb/render-hub": "workspace:*",
     "@pwb/renderer": "workspace:*",
     "better-sqlite3": "^12.0.0",
     "drizzle-orm": "^0.44.0"

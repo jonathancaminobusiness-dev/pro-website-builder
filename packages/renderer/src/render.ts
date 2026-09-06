@@ -1,4 +1,4 @@
-import { hashJson, resolveTokens, visualPropKeys, type DesignIR, type Page, type PageNode } from '@pwb/domain';
+import { hashJson, resolveTokens, slotChildIds, visualPropKeys, type DesignIR, type Page, type PageNode } from '@pwb/domain';
 
 export const RENDERER_VERSION = 'renderer-0.1.0';
 
@@ -38,23 +38,31 @@ function propertyName(key: string): string {
   return ({ background: 'background-color', radius: 'border-radius', font: 'font-family', motion: 'transition-duration' } as Record<string, string>)[key] ?? key;
 }
 
-function renderNode(node: PageNode, values: Record<string, string | number | boolean>): string {
+function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<string, string | number | boolean>): string {
   const styleEntries = Object.entries(node.props).filter(([key]) => visualPropKeys.has(key));
   const styles = styleEntries.map(([key, value]) => `${propertyName(key)}:${cssValue(value, values, node, key)}`).join(';');
   const styleAttribute = styles ? ` style="${escapeHtml(styles)}"` : '';
   const common = ` data-node-id="${escapeHtml(node.id)}" data-node-kind="${escapeHtml(node.kind)}"${styleAttribute}`;
   const text = typeof node.props.text === 'string' ? escapeHtml(node.props.text) : '';
+  const children = slotChildIds(node).map((childId) => {
+    const child = byId.get(childId);
+    if (!child) throw new Error(`Node ${node.id} references unknown node ${childId}.`);
+    return renderNode(child, byId, values);
+  }).join('');
   if (node.kind === 'type') {
     const tag = node.semantic === 'h1' || node.semantic === 'h2' || node.semantic === 'h3' ? node.semantic : 'p';
-    return `<${tag}${common}>${text}</${tag}>`;
+    return `<${tag}${common}>${text}${children}</${tag}>`;
   }
-  if (node.kind === 'media') return `<figure${common}><figcaption>${text}</figcaption></figure>`;
-  if (node.kind === 'surface') return `<section${common}>${text}</section>`;
-  return `<div${common}>${text}</div>`;
+  if (node.kind === 'media') return `<figure${common}><figcaption>${text}</figcaption>${children}</figure>`;
+  if (node.kind === 'surface') return `<section${common}>${text}${children}</section>`;
+  return `<div${common}>${text}${children}</div>`;
 }
 
 function renderPage(page: Page, values: Record<string, string | number | boolean>): string {
-  const body = page.nodes.map((node) => renderNode(node, values)).join('');
+  const byId = new Map(page.nodes.map((node) => [node.id, node]));
+  const root = byId.get(page.rootNodeId);
+  if (!root) throw new Error(`Page ${page.id} has no node ${page.rootNodeId} to use as its root.`);
+  const body = renderNode(root, byId, values);
   return `<main data-page-id="${escapeHtml(page.id)}" data-route="${escapeHtml(page.route)}"><h1 class="sr-only">${escapeHtml(page.title)}</h1>${body}</main>`;
 }
 

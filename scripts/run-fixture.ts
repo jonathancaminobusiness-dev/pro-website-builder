@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { openDatabase, ProjectRepository } from '../apps/server/src/db/repository.js';
 import { FixtureRun } from '../apps/server/src/fixture-run.js';
+import { createModelProvider } from '../apps/server/src/provider.js';
 
 const root = process.cwd();
 const databasePath = process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'cli-fixture.sqlite');
@@ -12,7 +13,7 @@ async function main(): Promise<void> {
   await mkdir(exportRoot, { recursive: true });
   const database = openDatabase(databasePath);
   try {
-    const run = new FixtureRun({ repository: new ProjectRepository(database), exportRoot });
+    const run = new FixtureRun({ repository: new ProjectRepository(database), exportRoot, provider: createModelProvider(process.env.PWB_MODEL_PROVIDER) });
     await run.initialize('cli-fixture');
     const snapshot = await run.runAll();
     console.log(JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id, exportDirectory: snapshot.exportManifest?.directory, routes: snapshot.exportManifest?.routes }, null, 2));

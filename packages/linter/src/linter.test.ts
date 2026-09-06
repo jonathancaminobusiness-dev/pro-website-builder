@@ -10,12 +10,22 @@ describe('identity linter', () => {
     expect(report.findings.some((finding) => finding.id === 'TOK-001' && finding.severity === 'error')).toBe(true);
   });
 
-  it('reports forbidden defaults and unresolved token aliases', () => {
+  it('reports a forbidden default that a token-only document hides behind a token', () => {
     const ir = createFixtureIR();
-    ir.pages.routes[0]!.nodes[0]!.props.font = 'Inter-only hero';
+    ir.identity.forbiddenDefaults.fonts.push('system-ui');
+    (ir.tokens as { type: { body: { $value: string } } }).type.body.$value = 'system-ui, sans-serif';
+    const report = lintDesign(ir);
+    const def = report.findings.find((finding) => finding.id === 'DEF-010');
+    expect(def).toMatchObject({ path: '/tokens/type/body', stage: 'prototype', severity: 'error' });
+    expect(report.errorCount).toBe(1);
+  });
+
+  it('reports unresolved token aliases with the stage declared by their rule', () => {
+    const ir = createFixtureIR();
     ir.pages.routes[0]!.nodes[0]!.props.color = '{tokens.missing}';
-    const ids = lintDesign(ir).findings.map((finding) => finding.id);
-    expect(ids).toEqual(expect.arrayContaining(['DEF-010', 'TOK-001', 'TOK-002']));
+    const findings = lintDesign(ir).findings;
+    expect(findings.map((finding) => finding.id)).toEqual(expect.arrayContaining(['TOK-002']));
+    expect(findings.every((finding) => finding.stage === 'identity')).toBe(true);
   });
 
   it('does not lint page prose as if it were a visual value', () => {

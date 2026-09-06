@@ -19,6 +19,14 @@ describe('deterministic renderer', () => {
     expect(renderDesign(ir)).toEqual(renderDesign(ir));
   });
 
+  it('renders each node inside the parent that declares it in a slot', () => {
+    const html = renderDesign(createFixtureIR()).routes[0]!.html;
+    const root = /<div data-node-id="home-root"[^>]*>([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '';
+    expect(root).toContain('data-node-id="home-title"');
+    expect(root).toContain('data-node-id="home-proof"');
+    expect(html.indexOf('data-node-id="home-title"')).toBeLessThan(html.indexOf('data-node-id="home-proof"'));
+  });
+
   it('refuses raw visual values unless a signed exception exists', () => {
     const ir = createFixtureIR();
     ir.pages.routes[0]!.nodes[0]!.props.color = '#ff00ff';

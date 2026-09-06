@@ -1,13 +1,10 @@
 import { resolveTokens, visualPropKeys, type DesignIR } from '@pwb/domain';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
-export interface LintFinding { id: string; stage: 'identity' | 'prototype' | 'finalization'; severity: FindingSeverity; path: string; message: string; suggestedPatch?: unknown; }
-export interface LintRule { id: string; stage: LintFinding['stage']; severity: FindingSeverity; detect: (ir: DesignIR) => LintFinding[]; }
+export interface LintIssue { path: string; message: string; suggestedPatch?: unknown; }
+export interface LintFinding extends LintIssue { id: string; stage: 'identity' | 'prototype' | 'finalization'; severity: FindingSeverity; }
+export interface LintRule { id: string; stage: LintFinding['stage']; severity: FindingSeverity; detect: (ir: DesignIR) => LintIssue[]; }
 export interface LintReport { findings: LintFinding[]; errorCount: number; warningCount: number; }
-
-function finding(id: string, severity: FindingSeverity, path: string, message: string): LintFinding {
-  return { id, stage: id.startsWith('TOK') ? 'identity' : 'prototype', severity, path, message };
-}
 
 function* visualProps(ir: DesignIR): Generator<{ path: string; value: string | number | boolean; signedException: boolean }> {
   for (const page of ir.pages.routes) for (const node of page.nodes) for (const [key, value] of Object.entries(node.props)) {
@@ -16,36 +13,38 @@ function* visualProps(ir: DesignIR): Generator<{ path: string; value: string | n
   }
 }
 
-function tokenOnly(ir: DesignIR): LintFinding[] {
-  const findings: LintFinding[] = [];
+function tokenOnly(ir: DesignIR): LintIssue[] {
+  const issues: LintIssue[] = [];
   for (const { path, value, signedException } of visualProps(ir)) {
     const isRef = typeof value === 'string' && /^\{[^}]+\}$/.test(value);
-    if (!isRef && !signedException) findings.push(finding('TOK-001', 'error', path, 'Visual values must resolve from a token or carry a captain-signed exception.'));
+    if (!isRef && !signedException) issues.push({ path, message: 'Visual values must resolve from a token or carry a captain-signed exception.' });
   }
-  return findings;
+  return issues;
 }
 
-function aliasesAndRefs(ir: DesignIR): LintFinding[] {
-  const findings: LintFinding[] = [];
+function aliasesAndRefs(ir: DesignIR): LintIssue[] {
+  const issues: LintIssue[] = [];
   let resolved: ReturnType<typeof resolveTokens> | undefined;
-  try { resolved = resolveTokens(ir.tokens); } catch (error) { findings.push(finding('TOK-002', 'error', '/tokens', error instanceof Error ? error.message : 'Token aliases are invalid.')); }
+  try { resolved = resolveTokens(ir.tokens); } catch (error) { issues.push({ path: '/tokens', message: error instanceof Error ? error.message : 'Token aliases are invalid.' }); }
   for (const { path, value } of visualProps(ir)) {
     if (typeof value !== 'string') continue;
     const match = /^\{([^}]+)\}$/.exec(value);
-    if (match && (!resolved || !(match[1]! in resolved.values))) findings.push(finding('TOK-002', 'error', path, `Token reference ${value} is orphaned.`));
+    if (match && (!resolved || !(match[1]! in resolved.values))) issues.push({ path, message: `Token reference ${value} is orphaned.` });
   }
-  return findings;
+  return issues;
 }
 
-function forbiddenDefaults(ir: DesignIR): LintFinding[] {
+function forbiddenDefaults(ir: DesignIR): LintIssue[] {
   const defaults = [...ir.identity.forbiddenDefaults.fonts, ...ir.identity.forbiddenDefaults.palettes, ...ir.identity.forbiddenDefaults.motifs];
-  const findings: LintFinding[] = [];
-  for (const { path, value } of visualProps(ir)) {
+  let resolved: ReturnType<typeof resolveTokens>;
+  try { resolved = resolveTokens(ir.tokens); } catch { return []; }
+  const issues: LintIssue[] = [];
+  for (const [path, value] of Object.entries(resolved.values)) {
     if (typeof value !== 'string') continue;
     const match = defaults.find((candidate) => value.toLowerCase().includes(candidate.toLowerCase()));
-    if (match) findings.push(finding('DEF-010', 'error', path, `Forbidden default detected: ${match}.`));
+    if (match) issues.push({ path: `/tokens/${path.replaceAll('.', '/')}`, message: `Forbidden default detected: ${match}.` });
   }
-  return findings;
+  return issues;
 }
 
 export const ruleRegistry: LintRule[] = [
@@ -55,6 +54,6 @@ export const ruleRegistry: LintRule[] = [
 ];
 
 export function lintDesign(ir: DesignIR): LintReport {
-  const findings = ruleRegistry.flatMap((rule) => rule.detect(ir));
+  const findings = ruleRegistry.flatMap((rule) => rule.detect(ir).map((issue) => ({ ...issue, id: rule.id, stage: rule.stage, severity: rule.severity })));
   return { findings, errorCount: findings.filter((item) => item.severity === 'error').length, warningCount: findings.filter((item) => item.severity === 'warning').length };
 }

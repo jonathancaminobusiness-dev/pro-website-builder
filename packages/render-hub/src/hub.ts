@@ -1,7 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Browser } from 'playwright';
-import type { DesignIR } from '@pwb/domain';
 import type { RenderedDocument } from '@pwb/renderer';
 import { cacheKey, evaluateQa, type QaResult, type RenderCase } from './cases.js';
 
@@ -10,7 +9,7 @@ export interface RenderCaseResult { renderCase: RenderCase; screenshotPath: stri
 export class RenderHub {
   constructor(private readonly options: { cacheDir: string; browser?: Browser }) {}
 
-  async render(ir: DesignIR, rendered: RenderedDocument, baseUrl: string, cases: RenderCase[]): Promise<RenderCaseResult[]> {
+  async render(rendered: RenderedDocument, baseUrl: string, cases: RenderCase[]): Promise<RenderCaseResult[]> {
     await mkdir(this.options.cacheDir, { recursive: true });
     const browser = this.options.browser ?? await chromium.launch({ headless: true });
     const ownsBrowser = !this.options.browser;
@@ -39,7 +38,6 @@ export class RenderHub {
         results.push(result);
       }
     } finally { if (ownsBrowser) await browser.close(); }
-    void ir;
     return results;
   }
 }

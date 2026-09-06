@@ -20,8 +20,31 @@ export const pageNodeSchema = z.object({
   signedException: z.object({ reason: z.string(), approver: z.literal('captain'), signature: z.string() }).optional(),
 });
 
+export function slotChildIds(node: { slots: Record<string, string[]> }): string[] {
+  return Object.keys(node.slots).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).flatMap((slot) => node.slots[slot]!);
+}
+
 export const pageSchema = z.object({
   id: z.string(), route: routeSchema, title: z.string(), rootNodeId: z.string(), nodes: z.array(pageNodeSchema),
+}).superRefine((page, ctx) => {
+  const byId = new Map(page.nodes.map((node) => [node.id, node]));
+  if (byId.size !== page.nodes.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `Page ${page.id} declares duplicate node ids.` });
+  const root = byId.get(page.rootNodeId);
+  if (!root) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rootNodeId'], message: `Page ${page.id} has no node ${page.rootNodeId} to use as its root.` }); return; }
+  const visited = new Set([root.id]);
+  const walk = (node: typeof root): void => {
+    for (const childId of slotChildIds(node)) {
+      const child = byId.get(childId);
+      if (!child) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `Node ${node.id} references unknown node ${childId}.` }); continue; }
+      if (visited.has(childId)) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `Node ${childId} appears more than once in the page graph.` }); continue; }
+      visited.add(childId);
+      walk(child);
+    }
+  };
+  walk(root);
+  for (const node of page.nodes) {
+    if (!visited.has(node.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `Node ${node.id} is not reachable from the page root ${page.rootNodeId}.` });
+  }
 });
 
 export const assetSchema = z.object({

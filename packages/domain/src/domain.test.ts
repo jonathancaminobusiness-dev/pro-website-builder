@@ -27,6 +27,18 @@ describe('domain contracts', () => {
     }).operations[0]?.op).toBe('replace');
   });
 
+  it('rejects a page whose nodes are not reachable from its declared root', () => {
+    const orphaned = createFixtureIR();
+    orphaned.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title'] };
+    expect(() => DesignIRSchema.parse(orphaned)).toThrow(/home-proof is not reachable/i);
+    const dangling = createFixtureIR();
+    dangling.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'ghost'] };
+    expect(() => DesignIRSchema.parse(dangling)).toThrow(/unknown node ghost/i);
+    const cyclic = createFixtureIR();
+    cyclic.pages.routes[0]!.nodes[1]!.slots = { children: ['home-root'] };
+    expect(() => DesignIRSchema.parse(cyclic)).toThrow(/more than once/i);
+  });
+
   it('rejects an identity without the visual contract fields', () => {
     expect(() => IdentitySpecSchema.parse({ meta: { id: 'bad' } })).toThrow();
   });
