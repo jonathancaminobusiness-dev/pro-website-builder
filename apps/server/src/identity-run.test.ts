@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ModelProvider } from '@pwb/providers';
-import { FakeIdentityProvider } from '@pwb/stage-identity';
+import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
 import { IdentityRun } from './identity-run.js';
@@ -66,6 +66,25 @@ describe('identity run', () => {
       expect(direction.lintErrors).toEqual([]);
       expect(direction.swatches.length).toBeGreaterThan(0);
     }
+  });
+
+  it('shows a failing DIV-030 pair once on the gate, not inside every card', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-director-modular-technical' || !result.proposal) return result;
+        const converged = { ...fakeIdentityFor('editorial-material'), meta: fakeIdentityFor('modular-technical').meta, direction: fakeIdentityFor('modular-technical').direction };
+        return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: converged }] } };
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-div030', repository: new ProjectRepository(database), provider });
+    await run.initialize();
+    const snapshot = await run.start();
+    expect(snapshot.divergence?.passed).toBe(false);
+    expect(snapshot.divergence?.blockedPairs.join(' ')).toMatch(/editorial-material and modular-technical/);
+    // The pair belongs to the set, so the card of each direction carries only what that direction can answer for.
+    for (const direction of snapshot.directions) expect(direction.lintErrors.map((finding) => finding.id)).not.toContain('DIV-030');
   });
 
   it('records the captain decision and serves the approved version to the preview', async () => {

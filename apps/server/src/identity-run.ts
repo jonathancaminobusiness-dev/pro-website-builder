@@ -246,7 +246,7 @@ export class IdentityRun {
       axes: Object.entries(candidate.vector.axes).map(([axis, value]) => ({ axis, key: value.key, descriptor: value.descriptor })),
       swatches,
       decisions: identity.decisions.map((decision) => ({ choice: decision.choice, ...(decision.axis ? { axis: decision.axis } : {}), evidenceIds: decision.evidenceIds, ...(decision.rationale ? { rationale: decision.rationale } : {}) })),
-      lintErrors: lint.findings.filter((finding) => finding.severity === 'error').map((finding) => ({ id: finding.id, path: finding.path, message: finding.message })),
+      lintErrors: lint.findings.filter((finding) => finding.severity === 'error' && finding.scope !== 'set').map((finding) => ({ id: finding.id, path: finding.path, message: finding.message })),
       blocking: candidate.blocking.map((finding) => ({ id: finding.id, observation: finding.observation, why: finding.why })),
       scores: candidate.scores,
       rubricGaps: candidate.rubricGaps,

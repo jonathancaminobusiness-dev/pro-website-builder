@@ -24,7 +24,7 @@ import {
   type Token,
   type TokenValue,
 } from '@pwb/domain';
-import { lintDesign, type LintReport } from '@pwb/linter';
+import { lintDesign, type LintFinding, type LintReport } from '@pwb/linter';
 import { Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider, RasterProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
@@ -104,6 +104,17 @@ export interface RubricGap { dimension: string; score: number; evidence: string;
 
 /** What the critics said about the fan-out as a whole, which belongs to no single card. */
 export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[]; blocking: CritiqueFinding[]; abstained: boolean; }
+
+/** The lint errors a direction can answer for: a set-scoped finding belongs to the fan-out, not to one document. */
+function ownLintErrors(report: LintReport): LintFinding[] {
+  return report.findings.filter((finding) => finding.severity === 'error' && finding.scope !== 'set');
+}
+
+function blockedPairsOf(pairs: DirectionComparison[]): string[] {
+  return pairs
+    .filter((pair) => pair.distinctAxes.length < MINIMUM_DISTINCT_AXES)
+    .map((pair) => `${pair.a} and ${pair.b} differ on ${pair.distinctAxes.length} of ${MINIMUM_DISTINCT_AXES} axes${pair.hueOnlyColor ? '; the colour difference is only a hue rotation' : ''}.`);
+}
 
 function scoresOf(reports: CritiqueReport[]): CritiqueScore[] {
   return reports.flatMap((report) => report.scores.map((entry) => ({ criticId: report.criticId, dimension: entry.dimension, score: entry.score })));
@@ -372,10 +383,17 @@ export class IdentityStage {
     const matrix = this.candidates.map((candidate) => candidate.vector);
     if (matrix.length < 2) return { pairs: [], passed: false, blockedPairs: ['A divergence matrix needs at least two directions.'] };
     const pairs = compareDivergenceMatrix(matrix);
-    const blockedPairs = pairs
-      .filter((pair) => pair.distinctAxes.length < MINIMUM_DISTINCT_AXES)
-      .map((pair) => `${pair.a} and ${pair.b} differ on ${pair.distinctAxes.length} of ${MINIMUM_DISTINCT_AXES} axes${pair.hueOnlyColor ? '; the colour difference is only a hue rotation' : ''}.`);
+    const blockedPairs = blockedPairsOf(pairs);
     return { pairs, passed: blockedPairs.length === 0, blockedPairs };
+  }
+
+  /**
+   * DIV-030 is a judgement about a pair, so it blocks the two directions that
+   * form it and no others: a direction in no failing pair is not answerable for
+   * a distance it is not part of.
+   */
+  private blockedPairsFor(directionId: string): string[] {
+    return blockedPairsOf(this.divergence.pairs.filter((pair) => pair.a === directionId || pair.b === directionId));
   }
 
   // ---------------------------------------------------------------- step 4
@@ -501,7 +519,7 @@ export class IdentityStage {
 
   private async refine(brief: BriefSpec, signal?: AbortSignal): Promise<IdentityCandidate[]> {
     if (this.refinementCyclesUsed >= 1) return this.candidates;
-    const needing = this.candidates.filter((candidate) => candidate.blocking.length > 0 || candidate.rubricGaps.length > 0 || candidate.lint.errorCount > 0);
+    const needing = this.candidates.filter((candidate) => candidate.blocking.length > 0 || candidate.rubricGaps.length > 0 || ownLintErrors(candidate.lint).length > 0);
     if (needing.length === 0) return this.candidates;
     this.refinementCyclesUsed += 1;
     const refined = [...this.candidates];
@@ -649,8 +667,8 @@ export class IdentityStage {
       throw new StageError(`Gate 1 was reopened for ${before.record.directionId}; a different direction cannot be approved onto that lineage.`);
     }
     const blockers = [
-      ...lintDesign(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir).findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
-      ...this.divergence.blockedPairs,
+      ...ownLintErrors(lintDesign(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir)).map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
+      ...this.blockedPairsFor(candidate.directionId),
       ...this.setCritique.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score} for the fan-out as a whole, below the absolute minimum of ${RUBRIC_MINIMUM}: ${gap.evidence}`),
       ...this.setCritique.blocking.map((finding) => `${finding.id} about the fan-out as a whole: ${finding.observation}`),
       ...candidate.blocking.map((finding) => `${finding.id}: ${finding.observation}`),

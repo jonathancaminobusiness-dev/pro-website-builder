@@ -72,8 +72,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     ...direction.blocking.map((finding) => `${finding.id} · ${finding.observation}`),
     ...direction.rubricGaps.map((gap) => `Rubrica ${gap.dimension} · nota ${gap.score} abaixo do mínimo absoluto · ${gap.evidence}`),
     ...direction.imageryViolations,
-    ...(snapshot?.divergence?.blockedPairs ?? []),
-  ], [snapshot]);
+  ], []);
 
   // A decided gate is closed or reopened. A token change reopens it and only a
   // re-approval of the same direction closes it again, so that one card keeps
@@ -117,13 +116,13 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
           : `DIV-030 bloqueia a seleção automática: ${snapshot.divergence.blockedPairs.join(' ')}`}
       </p>}
 
-      {(snapshot.setCritique.scores.length > 0 || snapshot.setCritique.blocking.length > 0) && <div className="set-critique">
+      {(snapshot.setCritique.scores.length > 0 || snapshot.setCritique.blocking.length > 0 || snapshot.setCritique.abstained) && <div className="set-critique">
         <p className="eyebrow">Rubrica do conjunto — vale para as três direções</p>
-        <ul className="score-row" aria-label="Notas dos críticos sobre o conjunto">
+        {snapshot.setCritique.scores.length > 0 && <ul className="score-row" aria-label="Notas dos críticos sobre o conjunto">
           {snapshot.setCritique.scores.map((score) => <li key={`${score.criticId}-${score.dimension}`} className={snapshot.setCritique.rubricGaps.some((gap) => gap.dimension === score.dimension && gap.score === score.score) ? 'below-rubric' : ''}>
             <code>{score.dimension}</code> {score.score}/4 <small>{score.criticId}</small>
           </li>)}
-        </ul>
+        </ul>}
         {(snapshot.setCritique.rubricGaps.length > 0 || snapshot.setCritique.blocking.length > 0) && <ul className="blocker-list" aria-label="Bloqueios do conjunto">
           {snapshot.setCritique.rubricGaps.map((gap) => <li key={gap.dimension}>Rubrica {gap.dimension} · nota {gap.score} abaixo do mínimo absoluto para o conjunto · {gap.evidence}</li>)}
           {snapshot.setCritique.blocking.map((finding) => <li key={finding.id}>{finding.id} · {finding.observation}</li>)}

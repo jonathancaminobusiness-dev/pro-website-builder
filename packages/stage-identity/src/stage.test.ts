@@ -91,6 +91,31 @@ describe('identity stage fan-out', () => {
     await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Aprovada.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
   });
 
+  it('keeps a failing DIV-030 pair on the set: no refinement, and only the two directions in it are blocked', async () => {
+    const inner = new FakeIdentityProvider();
+    const refinerCalls: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-refiner-')) refinerCalls.push(task.id);
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-director-modular-technical' || !result.proposal) return result;
+        const converged = { ...fakeIdentityFor('editorial-material'), meta: fakeIdentityFor('modular-technical').meta, direction: fakeIdentityFor('modular-technical').direction };
+        return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: converged }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    expect(result.divergence.blockedPairs.join(' ')).toMatch(/editorial-material and modular-technical/);
+    // No per-direction repair can move a distance between two other documents, so none is attempted.
+    expect(refinerCalls).toEqual([]);
+    for (const directionId of ['editorial-material', 'modular-technical'] as const) {
+      await expect(stage.approve({ directionId, rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/editorial-material and modular-technical differ/);
+    }
+    // The direction that is in no failing pair is not answerable for that distance.
+    const approved = await stage.approve({ directionId: 'typographic-low-chroma', rationale: 'A direção tipográfica responde ao briefing.', approverRole: 'captain' });
+    expect(approved.record.directionId).toBe('typographic-low-chroma');
+  });
+
   it('builds the same matrix whatever order the directors answer in', async () => {
     const runWith = async (delays: Record<string, number>) => {
       const inner = new FakeIdentityProvider();

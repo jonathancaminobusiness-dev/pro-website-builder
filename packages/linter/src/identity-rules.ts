@@ -101,6 +101,9 @@ export function divergenceDistance(ir: DesignIR): LintIssue[] {
     const hue = pair.hueOnlyColor ? ' Changing only the hue does not count as a colour direction.' : '';
     issues.push({
       path: '/identity/direction/divergence/matrix',
+      // The pair is a fact about the set, not about the document it is read from:
+      // every candidate carries the same matrix and would report the same pair.
+      scope: 'set',
       message: `Directions ${pair.a} and ${pair.b} differ on ${pair.distinctAxes.length} of the required ${MINIMUM_DISTINCT_AXES} axes (${pair.distinctAxes.join(', ') || 'none'}). Shared axes — ${shared.join(' ')}${hue}`,
     });
   }

@@ -3,7 +3,8 @@ import { divergenceDistance, identityEvidence } from './identity-rules.js';
 import { prototypeRuleRegistry } from './prototype-rules.js';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
-export interface LintIssue { path: string; message: string; suggestedPatch?: unknown; }
+/** `scope: 'set'` marks a finding about the fan-out a document belongs to rather than about the document itself. */
+export interface LintIssue { path: string; message: string; suggestedPatch?: unknown; scope?: 'set'; }
 export interface LintFinding extends LintIssue { id: string; stage: 'identity' | 'prototype' | 'finalization'; severity: FindingSeverity; }
 export interface LintRule { id: string; stage: LintFinding['stage']; severity: FindingSeverity; detect: (ir: DesignIR) => LintIssue[]; }
 export interface LintReport { findings: LintFinding[]; errorCount: number; warningCount: number; }
