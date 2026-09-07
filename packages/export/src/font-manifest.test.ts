@@ -25,13 +25,13 @@ async function fontsDirectory(manifest?: unknown): Promise<string> {
 describe('the fonts the owner hands over', () => {
   it('reads each face named in the manifest together with its bytes and its terms', async () => {
     const [face, ...rest] = await loadFontSources(await fontsDirectory({
-      faces: [{ ...ENTRY, licenseUrl: 'https://openfontlicense.org', unicodeRange: 'U+0000-00FF' }],
+      faces: [{ ...ENTRY, licenseUrl: 'https://openfontlicense.org' }],
     }));
     expect(rest).toEqual([]);
     expect(face).toMatchObject({
       family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2',
-      license: 'ofl-1.1', licenseUrl: 'https://openfontlicense.org', unicodeRange: 'U+0000-00FF',
-      author: 'Fixture Foundry', date: '2026-09-07',
+      license: 'ofl-1.1', licenseUrl: 'https://openfontlicense.org',
+      source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07',
     });
     expect(Buffer.from(face!.bytes)).toEqual(FACE);
   });
@@ -45,6 +45,17 @@ describe('the fonts the owner hands over', () => {
   it('refuses a manifest that reaches outside the fonts directory', async () => {
     const directory = await fontsDirectory({ faces: [{ ...ENTRY, file: '../fixture-sans-400.woff2' }] });
     await expect(loadFontSources(directory)).rejects.toThrow(/escapes the fonts directory/);
+  });
+
+  it('refuses a manifest it cannot read rather than compiling with no face at all', async () => {
+    const directory = await fontsDirectory({ faces: [ENTRY] });
+    // The owner pointed the variable at the manifest instead of its directory.
+    await expect(loadFontSources(join(directory, 'manifest.json'))).rejects.toThrow(/could not be read/);
+  });
+
+  it('refuses a face declared in a format the release does not ship', async () => {
+    const directory = await fontsDirectory({ faces: [{ ...ENTRY, format: 'woff' }] });
+    await expect(loadFontSources(directory)).rejects.toThrow();
   });
 
   it('refuses a face that arrives without the terms it came under', async () => {

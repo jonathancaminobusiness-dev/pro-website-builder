@@ -14,7 +14,8 @@ export const fontManifestSchema = z.object({
     family: z.string().min(1),
     weight: z.string().min(1),
     style: z.enum(['normal', 'italic']),
-    format: z.enum(['woff2', 'woff']),
+    /** One face is one file, and woff2 is the format every engine the release is measured on reads. */
+    format: z.literal('woff2'),
     /** Path of the file, relative to the fonts directory the manifest lives in. */
     file: z.string().min(1),
     license: z.string().min(1),
@@ -22,7 +23,6 @@ export const fontManifestSchema = z.object({
     source: z.string().min(1),
     author: z.string().min(1),
     date: z.string(),
-    unicodeRange: z.string().optional(),
   })),
 });
 

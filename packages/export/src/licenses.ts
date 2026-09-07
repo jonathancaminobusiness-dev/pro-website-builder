@@ -16,6 +16,7 @@ export interface LicenseEntry {
   hash: string;
   bundled: boolean;
   modifications: string;
+  licenseUrl?: string;
   termsNote?: string;
 }
 
@@ -73,13 +74,14 @@ export function buildLicenseInventory(ir: DesignIR, fonts: FontDecision[], toolc
     entries.push({
       id,
       kind: 'font',
-      source: font.path ?? 'not bundled',
-      author: font.family,
+      source: font.source,
+      author: font.author,
       license: font.license,
-      date: '',
-      hash: '',
+      date: font.date,
+      hash: font.hash ?? '',
       bundled: font.selfHosted,
       modifications: 'None recorded.',
+      ...(font.licenseUrl ? { licenseUrl: font.licenseUrl } : {}),
       termsNote: font.reason,
     });
     if (font.selfHosted && !isUsableLicense(font.license)) missing.push({ id, detail: `Font ${id} is bundled under the licence "${font.license}", which does not clear it for release.` });

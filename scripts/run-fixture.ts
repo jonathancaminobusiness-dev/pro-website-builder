@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { loadFontSources } from '../packages/export/src/index.js';
 import { openDatabase, ProjectRepository } from '../apps/server/src/db/repository.js';
 import { FixtureRun, type FixtureSnapshot } from '../apps/server/src/fixture-run.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
@@ -20,7 +21,7 @@ async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSumm
   const versionId = snapshot.currentVersion.id;
   const reviewed = renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` });
   // Port 0 keeps this CLI off the developer ports, so it runs beside the dev server and other checkouts.
-  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, 0);
+  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, 0, await loadFontSources(fontsDir));
   await preview.start();
   try {
     // `createRenderMatrix` owns the matrix; this CLI only chooses how wide a sweep to pay for and

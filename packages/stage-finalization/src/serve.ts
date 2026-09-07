@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import type { CompiledSite } from '@pwb/export';
+import { fontFaceCss, type CompiledSite } from '@pwb/export';
 import type { RenderedDocument } from '@pwb/renderer';
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -31,7 +31,11 @@ export interface ReleaseHarness {
  */
 export function createReleaseHarness(compiled: CompiledSite, rendered: RenderedDocument, port = 0): ReleaseHarness {
   const releaseFiles = new Map(compiled.files.map((file) => [file.path, file]));
-  const previewDocuments = new Map(rendered.routes.map((route) => [route.route, route.html]));
+  // The preview declares the faces the release ships, served from the same paths
+  // this harness already serves them at, so a runner can compare what each side
+  // actually loaded instead of comparing two fallbacks.
+  const faceCss = fontFaceCss(compiled.fonts, (decision) => `/${decision.path}`);
+  const previewDocuments = new Map(rendered.routes.map((route) => [route.route, faceCss === '' ? route.html : route.html.replace('</head>', `<style>${faceCss}</style></head>`)]));
 
   const server = createServer((request, response) => {
     let pathname: string;
@@ -43,6 +47,7 @@ export function createReleaseHarness(compiled: CompiledSite, rendered: RenderedD
         digest: compiled.digest,
         irHash: compiled.irHash,
         stylesheetPath: compiled.stylesheetPath,
+        fonts: compiled.fonts.filter((font) => font.selfHosted).map((font) => ({ family: font.family, weight: font.weight, style: font.style })),
         routes: compiled.routes.map((route) => ({ route: route.route, title: route.title, releasePath: `/release${route.route === '/' ? '/' : `${route.route}/`}`, previewPath: `/preview${route.route}` })),
       });
       response.writeHead(200, { 'content-type': CONTENT_TYPES.json! }).end(body);

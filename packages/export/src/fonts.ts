@@ -9,24 +9,35 @@ export interface FontSource {
   family: string;
   weight: string;
   style: 'normal' | 'italic';
-  format: 'woff2' | 'woff';
+  format: 'woff2';
   bytes: Uint8Array;
   license: string;
   licenseUrl?: string;
   source: string;
   author: string;
   date: string;
-  unicodeRange?: string;
 }
 
+/**
+ * What the release decided about one face, and the provenance the owner
+ * declared for it. The licence inventory is written from these rows, so
+ * everything a reader needs to trace the face to its origin travels here.
+ */
 export interface FontDecision {
   family: string;
   weight: string;
   style: FontSource['style'];
+  format: FontSource['format'];
   selfHosted: boolean;
   reason: string;
   license: string;
+  licenseUrl?: string;
+  source: string;
+  author: string;
+  date: string;
+  /** Path inside the bundle, and the hash of the bytes, when the face is self-hosted. */
   path?: string;
+  hash?: string;
 }
 
 export interface FontPlan {
@@ -69,35 +80,60 @@ function fileStem(font: FontSource): string {
 }
 
 /**
+ * The `@font-face` rules for the faces a view serves, with each file addressed
+ * by the caller. The release links its faces relative to the stylesheet they sit
+ * beside, so it works at any base path; a preview serves them from its own
+ * origin. One emission for both, so the two views cannot describe a face
+ * differently.
+ */
+export function fontFaceCss(decisions: FontDecision[], href: (decision: FontDecision & { path: string }) => string): string {
+  return decisions
+    .filter((decision): decision is FontDecision & { path: string } => decision.path !== undefined)
+    .map((decision) => [
+      '@font-face{',
+      `font-family:"${decision.family.replaceAll('"', '')}";`,
+      `font-style:${decision.style};`,
+      `font-weight:${decision.weight};`,
+      'font-display:swap;',
+      `src:url("${href(decision)}") format("${decision.format}");`,
+      '}',
+    ].join(''))
+    .join('\n');
+}
+
+/**
+ * Decides which faces may be redistributed with the site and names the file each
+ * one becomes. The decision carries the provenance the owner declared, so the
+ * licence inventory states it rather than inventing a substitute.
+ */
+export function selfHostFaces(fonts: FontSource[], hashOf: (bytes: Uint8Array) => string): { decisions: FontDecision[]; files: FontPlan['files'] } {
+  const decisions: FontDecision[] = [];
+  const files: FontPlan['files'] = [];
+  const ordered = [...fonts].sort((a, b) => (fileStem(a) < fileStem(b) ? -1 : fileStem(a) > fileStem(b) ? 1 : 0));
+  for (const font of ordered) {
+    const base: Omit<FontDecision, 'selfHosted' | 'reason' | 'path' | 'hash'> = {
+      family: font.family, weight: font.weight, style: font.style, format: font.format,
+      license: font.license, source: font.source, author: font.author, date: font.date,
+      ...(font.licenseUrl ? { licenseUrl: font.licenseUrl } : {}),
+    };
+    if (!font.license.trim()) { decisions.push({ ...base, selfHosted: false, reason: 'The face arrived without a licence record.' }); continue; }
+    if (!isSelfHostableLicense(font.license)) { decisions.push({ ...base, selfHosted: false, reason: `Licence ${font.license} does not clearly permit redistributing the file with the site.` }); continue; }
+    const hash = hashOf(font.bytes);
+    const path = `assets/fonts/${fileStem(font)}.${hash.slice(0, 12)}.${font.format}`;
+    files.push({ path, contents: font.bytes });
+    decisions.push({ ...base, selfHosted: true, reason: `Licence ${font.license} permits self-hosting.`, path, hash });
+  }
+  return { decisions, files };
+}
+
+/**
  * Decides which faces the release self-hosts, emits their `@font-face` rules,
  * and reports every fontFamily token that would leave a visitor with no
  * readable fallback.
  */
 export function planFonts(identity: IdentitySpec, fonts: FontSource[], hashOf: (bytes: Uint8Array) => string): FontPlan {
-  const decisions: FontDecision[] = [];
-  const files: FontPlan['files'] = [];
-  const faces: string[] = [];
-  const ordered = [...fonts].sort((a, b) => (fileStem(a) < fileStem(b) ? -1 : fileStem(a) > fileStem(b) ? 1 : 0));
-  for (const font of ordered) {
-    const base: Omit<FontDecision, 'selfHosted' | 'reason' | 'path'> = { family: font.family, weight: font.weight, style: font.style, license: font.license };
-    if (!font.license.trim()) { decisions.push({ ...base, selfHosted: false, reason: 'The face arrived without a licence record.' }); continue; }
-    if (!isSelfHostableLicense(font.license)) { decisions.push({ ...base, selfHosted: false, reason: `Licence ${font.license} does not clearly permit redistributing the file with the site.` }); continue; }
-    const path = `assets/fonts/${fileStem(font)}.${hashOf(font.bytes).slice(0, 12)}.${font.format}`;
-    files.push({ path, contents: font.bytes });
-    decisions.push({ ...base, selfHosted: true, reason: `Licence ${font.license} permits self-hosting.`, path });
-    faces.push([
-      '@font-face{',
-      `font-family:"${font.family.replaceAll('"', '')}";`,
-      `font-style:${font.style};`,
-      `font-weight:${font.weight};`,
-      'font-display:swap;',
-      // Relative to the stylesheet, which lives beside the fonts in `assets/`,
-      // so the release works at any base path.
-      `src:url("${path.replace('assets/', '')}") format("${font.format}");`,
-      ...(font.unicodeRange ? [`unicode-range:${font.unicodeRange};`] : []),
-      '}',
-    ].join(''));
-  }
+  const { decisions, files } = selfHostFaces(fonts, hashOf);
+  const css = fontFaceCss(decisions, (decision) => decision.path.replace('assets/', ''));
 
   const missingFallbacks: FontPlan['missingFallbacks'] = [];
   for (const [tokenPath, token] of flattenTokens(identity.tokens)) {
@@ -106,5 +142,5 @@ export function planFonts(identity: IdentitySpec, fonts: FontSource[], hashOf: (
     if (!hasGenericFallback(token.$value)) missingFallbacks.push({ tokenPath, value: token.$value });
   }
 
-  return { decisions, files, css: faces.join('\n'), missingFallbacks };
+  return { decisions, files, css, missingFallbacks };
 }

@@ -211,15 +211,23 @@ files in the project's fonts directory (`PWB_FONTS_DIR`, default `fonts/`) with 
 }
 ```
 
-A face is self-hosted only when its licence clearly permits redistributing the
-file with the site (`OFL-1.1`, `Apache-2.0`, `MIT`, `CC0-1.0`, `UFL-1.0`,
+One face is one file, in `woff2`, which every engine the release is measured on
+reads. A face is self-hosted only when its licence clearly permits redistributing
+the file with the site (`OFL-1.1`, `Apache-2.0`, `MIT`, `CC0-1.0`, `UFL-1.0`,
 `CC-BY-4.0`); anything else stays unhosted and the stack falls back, so an
 ambiguous licence degrades the typography instead of shipping a file the owner
-may not redistribute. Either way the decision and its reason land in
-`licenses.json`. No manifest means no self-hosted face, which is the default.
+may not redistribute. Either way the decision lands in `licenses.json` with the
+author, source, date and terms the manifest declared, and the hash of the bytes
+when the release ships them. No manifest means no self-hosted face, which is the
+default; a manifest that exists but cannot be read is an error, never silently
+no faces.
+
 Every compile site reads the same directory — the studio's Gate 3, `run:release`,
 `run:evidence`, `run:lighthouse` and the release harness — so the evidence
-runners measure the bundle the gate credits.
+runners measure the bundle the gate credits. The preview serves those same faces
+from its own origin under `font-src 'self'`, so the captain reviews the
+typography the release publishes, and `tests/release/parity.spec.ts` asks both
+sides what they actually loaded rather than comparing two fallbacks.
 
 **Release vetoes.** Eight objective stop conditions, catalogued in
 `packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an

@@ -7,7 +7,7 @@ import { compileRelease } from '@pwb/export';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
 import { renderDesign } from '@pwb/renderer';
 import {
-  aggregateVetoes, checkPreviewReleaseParity, ClaudeReleaseCriticProvider, criticTasks, DeterministicReleaseSummarizer,
+  aggregateVetoes, checkPreviewReleaseParity, ClaudeReleaseCriticProvider, createReleaseHarness, criticTasks, DeterministicReleaseSummarizer,
   evaluateReleaseGate, evidenceCoverage, evidenceVetoes, FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage,
   partitionEvidence, PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, VETO_CATALOG, writeEvidenceArtifact,
   type ReleaseCriticProvider, type ReleaseRefinerProvider, type ReleaseSummarizerProvider,
@@ -388,6 +388,43 @@ describe('Gate 3', () => {
   it('says out loud when a critic never reported', () => {
     const report = evaluateReleaseGate(gateInput({ critiques: [] }));
     expect(report.escalations.filter((line) => line.includes('não entregou parecer'))).toHaveLength(5);
+  });
+});
+
+describe('the harness the evidence runners measure', () => {
+  const FACE = {
+    family: 'Fixture Sans', weight: '400', style: 'normal' as const, format: 'woff2' as const,
+    bytes: new Uint8Array([119, 79, 70, 50, 5, 6, 7, 8]),
+    license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07',
+  };
+
+  it('shows the preview the same faces the release ships, from the same files', async () => {
+    const ir = createFixtureIR();
+    const rendered = renderDesign(ir);
+    const compiled = compileRelease(rendered, ir, { ...COMPILER_OPTIONS, fonts: [FACE] });
+    const harness = createReleaseHarness(compiled, rendered, 0);
+    const origin = await harness.start();
+    try {
+      const preview = await (await fetch(`${origin}/preview/`)).text();
+      const href = /src:url\("([^"]+)"\)/.exec(preview)?.[1];
+      expect(href).toMatch(/^\/assets\/fonts\/fixture-sans-400-normal\.[0-9a-f]{12}\.woff2$/);
+      const face = await fetch(`${origin}${href!}`);
+      expect(face.status).toBe(200);
+      expect(new Uint8Array(await face.arrayBuffer())).toEqual(FACE.bytes);
+      // The parity runner asks both sides about exactly these faces.
+      const description = await (await fetch(`${origin}/harness.json`)).json() as { fonts: unknown };
+      expect(description.fonts).toEqual([{ family: 'Fixture Sans', weight: '400', style: 'normal' }]);
+    } finally { await harness.close(); }
+  });
+
+  it('leaves the preview byte-identical to the renderer when the project self-hosts nothing', async () => {
+    const ir = createFixtureIR();
+    const rendered = renderDesign(ir);
+    const harness = createReleaseHarness(compileRelease(rendered, ir, COMPILER_OPTIONS), rendered, 0);
+    const origin = await harness.start();
+    try {
+      expect(await (await fetch(`${origin}/preview/`)).text()).toBe(rendered.routes.find((route) => route.route === '/')!.html);
+    } finally { await harness.close(); }
   });
 });
 

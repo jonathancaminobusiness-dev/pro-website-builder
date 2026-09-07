@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
+import { loadFontSources } from '@pwb/export';
 import { RenderHub } from '@pwb/render-hub';
 import { renderDesign } from '@pwb/renderer';
 import { RenderHubEvidenceSource } from '@pwb/stage-prototype';
@@ -24,12 +25,15 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   const repository = new ProjectRepository(database);
   const runs = new Map<string, FixtureRun>();
   const claimed = new Set<string>();
+  const fontsDir = options.fontsDir ?? process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
+  // The captain reviews the same faces the release ships, so the preview loads them too.
+  const fonts = await loadFontSources(fontsDir);
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
     for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` }); }
     return prototypes?.preview(versionId);
-  }, previewPort);
+  }, previewPort, fonts);
   // The preview listens before the gate is wired, because a caller that asks for port 0 — as the
   // convention for parallel checkouts requires — only learns the origin the browser must visit here.
   await preview.start();
@@ -52,7 +56,6 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   const releaseRoot = options.releaseRoot ?? process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
   const evidenceDir = options.evidenceDir ?? process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
   await mkdir(releaseRoot, { recursive: true });
-  const fontsDir = options.fontsDir ?? process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
   const release = { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake' };
   const api = createApiServer({
     runs,

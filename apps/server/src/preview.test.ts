@@ -18,7 +18,33 @@ async function rawRequestStatus(port: number, requestLine: string): Promise<stri
   });
 }
 
+const FACE = {
+  family: 'Fixture Sans', weight: '400', style: 'normal' as const, format: 'woff2' as const,
+  bytes: new Uint8Array([119, 79, 70, 50, 4, 3, 2, 1]),
+  license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07',
+};
+
 describe('preview origin', () => {
+  it('serves the faces the release self-hosts, so the captain reviews the published typography', async () => {
+    const rendered = renderDesign(createFixtureIR());
+    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, [FACE]);
+    await preview.start();
+    try {
+      const document = await (await fetch(`${preview.origin}/preview/v0/`)).text();
+      const href = /src:url\("([^"]+)"\)/.exec(document)?.[1];
+      expect(document).toContain('@font-face{font-family:"Fixture Sans";');
+      expect(href).toMatch(/^\/assets\/fonts\/fixture-sans-400-normal\.[0-9a-f]{12}\.woff2$/);
+
+      const face = await fetch(`${preview.origin}${href!}`);
+      expect(face.status).toBe(200);
+      expect(face.headers.get('content-type')).toBe('font/woff2');
+      expect(new Uint8Array(await face.arrayBuffer())).toEqual(FACE.bytes);
+      // The policy has to allow what the origin now serves.
+      expect(face.headers.get('content-security-policy')).toContain("font-src 'self'");
+      expect((await fetch(`${preview.origin}/assets/fonts/absent.woff2`)).status).toBe(404);
+    } finally { await preview.close(); }
+  });
+
   it('serves the exact route bytes written by static export', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pwb-preview-'));
     const rendered = renderDesign(createFixtureIR());

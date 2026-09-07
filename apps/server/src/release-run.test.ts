@@ -156,7 +156,7 @@ describe('Gate 3 over the local API', () => {
     await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), bytes);
     await writeFile(join(fontsDir, 'manifest.json'), JSON.stringify({
       faces: [
-        { family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07' },
+        { family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'ofl-1.1', licenseUrl: 'https://openfontlicense.org', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07' },
         { family: 'Foundry Grotesk', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'Foundry desktop licence', source: 'invoice 42', author: 'Foundry', date: '2026-09-07' },
       ],
     }), 'utf8');
@@ -176,11 +176,20 @@ describe('Gate 3 over the local API', () => {
     expect(await readFile(join(bundle, hosted.path!))).toEqual(bytes);
     expect(await readFile(join(bundle, manifest.stylesheetPath), 'utf8')).toContain(`src:url("${hosted.path!.replace('assets/', '')}")`);
     expect(manifest.fonts.find((font) => font.family === 'Foundry Grotesk')?.selfHosted).toBe(false);
-    const licenses = JSON.parse(await readFile(join(bundle, 'licenses.json'), 'utf8')) as Array<{ id: string; kind: string; license: string; bundled: boolean }>;
-    expect(licenses.filter((entry) => entry.kind === 'font')).toEqual([
-      expect.objectContaining({ id: 'font:Fixture Sans:400:normal', license: 'ofl-1.1', bundled: true }),
-      expect.objectContaining({ id: 'font:Foundry Grotesk:400:normal', license: 'Foundry desktop licence', bundled: false }),
-    ]);
+    // The inventory states the provenance the owner declared, not a substitute
+    // derived from the bundle: this file is what traces a face to its origin.
+    const licenses = JSON.parse(await readFile(join(bundle, 'licenses.json'), 'utf8')) as Array<{ id: string; kind: string; license: string; bundled: boolean; author: string; source: string; date: string; hash: string; licenseUrl?: string }>;
+    const [hostedRow, unhostedRow, ...others] = licenses.filter((entry) => entry.kind === 'font');
+    expect(others).toEqual([]);
+    expect(hostedRow).toMatchObject({
+      id: 'font:Fixture Sans:400:normal', license: 'ofl-1.1', licenseUrl: 'https://openfontlicense.org',
+      author: 'Fixture Foundry', source: 'https://fonts.example/fixture-sans', date: '2026-09-07', bundled: true,
+    });
+    expect(hostedRow!.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(unhostedRow).toMatchObject({
+      id: 'font:Foundry Grotesk:400:normal', license: 'Foundry desktop licence',
+      author: 'Foundry', source: 'invoice 42', date: '2026-09-07', bundled: false, hash: '',
+    });
   });
 
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {

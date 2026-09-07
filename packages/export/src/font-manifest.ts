@@ -17,9 +17,13 @@ export const FONT_MANIFEST_FILE = 'manifest.json';
  */
 export async function loadFontSources(fontsDir: string | undefined): Promise<FontSource[]> {
   if (fontsDir === undefined) return [];
+  const path = join(fontsDir, FONT_MANIFEST_FILE);
   let raw: string;
-  try { raw = await readFile(join(fontsDir, FONT_MANIFEST_FILE), 'utf8'); }
-  catch { return []; }
+  try { raw = await readFile(path, 'utf8'); }
+  catch (error) {
+    if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT') return [];
+    throw new Error(`The fonts manifest ${path} could not be read, so the release cannot know which faces it may ship: ${error instanceof Error ? error.message : 'unreadable'}`);
+  }
   const manifest = fontManifestSchema.parse(JSON.parse(raw));
   const root = resolve(fontsDir);
   const sources: FontSource[] = [];
@@ -37,7 +41,6 @@ export async function loadFontSources(fontsDir: string | undefined): Promise<Fon
       author: face.author,
       date: face.date,
       ...(face.licenseUrl ? { licenseUrl: face.licenseUrl } : {}),
-      ...(face.unicodeRange ? { unicodeRange: face.unicodeRange } : {}),
     });
   }
   return sources;
