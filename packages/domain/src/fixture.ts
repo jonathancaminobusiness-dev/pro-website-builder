@@ -1,5 +1,34 @@
+import type { DecisionRecord, Evidence } from './divergence.js';
 import type { DesignIR } from './ir.js';
 import type { IdentitySpec } from './identity.js';
+
+const fixtureEvidence: Evidence[] = [
+  { id: 'ev-audience', kind: 'brief', quote: 'Times pequenos com produto autoral precisam explicar uma proposta sem parecer agência.', source: 'briefing fixo, parágrafo 1' },
+  { id: 'ev-proof', kind: 'brief', quote: 'O processo é rastreável e cada etapa deixa registro.', source: 'briefing fixo, parágrafo 2' },
+  { id: 'ev-exclusion', kind: 'constraint', quote: 'Nada que pareça um SaaS genérico de template.', source: 'briefing fixo, exclusões' },
+  { id: 'ev-material', kind: 'artifact', quote: 'Cadernos de oficina: papel, tinta e diagramas anotados à mão.', source: 'referência material fornecida pelo capitão' },
+];
+
+/** One record per token and per governed contract field, so ID-003 has nothing to flag. */
+const fixtureDecisions: DecisionRecord[] = [
+  { id: 'dec-ink', choice: 'tokens.color.ink', axis: 'color', evidenceIds: ['ev-material'], rationale: 'Tinta sobre papel: o texto é o material mais escuro da página.' },
+  { id: 'dec-paper', choice: 'tokens.color.paper', axis: 'materiality', evidenceIds: ['ev-material'], rationale: 'Superfície de papel não branqueado, para afastar a folha branca de painel.' },
+  { id: 'dec-accent', choice: 'tokens.color.accent', axis: 'color', evidenceIds: ['ev-proof'], rationale: 'Um único pigmento marca a prova; usá-lo em mais de um papel dilui a evidência.' },
+  { id: 'dec-muted', choice: 'tokens.color.muted', axis: 'color', evidenceIds: ['ev-material'], rationale: 'Cinza esverdeado para anotação secundária, no lugar de opacidade sobre tinta.' },
+  { id: 'dec-space-sm', choice: 'tokens.space.sm', axis: 'composition', evidenceIds: ['ev-material'], rationale: 'Menor passo do ritmo, do espaçamento entre linha e legenda no caderno.' },
+  { id: 'dec-space-md', choice: 'tokens.space.md', axis: 'composition', evidenceIds: ['ev-material'], rationale: 'Passo base do ritmo vertical e da calha do grid.' },
+  { id: 'dec-space-lg', choice: 'tokens.space.lg', axis: 'composition', evidenceIds: ['ev-audience'], rationale: 'Separação entre blocos de argumento, para leitura em uma sentada.' },
+  { id: 'dec-space-xl', choice: 'tokens.space.xl', axis: 'composition', evidenceIds: ['ev-audience'], rationale: 'Medida máxima da coluna de leitura; limita a linha antes da tela.' },
+  { id: 'dec-radius-card', choice: 'tokens.radius.card', axis: 'materiality', evidenceIds: ['ev-material'], rationale: 'Canto de cartão impresso aparado, não raio uniforme de kit.' },
+  { id: 'dec-type-display', choice: 'tokens.type.display', axis: 'typography', evidenceIds: ['ev-exclusion'], rationale: 'Serifa de contraste alto para afastar a headline do padrão grotesco de SaaS.' },
+  { id: 'dec-type-body', choice: 'tokens.type.body', axis: 'typography', evidenceIds: ['ev-audience'], rationale: 'Sem serifa de leitura longa, subordinada à display e nunca usada em título.' },
+  { id: 'dec-motion-quick', choice: 'tokens.motion.quick', axis: 'motion', evidenceIds: ['ev-proof'], rationale: 'Duração única de mudança de estado; movimento só confirma ação.' },
+  { id: 'dec-thesis', choice: 'direction.thesis', axis: 'materiality', evidenceIds: ['ev-material'], rationale: 'A oficina editorial é a metáfora que liga processo e evidência.' },
+  { id: 'dec-columns', choice: 'gridGrammar.columns', axis: 'composition', evidenceIds: ['ev-material'], rationale: 'Doze colunas permitem a assimetria 5/7 sem inventar exceção óptica.' },
+  { id: 'dec-imagery', choice: 'imagery.treatment', axis: 'imagery', evidenceIds: ['ev-proof'], rationale: 'Recorte documental do próprio trabalho, no lugar de fotografia de banco.' },
+  { id: 'dec-iconography', choice: 'iconography.family', axis: 'materiality', evidenceIds: ['ev-material'], rationale: 'Marcas de traço único, do vocabulário de anotação da oficina.' },
+  { id: 'dec-voice', choice: 'content.voice', axis: 'typography', evidenceIds: ['ev-audience', 'ev-exclusion'], rationale: 'Voz direta e específica porque o público desconfia de superlativo.' },
+];
 
 export function createFixtureIdentity(): IdentitySpec {
   const tokens = {
@@ -28,8 +57,8 @@ export function createFixtureIdentity(): IdentitySpec {
   };
   return {
     meta: { id: 'fixture-identity', version: '1.0.0', locale: 'pt-BR', status: 'approved' },
-    strategy: { audience: 'Times pequenos com produto autoral', job: 'Explicar uma proposta com confiança', promise: 'Clareza com personalidade', proof: ['Processo rastreável'], exclusions: ['Visual SaaS genérico'] },
-    direction: { thesis: 'Oficina editorial', tension: 'Precisão encontra calor humano', materiality: 'Papel, tinta e diagramas', density: 'balanced', divergenceVector: ['editorial', 'tactile', 'asymmetric'], rationale: 'A identidade transforma processo em evidência visual.' },
+    strategy: { audience: 'Times pequenos com produto autoral', job: 'Explicar uma proposta com confiança', promise: 'Clareza com personalidade', proof: ['Processo rastreável'], exclusions: ['Visual SaaS genérico'], evidence: structuredClone(fixtureEvidence) },
+    direction: { thesis: 'Oficina editorial', tension: 'Precisão encontra calor humano', materiality: 'Papel, tinta e diagramas', density: 'balanced', divergenceVector: ['editorial', 'tactile', 'asymmetric'], rationale: 'A identidade transforma processo em evidência visual.', rejectedAlternatives: [] },
     tokens,
     tokenRoles: { surface: 'color.paper', text: 'color.ink', bodyTypeface: 'type.body', baseSpacing: 'space.md', sectionSpacing: 'space.lg' },
     gridGrammar: { maxWidthToken: '{space.xl}', columns: 12, gutterToken: '{space.md}', rhythmToken: '{space.md}', breakpointTokens: ['{breakpoint.compact}', '{breakpoint.expanded}'], responsive: [{ container: 'narrow', rule: 'stack content before proof' }] },
@@ -41,6 +70,7 @@ export function createFixtureIdentity(): IdentitySpec {
     forbiddenDefaults: { fonts: ['Inter-only hero', 'system-ui-only display'], palettes: ['purple-blue gradient', 'neon SaaS'], motifs: ['generic sparkle', 'floating glass cards'] },
     governance: { approverRole: 'captain', rationaleRequired: true, changePolicy: 'Token changes reopen dependent gates.' },
     provenance: { source: 'fixture', author: 'pro-website-builder', license: 'internal fixture', date: '2026-09-05', hash: 'fixture' },
+    decisions: structuredClone(fixtureDecisions),
   };
 }
 

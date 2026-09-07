@@ -9,6 +9,7 @@
     { "path": "packages/providers" },
     { "path": "packages/orchestrator" },
     { "path": "packages/render-hub" },
+    { "path": "packages/stage-identity" },
     { "path": "packages/stage-prototype" },
     { "path": "packages/stage-finalization" },
     { "path": "apps/server" },

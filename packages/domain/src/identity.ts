@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { decisionRecordSchema, divergenceSpecSchema, evidenceSchema, rejectedAlternativeSchema } from './divergence.js';
 import { documentRules } from './rules.js';
 import { flattenTokens, resolveTokens, tokenGroupSchema } from './tokens.js';
 
@@ -26,8 +27,17 @@ function referencedLengthPx(reference: string, values: Record<string, string | n
 
 export const identitySpecSchema = z.object({
   meta: z.object({ id: z.string(), version: z.string(), locale: z.string(), status: z.enum(['draft', 'approved']) }),
-  strategy: z.object({ audience: z.string(), job: z.string(), promise: z.string(), proof: z.array(z.string()), exclusions: z.array(z.string()) }),
-  direction: z.object({ thesis: z.string(), tension: z.string(), materiality: z.string(), density: z.enum(['airy', 'balanced', 'dense']), divergenceVector: z.array(z.string()).min(3), rationale: z.string() }),
+  strategy: z.object({
+    audience: z.string(), job: z.string(), promise: z.string(), proof: z.array(z.string()), exclusions: z.array(z.string()),
+    /** Briefing evidence a decision record may cite; see the ID-003 rule in `@pwb/linter`. */
+    evidence: z.array(evidenceSchema).default([]),
+  }),
+  direction: z.object({
+    thesis: z.string(), tension: z.string(), materiality: z.string(), density: z.enum(['airy', 'balanced', 'dense']), divergenceVector: z.array(z.string()).min(3), rationale: z.string(),
+    /** The typed divergence matrix this direction was produced under; see the DIV-030 rule in `@pwb/linter`. */
+    divergence: divergenceSpecSchema.optional(),
+    rejectedAlternatives: z.array(rejectedAlternativeSchema).default([]),
+  }),
   tokens: tokenGroupSchema,
   tokenRoles: z.object({ surface: z.string(), text: z.string(), bodyTypeface: z.string(), baseSpacing: z.string(), sectionSpacing: z.string() }),
   gridGrammar: z.object({
@@ -45,6 +55,8 @@ export const identitySpecSchema = z.object({
   governance: z.object({ approverRole: z.literal('captain'), rationaleRequired: z.boolean(), changePolicy: z.string() }),
   provenance: provenanceSchema,
   schemes: z.object({ dark: z.record(z.string()) }).partial().optional(),
+  /** One record per token and per governed contract field; ID-003 blocks Gate 1 when a choice has none. */
+  decisions: z.array(decisionRecordSchema).default([]),
 }).superRefine((identity, ctx) => {
   const paths = flattenTokens(identity.tokens);
   for (const [role, path] of Object.entries(identity.tokenRoles)) {

@@ -1,4 +1,5 @@
 import { cssTokenIssues, documentRules, flattenTokens, phrasingSemantics, resolveTokens, slotChildIds, visualPropKeys, type DesignIR } from '@pwb/domain';
+import { divergenceDistance, identityEvidence } from './identity-rules.js';
 import { prototypeRuleRegistry } from './prototype-rules.js';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
@@ -74,6 +75,8 @@ export const ruleRegistry: LintRule[] = [
   { id: 'TOK-002', stage: 'identity', severity: 'error', detect: aliasesAndRefs },
   { id: 'TOK-003', stage: 'identity', severity: 'error', detect: identityTokenRoles },
   { id: 'TOK-004', stage: 'identity', severity: 'error', detect: emittableTokens },
+  { id: 'ID-003', stage: 'identity', severity: 'error', detect: identityEvidence },
+  { id: 'DIV-030', stage: 'identity', severity: 'error', detect: divergenceDistance },
   { id: 'DEF-010', stage: 'prototype', severity: 'error', detect: forbiddenDefaults },
   { id: 'DOC-020', stage: 'prototype', severity: 'error', detect: phrasingLeaves },
   ...prototypeRuleRegistry,
