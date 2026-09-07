@@ -1,7 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
-import { loadFontSources } from '@pwb/export';
 import { RenderHub } from '@pwb/render-hub';
 import { renderDesign } from '@pwb/renderer';
 import { RenderHubEvidenceSource } from '@pwb/stage-prototype';
@@ -31,9 +30,9 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   const preview = createPreviewServer((versionId) => {
     for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` }); }
     return prototypes?.preview(versionId);
-    // The faces are read when the document is served, so a manifest added while
-    // the studio runs is not missed.
-  }, previewPort, () => loadFontSources(fontsDir));
+    // The preview reads the faces itself and memoises them against the manifest,
+    // so a face added or replaced while the studio runs still reaches the captain.
+  }, previewPort, fontsDir);
   // The preview listens before the gate is wired, because a caller that asks for port 0 — as the
   // convention for parallel checkouts requires — only learns the origin the browser must visit here.
   await preview.start();

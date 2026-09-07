@@ -17,19 +17,29 @@ const PROPERTIES = ['color', 'background-color', 'font-family', 'padding', 'bord
 const EVIDENCE_DIR = process.env.PWB_EVIDENCE_DIR ?? join(process.cwd(), 'artifacts', 'release');
 
 interface Harness {
-  digest: string;
-  irHash: string;
   routes: Array<{ route: string; releasePath: string; previewPath: string }>;
   /** The faces the release self-hosts; the preview must load exactly these too. */
   fonts: Array<{ family: string; weight: string; style: string }>;
 }
 
-/** The harness publishes its ephemeral origin here; see tests/release/global-setup.ts. */
-function origin(): string {
-  const value = process.env.PWB_RELEASE_ORIGIN;
-  if (!value) throw new Error('PWB_RELEASE_ORIGIN is unset; the release harness did not start.');
+/** The harness publishes its ephemeral origin and the release it serves here; see tests/release/global-setup.ts. */
+function fromEnvironment(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is unset; the release harness did not start.`);
   return value;
 }
+
+function origin(): string { return fromEnvironment('PWB_RELEASE_ORIGIN'); }
+
+/**
+ * What this run has measured so far.
+ *
+ * The artifact is written from the teardown rather than the test body, because
+ * the run that most needs to leave a trace is the one that never finishes: a
+ * page that never loads takes the body down with the per-test timeout, and Gate
+ * 3 reads artifacts and nothing else.
+ */
+const measured: { routes: number; faces: number; differences: string[]; completed: boolean } = { routes: 0, faces: 0, differences: [], completed: false };
 
 /** What the engine actually resolved for the faces the document declares. */
 async function loadedFaces(page: Page, families: Harness['fonts']): Promise<{ declared: string[]; usable: Record<string, boolean> }> {
@@ -68,12 +78,37 @@ function styleDifferences(route: string, preview: Record<string, Record<string, 
   return differences;
 }
 
-test('the release resolves the same styles, text and faces as the preview the captain reviewed', async ({ page }, testInfo) => {
-  const harness = await (await page.request.get(`${origin()}/harness.json`)).json() as Harness;
+test.afterEach(async ({}, testInfo) => {
   const engine = testInfo.project.name as EvidenceArtifact['engine'];
-  const differences: string[] = [];
+  const reason = (testInfo.error?.message ?? 'a execução foi interrompida antes de comparar todas as rotas').replaceAll(/\u001b\[\d+m/g, '');
+  const differences = measured.completed
+    ? measured.differences
+    : [...measured.differences, `A comparação entre preview e release não chegou ao fim no ${engine} (${testInfo.status ?? 'interrompida'}): ${reason}`];
+  await writeEvidenceArtifact(EVIDENCE_DIR, {
+    id: `parity-${engine}`,
+    runner: 'playwright',
+    engine,
+    releaseDigest: fromEnvironment('PWB_RELEASE_DIGEST'),
+    irHash: fromEnvironment('PWB_RELEASE_IR_HASH'),
+    route: '/',
+    state: 'preview-parity',
+    status: differences.length === 0 ? 'passed' : 'failed',
+    path: 'tests/release/parity.spec.ts',
+    hash: artifactHash(differences),
+    metrics: { routes: measured.routes, faces: measured.faces, differences: differences.length },
+    notes: differences.length === 0
+      ? [`O release resolveu os mesmos estilos, o mesmo texto e as mesmas ${measured.faces} face(s) que o preview em ${measured.routes} rota(s) no ${engine}.`]
+      : [`Preview e release divergem em ${differences.length} ponto(s) no ${engine}.`, ...differences.slice(0, 20)],
+  });
+});
 
+test('the release resolves the same styles, text and faces as the preview the captain reviewed', async ({ page }) => {
   try {
+    const response = await page.request.get(`${origin()}/harness.json`);
+    if (!response.ok()) throw new Error(`O harness respondeu ${response.status()} em /harness.json.`);
+    const harness = await response.json() as Harness;
+    measured.routes = harness.routes.length;
+    measured.faces = harness.fonts.length;
     for (const route of harness.routes) {
       const preview = await computedByNode(page, route.previewPath);
       const previewText = await page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').trim());
@@ -82,38 +117,22 @@ test('the release resolves the same styles, text and faces as the preview the ca
       const releaseText = await page.evaluate(() => document.body.innerText.replace(/\s+/g, ' ').trim());
       const releaseFaces = await loadedFaces(page, harness.fonts);
 
-      differences.push(...styleDifferences(route.route, preview, release));
-      if (previewText !== releaseText) differences.push(`${route.route}: o texto difere entre preview e release.`);
+      measured.differences.push(...styleDifferences(route.route, preview, release));
+      if (previewText !== releaseText) measured.differences.push(`${route.route}: o texto difere entre preview e release.`);
       // The same computed font-family stack proves nothing if one side has no
       // face to resolve it to, so both sides are asked what they actually loaded.
       if (JSON.stringify(previewFaces.declared) !== JSON.stringify(releaseFaces.declared)) {
-        differences.push(`${route.route}: as faces declaradas divergem: preview ${JSON.stringify(previewFaces.declared)}, release ${JSON.stringify(releaseFaces.declared)}.`);
+        measured.differences.push(`${route.route}: as faces declaradas divergem: preview ${JSON.stringify(previewFaces.declared)}, release ${JSON.stringify(releaseFaces.declared)}.`);
       }
       for (const face of Object.keys(releaseFaces.usable)) {
-        if (!previewFaces.usable[face]) differences.push(`${route.route}: o preview não conseguiu carregar a face ${face}.`);
-        if (!releaseFaces.usable[face]) differences.push(`${route.route}: o release não conseguiu carregar a face ${face}.`);
+        if (!previewFaces.usable[face]) measured.differences.push(`${route.route}: o preview não conseguiu carregar a face ${face}.`);
+        if (!releaseFaces.usable[face]) measured.differences.push(`${route.route}: o release não conseguiu carregar a face ${face}.`);
       }
     }
   } catch (error) {
-    differences.push(`A comparação não pôde ser concluída em ${engine}: ${error instanceof Error ? error.message : 'erro desconhecido'}`);
+    measured.differences.push(`A comparação não pôde ser concluída: ${error instanceof Error ? error.message : 'erro desconhecido'}`);
   }
+  measured.completed = true;
 
-  await writeEvidenceArtifact(EVIDENCE_DIR, {
-    id: `parity-${engine}`,
-    runner: 'playwright',
-    engine,
-    releaseDigest: harness.digest,
-    irHash: harness.irHash,
-    route: '/',
-    state: 'preview-parity',
-    status: differences.length === 0 ? 'passed' : 'failed',
-    path: 'tests/release/parity.spec.ts',
-    hash: artifactHash(differences),
-    metrics: { routes: harness.routes.length, faces: harness.fonts.length, differences: differences.length },
-    notes: differences.length === 0
-      ? [`O release resolveu os mesmos estilos, o mesmo texto e as mesmas ${harness.fonts.length} face(s) que o preview em ${harness.routes.length} rota(s) no ${engine}.`]
-      : [`Preview e release divergem em ${differences.length} ponto(s) no ${engine}.`, ...differences.slice(0, 20)],
-  });
-
-  expect(differences, 'o release tem de resolver o mesmo que o preview em cada rota').toEqual([]);
+  expect(measured.differences, 'o release tem de resolver o mesmo que o preview em cada rota').toEqual([]);
 });

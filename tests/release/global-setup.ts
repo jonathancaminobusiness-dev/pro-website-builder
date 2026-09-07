@@ -26,6 +26,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const harness = createReleaseHarness(compiled, rendered, Number(process.env.PWB_RELEASE_PORT ?? 0));
   const origin = await harness.start();
   process.env.PWB_RELEASE_ORIGIN = origin;
+  // The release a runner measured, published here as well as in `harness.json`,
+  // so a spec can stamp its artifact even when it never reached the harness.
+  process.env.PWB_RELEASE_DIGEST = compiled.digest;
+  process.env.PWB_RELEASE_IR_HASH = compiled.irHash;
   await mkdir(evidenceDir, { recursive: true });
   return async () => { await harness.close(); };
 }

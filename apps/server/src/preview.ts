@@ -1,28 +1,48 @@
 import { createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { fontFaceCss, selfHostFaces, type FontSource } from '@pwb/export';
+import { fontFaceCss, FONT_MANIFEST_FILE, loadFontSources, selfHostFaces } from '@pwb/export';
+import { join } from 'node:path';
 import type { RenderedDocument } from '@pwb/renderer';
 import { PREVIEW_ORIGIN, previewHeaders } from './security.js';
 
 export interface PreviewServer { server: Server; origin: string; start(): Promise<void>; close(): Promise<void>; }
+
+interface FacePlan { files: Map<string, Buffer>; css: string }
+const NO_FACES: FacePlan = { files: new Map(), css: '' };
 
 /**
  * The origin the captain reviews.
  *
  * It serves the same faces the release ships, from the same file names, because
  * a preview rendered in the browser's fallback would show the captain a
- * typeface the published site does not use. The faces are read when a document
- * is served, not once at start, so the preview shows what the release would ship
- * right now — and a manifest that cannot be read fails the preview rather than
- * the whole studio. Everything else is exactly the bytes the renderer produced.
+ * typeface the published site does not use. The manifest is read again whenever
+ * it changes rather than once at start, so a face the owner adds while the
+ * studio runs reaches the iframe and a manifest that cannot be read fails the
+ * preview rather than the whole studio. The plan a document was rendered from is
+ * kept, so the content-addressed faces that document declared stay served even
+ * if the file behind one of them is replaced afterwards. Everything else is
+ * exactly the bytes the renderer produced.
  */
-export function createPreviewServer(getRendered: (versionId: string) => RenderedDocument | undefined, port = 4311, loadFonts: () => Promise<FontSource[]> = async () => []): PreviewServer {
-  const faces = async (): Promise<{ files: Map<string, Buffer>; css: string }> => {
-    const plan = selfHostFaces(await loadFonts(), (bytes) => createHash('sha256').update(bytes).digest('hex'));
-    return {
-      files: new Map(plan.files.map((file) => [file.path, Buffer.from(file.contents)])),
-      css: fontFaceCss(plan.decisions, (decision) => `/${decision.path}`),
+export function createPreviewServer(getRendered: (versionId: string) => RenderedDocument | undefined, port = 4311, fontsDir?: string): PreviewServer {
+  let cached: { key: string; plan: FacePlan } | undefined;
+
+  const manifestKey = async (directory: string): Promise<string> => {
+    try { const info = await stat(join(directory, FONT_MANIFEST_FILE)); return `${info.mtimeMs}:${info.size}`; }
+    catch (error) { return error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT' ? 'absent' : 'unreadable'; }
+  };
+
+  const faces = async (): Promise<FacePlan> => {
+    if (fontsDir === undefined) return NO_FACES;
+    const key = await manifestKey(fontsDir);
+    if (key !== 'unreadable' && cached?.key === key) return cached.plan;
+    const built = selfHostFaces(await loadFontSources(fontsDir), (bytes) => createHash('sha256').update(bytes).digest('hex'));
+    const plan: FacePlan = {
+      files: new Map(built.files.map((file) => [file.path, Buffer.from(file.contents)])),
+      css: fontFaceCss(built.decisions, (decision) => `/${decision.path}`),
     };
+    if (key !== 'unreadable') cached = { key, plan };
+    return plan;
   };
 
   const respond = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {

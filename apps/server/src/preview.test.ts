@@ -1,8 +1,8 @@
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { connect, createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { exportStatic } from '@pwb/export';
 import { createFixtureIR } from '@pwb/domain';
 import { renderDesign } from '@pwb/renderer';
@@ -18,23 +18,36 @@ async function rawRequestStatus(port: number, requestLine: string): Promise<stri
   });
 }
 
-const FACE = {
-  family: 'Fixture Sans', weight: '400', style: 'normal' as const, format: 'woff2' as const,
-  bytes: new Uint8Array([119, 79, 70, 50, 4, 3, 2, 1]),
-  license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07',
-};
+const FACE_BYTES = Buffer.from([119, 79, 70, 50, 4, 3, 2, 1]);
+const MANIFEST = JSON.stringify({
+  faces: [{
+    family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2',
+    license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07',
+  }],
+});
+
+const directories: string[] = [];
+afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }); });
+
+async function fontsDirectory(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'pwb-preview-fonts-'));
+  directories.push(directory);
+  await writeFile(join(directory, 'fixture-sans-400.woff2'), FACE_BYTES);
+  return directory;
+}
 
 describe('preview origin', () => {
   it('serves the faces the release self-hosts, so the captain reviews the published typography', async () => {
     const rendered = renderDesign(createFixtureIR());
-    // The manifest is read when a document is served: a face the owner adds
-    // while the studio runs reaches the preview without restarting it.
-    let available: typeof FACE[] = [];
-    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, async () => available);
+    const fontsDir = await fontsDirectory();
+    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, fontsDir);
     await preview.start();
     try {
+      // No manifest yet: the preview is exactly the bytes the renderer produced.
       expect(await (await fetch(`${preview.origin}/preview/v0/`)).text()).toBe(rendered.routes.find((route) => route.route === '/')!.html);
-      available = [FACE];
+
+      // A face the owner adds while the studio runs reaches the iframe.
+      await writeFile(join(fontsDir, 'manifest.json'), MANIFEST, 'utf8');
       const document = await (await fetch(`${preview.origin}/preview/v0/`)).text();
       const href = /src:url\("([^"]+)"\)/.exec(document)?.[1];
       expect(document).toContain('@font-face{font-family:"Fixture Sans";');
@@ -43,23 +56,34 @@ describe('preview origin', () => {
       const face = await fetch(`${preview.origin}${href!}`);
       expect(face.status).toBe(200);
       expect(face.headers.get('content-type')).toBe('font/woff2');
-      expect(new Uint8Array(await face.arrayBuffer())).toEqual(FACE.bytes);
+      expect(Buffer.from(await face.arrayBuffer())).toEqual(FACE_BYTES);
       // The policy has to allow what the origin now serves.
       expect(face.headers.get('content-security-policy')).toContain("font-src 'self'");
       expect((await fetch(`${preview.origin}/assets/fonts/absent.woff2`)).status).toBe(404);
+
+      // The face URL is content-addressed, so replacing the file behind it must
+      // not turn the document the captain is already looking at into a 404.
+      await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), Buffer.from([119, 79, 70, 50, 9, 9, 9, 9]));
+      const again = await fetch(`${preview.origin}${href!}`);
+      expect(again.status).toBe(200);
+      expect(Buffer.from(await again.arrayBuffer())).toEqual(FACE_BYTES);
     } finally { await preview.close(); }
   });
 
   it('fails the preview request, not the studio, when the fonts of the project cannot be read', async () => {
     const rendered = renderDesign(createFixtureIR());
-    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, async () => { throw new Error('The fonts manifest could not be read.'); });
+    const fontsDir = await fontsDirectory();
+    await writeFile(join(fontsDir, 'manifest.json'), '{ not json', 'utf8');
+    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, fontsDir);
     await preview.start();
     try {
       const refused = await fetch(`${preview.origin}/preview/v0/`);
       expect(refused.status).toBe(500);
-      expect(await refused.text()).toMatch(/manifest could not be read/);
       // The origin is still up; only this request failed.
       expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(500);
+      // Correcting the manifest fixes the next request without a restart.
+      await writeFile(join(fontsDir, 'manifest.json'), MANIFEST, 'utf8');
+      expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(200);
     } finally { await preview.close(); }
   });
 
