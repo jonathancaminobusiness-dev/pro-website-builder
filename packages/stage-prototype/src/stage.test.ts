@@ -4,7 +4,9 @@ import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from 
 import { renderDesign } from '@pwb/renderer';
 import {
   DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
-  PrototypeStage, PrototypeStageError, type ComposerProvider, type PrototypeStageOutcome, type RouteManifest, type SectionComposition, type SectionPlan,
+  PrototypeStage, PrototypeStageError, criticRegistry,
+  type ComposerProvider, type CritiqueProvider, type CritiqueReport, type CritiqueTask, type ProposedPatch,
+  type PrototypeStageOutcome, type RouteManifest, type SectionComposition, type SectionPlan,
 } from './index.js';
 
 interface Harness { store: VersionStore; applier: Applier; base: VersionRecord; events: Array<{ type: string; payload: Record<string, unknown> }>; }
@@ -16,18 +18,46 @@ function harness(): Harness {
   return { store, applier, base, events: [] };
 }
 
-function stageFor(setup: Harness, composer: ComposerProvider = new FakeSectionComposer()): PrototypeStage {
+function stageFor(setup: Harness, composer: ComposerProvider = new FakeSectionComposer(), critique: CritiqueProvider = new FakeCritiqueProvider()): PrototypeStage {
   return new PrototypeStage({
     store: setup.store,
     applier: setup.applier,
     scheduler: new Scheduler({ maxActiveClaude: 3 }),
     architect: new FakeInformationArchitect(),
     composer,
-    critique: new FakeCritiqueProvider(),
+    critique,
     evidence: new DerivedEvidenceSource(),
     brief: 'Compilar a identidade aprovada em um protótipo de três rotas.',
     onEvent: (type, payload) => { setup.events.push({ type, payload }); },
   });
+}
+
+/** A critic under the test's control, so a loop that would never settle on its own can be observed. */
+class ScriptedCritic implements CritiqueProvider {
+  private cycles = 0;
+  constructor(private readonly script: (cycle: number) => { patch?: ProposedPatch; score: number } | undefined) {}
+
+  async critique(task: CritiqueTask): Promise<CritiqueReport> {
+    if (task.dimension === criticRegistry[0]!.dimension) this.cycles += 1;
+    const cycle = Math.max(1, this.cycles);
+    const entry = task.dimension === 'coherence' ? this.script(cycle) : undefined;
+    const findings = entry ? [{
+      id: `scripted-c${cycle}`, dimension: 'coherence' as const, severity: 'major' as const,
+      evidence: { route: '/', viewport: 390, state: 'default', colorScheme: 'light' as const, reducedMotion: false, nodeIds: ['home-hero-root'] },
+      observation: 'Observação roteirizada.', why: 'Contradiz o contrato aprovado.', confidence: 0.9,
+      ...(entry.patch ? { patch: entry.patch } : {}), checks: [], abstain: false,
+    }] : [];
+    return {
+      schemaVersion: '1', stage: 'prototype', dimension: task.dimension, criticSessionId: task.criticSessionId,
+      perception: { summary: 'Leitura roteirizada.', regions: [] },
+      comprehension: { hierarchy: 'h', intent: 'i', brandAlignment: 'b' },
+      projection: {
+        verdict: findings.length > 0 ? 'revise' : 'pass',
+        rubric: criticRegistry.find((critic) => critic.dimension === task.dimension)!.rubric.map((criterion) => ({ criterion: criterion.criterion, score: entry ? entry.score : 4, evidence: 'roteiro do teste' })),
+        findings,
+      },
+    };
+  }
 }
 
 /** A composer that leaves one section root off the declared grid rhythm, the way a real one can. */
@@ -139,6 +169,56 @@ describe('prototype stage', () => {
     };
     await expect(stageFor(setup, raw).run({ runId: 'run-raw', baseVersionId: setup.base.id }))
       .rejects.toThrow(PrototypeStageError);
+  });
+
+  it('stops at the cycle ceiling instead of iterating while the rubric keeps climbing', async () => {
+    const props: ProposedPatch[] = [
+      { operation: 'set_token', nodeId: 'home-hero-root', prop: 'padding', token: '{space.lg}' },
+      { operation: 'set_token', nodeId: 'home-hero-root', prop: 'radius', token: '{radius.card}' },
+      { operation: 'set_token', nodeId: 'home-hero-root', prop: 'maxWidth', token: '{space.xl}' },
+    ];
+    const setup = harness();
+    const critic = new ScriptedCritic((cycle) => cycle <= 3 ? { patch: props[cycle - 1]!, score: (cycle - 1) * 2 } : undefined);
+    const outcome = await stageFor(setup, new FakeSectionComposer(), critic).run({ runId: 'run-ceiling', baseVersionId: setup.base.id });
+
+    expect(outcome.cycles).toHaveLength(3);
+    expect(outcome.cycles.every((entry) => entry.appliedFindingIds.length === 1)).toBe(true);
+    expect(outcome.stopReason).toBe('max_cycles');
+    expect(outcome.gate).toBe('needs_review');
+  });
+
+  it('stops when the same problem survives a repair instead of proposing it again forever', async () => {
+    const setup = harness();
+    const repeated: ProposedPatch = { operation: 'set_token', nodeId: 'home-hero-root', prop: 'padding', token: '{space.lg}' };
+    const outcome = await stageFor(setup, new FakeSectionComposer(), new ScriptedCritic(() => ({ patch: repeated, score: 2 })))
+      .run({ runId: 'run-repeat', baseVersionId: setup.base.id });
+
+    expect(outcome.cycles).toHaveLength(2);
+    expect(outcome.cycles[1]!.appliedFindingIds).toEqual([]);
+    expect(outcome.stopReason).toBe('repeated_issue');
+  });
+
+  it('stops on the first round when no finding carries a repair the planner can apply', async () => {
+    const setup = harness();
+    const ghost: ProposedPatch = { operation: 'set_token', nodeId: 'not-a-node', prop: 'gap', token: '{space.md}' };
+    const outcome = await stageFor(setup, new FakeSectionComposer(), new ScriptedCritic(() => ({ patch: ghost, score: 2 })))
+      .run({ runId: 'run-unapplicable', baseVersionId: setup.base.id });
+
+    expect(outcome.cycles).toHaveLength(1);
+    expect(outcome.stopReason).toBe('no_actionable_patch');
+    expect(outcome.rejectedRepairs.map((entry) => entry.reason).join(' ')).toContain('no node not-a-node');
+    expect(outcome.versionId).toBe(outcome.compositionVersionId);
+  });
+
+  it('escalates to the gate when a critic cannot produce a typed report', async () => {
+    const setup = harness();
+    const broken: CritiqueProvider = { critique: async (task) => { throw new Error(`o crítico ${task.dimension} falhou`); } };
+    const outcome = await stageFor(setup, new FakeSectionComposer(), broken).run({ runId: 'run-uncertain', baseVersionId: setup.base.id });
+
+    expect(outcome.stopReason).toBe('uncertain');
+    expect(outcome.reports.every((report) => report.projection.verdict === 'uncertain')).toBe(true);
+    expect(setup.events.map((event) => event.type)).toContain('prototype.critic.unavailable');
+    expect(outcome.gate).toBe('needs_review');
   });
 
   it('never lets the stage touch the approved identity', async () => {
