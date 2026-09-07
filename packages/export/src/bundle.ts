@@ -26,6 +26,13 @@ export interface ReleaseManifest {
   files: Array<{ path: string; hash: string; bytes: number }>;
   fonts: CompiledSite['fonts'];
   licenses: CompiledSite['licenses']['entries'];
+  /**
+   * What the captain accepted in writing when they published. Gate 3 escalates
+   * every gap it cannot decide — missing evidence, an unresolved placeholder —
+   * and refuses to publish until the captain names a reason, so an accepted gap
+   * is recorded in the release rather than passed over in silence.
+   */
+  acceptance?: { approverRole: 'captain'; rationale: string; escalations: string[] };
 }
 
 /** Refuses any path that would leave the bundle directory, symlink or `..` included. */
@@ -44,7 +51,7 @@ function safeTarget(directory: string, path: string): string {
  * file set is written. Any veto refuses the write outright — a blocked release
  * never reaches disk in a form that could be published by accident.
  */
-export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string, context: { approvedVersionId: string; extraVetoes?: ReleaseVeto[] }): Promise<ReleaseManifest> {
+export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string, context: { approvedVersionId: string; extraVetoes?: ReleaseVeto[]; acceptance?: ReleaseManifest['acceptance'] }): Promise<ReleaseManifest> {
   const vetoes = [...compiled.vetoes, ...(context.extraVetoes ?? [])];
   if (vetoes.length > 0) throw new ReleaseVetoError(vetoes);
 
@@ -73,6 +80,7 @@ export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string
     files: compiled.files.map((file) => ({ path: file.path, hash: file.hash, bytes: file.bytes })),
     fonts: compiled.fonts,
     licenses: compiled.licenses.entries,
+    ...(context.acceptance ? { acceptance: context.acceptance } : {}),
   };
   // The manifest is written last and is excluded from the digest, so the same IR
   // and toolchain always produce the same directory name and the same bytes. The

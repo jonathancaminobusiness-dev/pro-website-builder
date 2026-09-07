@@ -9,11 +9,21 @@ import { renderDesign } from '@pwb/renderer';
 import {
   aggregateVetoes, checkPreviewReleaseParity, ClaudeReleaseCriticProvider, criticTasks, DeterministicReleaseSummarizer,
   evaluateReleaseGate, evidenceCoverage, evidenceVetoes, FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage,
-  PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, VETO_CATALOG, writeEvidenceArtifact,
-  type ReleaseCriticProvider,
+  partitionEvidence, PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, VETO_CATALOG, writeEvidenceArtifact,
+  type ReleaseCriticProvider, type ReleaseRefinerProvider, type ReleaseSummarizerProvider,
 } from './index.js';
 
 const COMPILER_OPTIONS = { siteUrl: 'https://oficina.example', siteName: 'Oficina' };
+/**
+ * The release the stage evaluates, and so the one every artifact here says it
+ * measured unless it says otherwise. It comes from a version the Applier
+ * created, because the schema normalizes the document on the way in and the
+ * normalized form is what the stage compiles.
+ */
+const STAGE_RELEASE = (() => {
+  const version = new Applier(new VersionStore(), new PatchGate()).createRoot(createFixtureIR());
+  return compileRelease(renderDesign(version.ir), version.ir, COMPILER_OPTIONS);
+})();
 
 function compiledFixture(mutate?: (ir: DesignIR) => void) {
   const ir = createFixtureIR();
@@ -22,7 +32,10 @@ function compiledFixture(mutate?: (ir: DesignIR) => void) {
 }
 
 function artifact(overrides: Partial<EvidenceArtifact> & Pick<EvidenceArtifact, 'id' | 'runner' | 'engine'>): EvidenceArtifact {
-  return { route: '/', state: 'default', status: 'passed', path: `${overrides.id}.json`, hash: 'hash', vetoes: [], metrics: {}, notes: [], ...overrides };
+  return {
+    route: '/', state: 'default', status: 'passed', path: `${overrides.id}.json`, hash: 'hash', vetoes: [], metrics: {}, notes: [],
+    releaseDigest: STAGE_RELEASE.digest, irHash: STAGE_RELEASE.irHash, ...overrides,
+  };
 }
 
 function pageIds(ir: DesignIR): Map<string, string> {
@@ -93,6 +106,21 @@ describe('independent evidence', () => {
     expect(coverage.missing.join(' ')).toMatch(/firefox/);
     expect(coverage.missing.join(' ')).toMatch(/webkit/);
     expect(coverage.missing.join(' ')).toMatch(/lighthouse/);
+  });
+
+  it('sets aside an artifact measured against another release instead of crediting it', () => {
+    const partition = partitionEvidence([
+      artifact({ id: 'pw-chromium', runner: 'playwright', engine: 'chromium' }),
+      artifact({ id: 'pw-firefox-antigo', runner: 'playwright', engine: 'firefox', releaseDigest: 'digest-de-outra-execucao' }),
+    ], { digest: STAGE_RELEASE.digest, irHash: STAGE_RELEASE.irHash });
+    expect(partition.credited.map((entry) => entry.id)).toEqual(['pw-chromium']);
+    expect(partition.escalations.join(' ')).toMatch(/pw-firefox-antigo.*não conta como cobertura/);
+  });
+
+  it('credits a measurement of the same bytes taken from another document, and says so', () => {
+    const partition = partitionEvidence([artifact({ id: 'pw-chromium', runner: 'playwright', engine: 'chromium', irHash: 'documento-anterior' })], { digest: STAGE_RELEASE.digest, irHash: STAGE_RELEASE.irHash });
+    expect(partition.credited.map((entry) => entry.id)).toEqual(['pw-chromium']);
+    expect(partition.escalations.join(' ')).toMatch(/mediu estes mesmos bytes a partir do documento/);
   });
 
   it('round-trips artifacts through the directory the gate reads', async () => {
@@ -307,6 +335,41 @@ describe('Gate 3', () => {
     expect(report.escalations.join(' ')).toMatch(/patch-refiner produziu a versão v-refined/);
   });
 
+  it('does not credit a veto raised by an artifact measured against another release', () => {
+    const stale = artifact({ id: 'axe-antigo', runner: 'axe', engine: 'chromium', status: 'failed', metrics: { critical: 3, serious: 1 }, releaseDigest: 'digest-de-outra-execucao' });
+    const report = evaluateReleaseGate(gateInput({ evidence: [stale] }));
+    expect(report.vetoes).toEqual([]);
+    expect(report.evidence).toEqual([]);
+    expect(report.escalations.join(' ')).toMatch(/axe-antigo.*não conta como cobertura/);
+  });
+
+  it('escalates an unbundled asset without terms instead of blocking on it', () => {
+    const { ir } = compiledFixture();
+    ir.assets.items[0]!.status = 'placeholder';
+    ir.assets.items[0]!.provenance.license = 'pending provider terms';
+    const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
+    const report = evaluateReleaseGate(gateInput({
+      compiled,
+      approved: { versionId: 'v', irHash: compiled.irHash, renderedFiles: compiled.files.map((file) => [file.path, file.hash] as [string, string]) },
+      parity: checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)),
+    }));
+    expect(report.vetoes.map((entry) => entry.id)).not.toContain('ASSET_WITHOUT_LICENSE');
+    expect(report.blocked).toBe(false);
+    expect(report.escalations.join(' ')).toMatch(/does not clear it for release/);
+  });
+
+  it('still blocks when the bundle ships an asset without terms', () => {
+    const { ir } = compiledFixture();
+    ir.assets.items[0]!.provenance.license = 'pending provider terms';
+    const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
+    const report = evaluateReleaseGate(gateInput({
+      compiled,
+      approved: { versionId: 'v', irHash: compiled.irHash, renderedFiles: compiled.files.map((file) => [file.path, file.hash] as [string, string]) },
+      parity: checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)),
+    }));
+    expect(report.vetoes.map((entry) => entry.id)).toContain('ASSET_WITHOUT_LICENSE');
+  });
+
   it('blocks when the release stops matching the preview', () => {
     const input = gateInput();
     input.parity = { matched: false, routes: [{ route: '/', matched: false, differences: ['o nó home-title mudou'] }] };
@@ -386,13 +449,61 @@ describe('the finalization stage end to end with the deterministic providers', (
     expect(events).toContain('release.gate.ready');
   });
 
-  it('refuses to be configured to write outside what the finalization stage may write', () => {
-    expect(() => new FinalizationStage({
+  it('escalates a refiner session that failed instead of losing the whole report', async () => {
+    const failing: ReleaseRefinerProvider = { refine: async () => { throw new Error('claude -p saiu com código 1'); } };
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const version = applier.createRoot(createFixtureIR());
+    const stage = new FinalizationStage({
+      criticProvider: new FakeReleaseCriticProvider(),
+      refiner: new PatchRefiner(failing),
+      compilerOptions: COMPILER_OPTIONS,
+    });
+    const evidence = [artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', status: 'failed', metrics: { critical: 1, serious: 0 } })];
+    const result = await stage.run({ runId: 'run-refiner-down', version, evidence, applier });
+    expect(result.cycles).toBe(0);
+    expect(result.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
+    expect(result.report.escalations.join(' ')).toMatch(/patch-refiner falhou.*claude -p saiu com código 1/);
+  });
+
+  it('escalates a summarizer session that failed and still reports every veto', async () => {
+    const failing: ReleaseSummarizerProvider = { summarize: async () => { throw new Error('a sessão devolveu texto, não JSON'); } };
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const version = applier.createRoot(createFixtureIR());
+    const stage = new FinalizationStage({
+      criticProvider: new FakeReleaseCriticProvider(),
+      refiner: new PatchRefiner(new FakeReleaseRefiner()),
+      summarizer: failing,
+      compilerOptions: COMPILER_OPTIONS,
+    });
+    const evidence = [artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', status: 'failed', metrics: { critical: 1, serious: 0 } })];
+    const result = await stage.run({ runId: 'run-summary-down', version, evidence, applier });
+    expect(result.report.summary).toBeUndefined();
+    expect(result.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
+    expect(result.report.escalations.join(' ')).toMatch(/release-summarizer falhou/);
+  });
+
+  it('compares the release against the version the captain approved, not against the refinement it started from', async () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const approved = applier.createRoot(createFixtureIR());
+    const refined = createFixtureIR();
+    refined.reviewRecord.findings = ['accessibility:axe-home: contraste insuficiente'];
+    const current = new Applier(store, new PatchGate()).apply({
+      operations: [{ op: 'replace', path: '/reviewRecord/findings', value: refined.reviewRecord.findings }],
+      baseVersionId: approved.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'refino anterior', confidence: 1,
+      stage: 'finalization', role: 'compiler', idempotencyKey: 'refino-anterior',
+    }, { allowedPaths: ['/reviewRecord'], stage: 'finalization', role: 'compiler' }, approved.id);
+    const stage = new FinalizationStage({
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       compilerOptions: COMPILER_OPTIONS,
-      refinerAllowedPaths: ['/identity'],
-    })).toThrow(/may not write \/identity/);
+    });
+    const result = await stage.run({ runId: 'run-accumulated', version: current, approved, evidence: [], applier });
+    expect(result.report.approvedVersionId).toBe(approved.id);
+    expect(result.report.releasedVersionId).toBe(current.id);
+    expect(result.report.vetoes.map((veto) => veto.id)).not.toContain('RELEASE_DIVERGES_FROM_APPROVED');
   });
 
   it('keeps the critics inside the scheduler lane limit', async () => {

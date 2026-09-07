@@ -149,13 +149,36 @@ Everything binds an ephemeral port the operating system chooses, so an evidence
 run never contends with the studio on `5173`, the preview on `4311`, or another
 worktree. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site name the
 canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT` and
-`PWB_EVIDENCE_DIR` move the bundle and the artifacts.
+`PWB_EVIDENCE_DIR` move the bundle and the artifacts. Preparing a release writes
+the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and every
+runner reads it back from there — `PWB_RELEASE_DOCUMENT` points them somewhere
+else. With no run to read, the fixture stands in.
+
+**Gates in order.** Gate 3 refuses to prepare or publish until the captain has
+approved identity and prototype on that run, and the bundle is compiled from the
+prototype-approved version. Approving finalization takes the same path: one
+compiler, one bundle writer, every veto — a secret in a page refuses the ordinary
+approval exactly as it refuses Gate 3.
+
+The finalization stage writes through the same boundary as every other stage:
+its proposals declare the stage and the role the foundation pins to it, the
+PatchGate validates them against the finalization patch schema, and only the
+Applier writes a version. A critic proposes nothing at all, and the refiner
+writes `/reviewRecord` and nothing else, because the bytes the release publishes
+have to be the bytes the captain approved. A refinement becomes a real version of
+the run: it is saved through the run's applier and repository, so the manifest
+names a version that can be retrieved and a second Gate 3 run builds on the
+first instead of redoing it. A model session that fails — the refiner, the
+summarizer — escalates and the report still reaches the captain with every veto
+and every artifact already computed.
 
 **Release vetoes.** Eight objective stop conditions, catalogued in
 `packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
-XSS or `javascript:` URL, unsanitized HTML, an asset without a licence, a build
-failure, a broken primary link, a critical AA regression, and a release that
-diverges from the approved one. A veto is never scored or averaged: one veto
+XSS or `javascript:` URL, unsanitized HTML, a bundled asset without a licence, a
+build failure, a broken primary link, a critical AA regression, and a release
+that diverges from the approved one. Only what the bundle ships can be published
+without terms, so an asset the release never publishes — a provider placeholder
+— escalates to the captain instead of blocking. A veto is never scored or averaged: one veto
 blocks Gate 3, and the export refuses to write. Only the compiler, the evidence
 runners and the gate may raise one — a critic cannot raise or clear a veto, its
 tasks carry no writable path, and its findings have no veto severity.
@@ -167,13 +190,20 @@ violation counts rather than from a field a runner chose to set, and
 `sealSummary` overwrites the summarizer's veto count with the authoritative one,
 so no summary can hide a veto. A runner that did not run leaves no artifact, and
 the gate reports the gap as an escalation instead of treating silence as a pass.
-`PWB_RELEASE_ENGINES=chromium,webkit` narrows the engine set on a host where one
-browser cannot launch. On the macOS 27.0 host this was developed on,
+
+Every artifact names the release it measured — the bundle digest and the
+document hash — and the gate credits only the artifacts that measured this
+bundle. Anything else is set aside and reported as coverage the gate does not
+have, so a run never inherits an earlier run's evidence in silence. An artifact
+that measured the same bytes from a different document is credited and the
+difference is named, because that is what the refiner recording a finding does.
+
+All three engines always run. On the macOS 27.0 host this was developed on,
 Playwright's Firefox 153 build does not start — it times out after
-`sandbox_extension_issue_file_to_process ... Operation not permitted` — so the
-evidence there is Chromium and WebKit, and the gate says so by escalating
-"Nenhuma execução Playwright em firefox" rather than treating the absence as a
-pass.
+`sandbox_extension_issue_file_to_process ... Operation not permitted` — so that
+run leaves no Firefox artifact, and the gate escalates "Nenhuma execução
+Playwright em firefox". Publishing over an open escalation takes a written
+reason from the captain, which the bundle's manifest keeps under `acceptance`.
 
 Lighthouse is a laboratory run. It measures one machine and one network, does
 not observe a visitor, and does not measure INP without interaction; the
@@ -192,7 +222,8 @@ styles and text between the preview and the release in every engine.
 each critic gave on the 0–4 scale with a minimum of 3, parity per route, which
 runners produced evidence, and what escalates. Publishing sends the digest the
 captain is looking at, so a release that moved since the report cannot be
-published by mistake. Only the captain publishes.
+published by mistake, and an open escalation takes a written acceptance the
+manifest records. Only the captain publishes.
 
 ### Real critic sessions
 

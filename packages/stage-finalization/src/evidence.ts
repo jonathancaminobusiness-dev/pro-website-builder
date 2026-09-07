@@ -37,6 +37,44 @@ export async function readEvidence(directory: string): Promise<EvidenceArtifact[
   return artifacts;
 }
 
+/** The release an artifact must name to count as evidence about it. */
+export interface ReleaseIdentity { digest: string; irHash: string }
+
+export interface EvidencePartition {
+  /** Artifacts that measured exactly these bytes; only these are credited. */
+  credited: EvidenceArtifact[];
+  /** What the captain has to be told about the artifacts that were on disk. */
+  escalations: string[];
+}
+
+/**
+ * Splits the artifacts on disk by the release they were taken against.
+ *
+ * An evidence directory outlives a run, so a measurement from an earlier
+ * document says nothing about the release being evaluated. What a runner
+ * actually measured is the bundle's bytes, so the digest decides: an artifact
+ * naming another digest is set aside and reported as coverage the gate does not
+ * have. The document hash is checked too and named when it differs — the
+ * refiner writing the review record changes the document without changing a
+ * single byte the browser loaded, and the captain reads that rather than
+ * guessing at it.
+ */
+export function partitionEvidence(artifacts: EvidenceArtifact[], release: ReleaseIdentity): EvidencePartition {
+  const credited: EvidenceArtifact[] = [];
+  const escalations: string[] = [];
+  for (const artifact of artifacts) {
+    if (artifact.releaseDigest !== release.digest) {
+      escalations.push(`O artefato ${artifact.id} foi medido no release ${artifact.releaseDigest.slice(0, 12)}, e não no ${release.digest.slice(0, 12)} que está em avaliação; ele não conta como cobertura.`);
+      continue;
+    }
+    credited.push(artifact);
+    if (artifact.irHash !== release.irHash) {
+      escalations.push(`O artefato ${artifact.id} mediu estes mesmos bytes a partir do documento ${artifact.irHash.slice(0, 12)}; o release vem do documento ${release.irHash.slice(0, 12)}.`);
+    }
+  }
+  return { credited, escalations };
+}
+
 /** Counts axe reports as an accessibility regression from the raw violation counts. */
 function accessibilityRegression(artifact: EvidenceArtifact): ReleaseVeto[] {
   if (artifact.runner !== 'axe') return [];

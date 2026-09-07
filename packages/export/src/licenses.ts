@@ -21,8 +21,14 @@ export interface LicenseEntry {
 
 export interface LicenseInventory {
   entries: LicenseEntry[];
-  /** Assets and faces that reached the compiler without usable terms. */
+  /** Bytes the bundle ships without usable terms. Each one is a veto. */
   missing: Array<{ id: string; detail: string }>;
+  /**
+   * Assets the bundle does not ship whose terms are still unresolved — a
+   * provider placeholder, for instance. They escalate to the captain instead of
+   * blocking a release that never publishes them.
+   */
+  warnings: Array<{ id: string; detail: string }>;
 }
 
 function blank(value: string): boolean {
@@ -38,9 +44,11 @@ export function isUsableLicense(license: string): boolean {
 export function buildLicenseInventory(ir: DesignIR, fonts: FontDecision[], toolchain: { rendererVersion: string; compilerVersion: string }): LicenseInventory {
   const entries: LicenseEntry[] = [];
   const missing: LicenseInventory['missing'] = [];
+  const warnings: LicenseInventory['warnings'] = [];
 
   for (const asset of [...ir.assets.items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
     const { provenance } = asset;
+    const bundled = asset.status === 'ready';
     entries.push({
       id: asset.id,
       kind: asset.kind,
@@ -49,11 +57,15 @@ export function buildLicenseInventory(ir: DesignIR, fonts: FontDecision[], toolc
       license: provenance.license,
       date: provenance.date,
       hash: provenance.hash,
-      bundled: asset.status === 'ready',
+      bundled,
       modifications: provenance.prompt ? `Generated with ${provenance.model ?? 'an unnamed model'} from a recorded prompt.` : 'None recorded.',
       ...(provenance.termsNote ? { termsNote: provenance.termsNote } : {}),
     });
-    if (!isUsableLicense(provenance.license)) missing.push({ id: asset.id, detail: `Asset ${asset.id} carries the licence "${provenance.license}", which does not clear it for release.` });
+    if (isUsableLicense(provenance.license)) continue;
+    const detail = `Asset ${asset.id} carries the licence "${provenance.license}", which does not clear it for release.`;
+    // Only what the bundle ships can be published without terms; an unbundled
+    // placeholder is named for the captain rather than treated as a veto.
+    (bundled ? missing : warnings).push({ id: asset.id, detail });
   }
 
   for (const font of fonts) {
@@ -85,5 +97,5 @@ export function buildLicenseInventory(ir: DesignIR, fonts: FontDecision[], toolc
     modifications: 'HTML and CSS are generated from the approved DesignIR.',
   });
 
-  return { entries, missing };
+  return { entries, missing, warnings };
 }

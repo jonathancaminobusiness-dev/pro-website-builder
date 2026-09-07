@@ -47,6 +47,8 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   prototypes = registry;
   // A review the captain already paid minutes of browser time for survives a restart.
   await registry.restore();
+  const siteUrl = process.env.PWB_SITE_URL ?? 'https://site.invalid';
+  const siteName = process.env.PWB_SITE_NAME ?? 'pro-website-builder';
   const releaseRoot = options.releaseRoot ?? process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
   const evidenceDir = options.evidenceDir ?? process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
   await mkdir(releaseRoot, { recursive: true });
@@ -57,7 +59,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
       try {
-        const run = new FixtureRun({ repository, exportRoot, provider });
+        const run = new FixtureRun({ repository, exportRoot, provider, siteUrl, siteName });
         await run.initialize(id);
         runs.set(id, run);
         return run;
@@ -66,7 +68,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
     loadRun: async (id) => {
       const existing = runs.get(id);
       if (existing) return existing;
-      const run = new FixtureRun({ repository, exportRoot, provider });
+      const run = new FixtureRun({ repository, exportRoot, provider, siteUrl, siteName });
       if (!await run.restore(id)) return undefined;
       runs.set(id, run);
       return run;
@@ -74,8 +76,8 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
     release: {
       releaseRoot,
       evidenceDir,
-      siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid',
-      siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder',
+      siteUrl,
+      siteName,
       modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
     },
   });

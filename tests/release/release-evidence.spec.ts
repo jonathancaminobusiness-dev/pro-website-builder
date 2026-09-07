@@ -14,7 +14,7 @@ function origin(): string {
   return value;
 }
 
-interface Harness { digest: string; routes: Array<{ route: string; title: string; releasePath: string; previewPath: string }> }
+interface Harness { digest: string; irHash: string; routes: Array<{ route: string; title: string; releasePath: string; previewPath: string }> }
 
 async function harness(page: Page): Promise<Harness> {
   const response = await page.request.get(`${origin()}/harness.json`);
@@ -34,7 +34,7 @@ function watch(page: Page): { consoleErrors: string[]; requestFailures: string[]
 
 test.describe('release evidence', () => {
   test('renders every route at every width with no console error, no failed request and no horizontal overflow', async ({ page }, testInfo) => {
-    const { routes } = await harness(page);
+    const { routes, digest, irHash } = await harness(page);
     const engine = testInfo.project.name as EvidenceArtifact['engine'];
     for (const route of routes) {
       for (const width of WIDTHS) {
@@ -60,7 +60,7 @@ test.describe('release evidence', () => {
         const vetoes: ReleaseVeto[] = [];
         await writeEvidenceArtifact(EVIDENCE_DIR, {
           id: `playwright-${engine}-${route.route === '/' ? 'home' : route.route.slice(1)}-${width}`,
-          runner: 'playwright', engine, route: route.route, state: `width-${width}`,
+          runner: 'playwright', engine, releaseDigest: digest, irHash, route: route.route, state: `width-${width}`,
           status: notes.length === 0 ? 'passed' : 'failed',
           path: route.releasePath,
           hash: artifactHash({ metrics, notes }),
@@ -78,7 +78,7 @@ test.describe('release evidence', () => {
   });
 
   test('scans every critical state with axe and records what it found', async ({ page }, testInfo) => {
-    const { routes } = await harness(page);
+    const { routes, digest, irHash } = await harness(page);
     const engine = testInfo.project.name as EvidenceArtifact['engine'];
     for (const route of routes) {
       for (const state of [{ name: 'default', width: 1440, reducedMotion: 'no-preference' as const }, { name: 'reduced-motion', width: 1440, reducedMotion: 'reduce' as const }, { name: 'narrow', width: 360, reducedMotion: 'no-preference' as const }]) {
@@ -93,7 +93,7 @@ test.describe('release evidence', () => {
         }
         await writeEvidenceArtifact(EVIDENCE_DIR, {
           id: `axe-${engine}-${route.route === '/' ? 'home' : route.route.slice(1)}-${state.name}`,
-          runner: 'axe', engine, route: route.route, state: state.name,
+          runner: 'axe', engine, releaseDigest: digest, irHash, route: route.route, state: state.name,
           status: counts.critical + counts.serious > 0 ? 'failed' : 'passed',
           path: route.releasePath,
           hash: artifactHash(results.violations.map((violation) => [violation.id, violation.impact, violation.nodes.length])),

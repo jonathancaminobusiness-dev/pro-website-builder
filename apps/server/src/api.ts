@@ -69,12 +69,15 @@ export function createApiServer(options: ApiOptions): Server {
           return;
         }
         if (request.method !== 'POST') { send(response, 405, { error: 'Method not allowed.' }); return; }
-        const snapshot = run.snapshot();
-        if (!release[2]) { send(response, 200, await existing.prepare(snapshot.currentVersion.ir, snapshot.currentVersion.id)); return; }
+        // Gate 3 never opens before gates 1 and 2 closed, and the bundle is
+        // compiled from the version the captain approved at gate 2.
+        const blocker = run.releaseBlocker();
+        if (blocker) { send(response, 409, { error: blocker }); return; }
+        if (!release[2]) { send(response, 200, await existing.prepare(run.releaseContext())); return; }
         const input = await body(request);
         if (input.approverRole !== 'captain') { send(response, 403, { error: 'Only the captain can approve v1 gates.' }); return; }
         if (typeof input.digest !== 'string') { send(response, 400, { error: 'O digest do bundle aprovado é obrigatório.' }); return; }
-        const manifest = await existing.publish('captain', input.digest);
+        const manifest = await existing.publish('captain', input.digest, typeof input.rationale === 'string' ? input.rationale : undefined);
         send(response, 200, { manifest, snapshot: existing.snapshot() });
         return;
       }

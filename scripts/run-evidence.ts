@@ -15,7 +15,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { artifactHash, writeEvidenceArtifact } from '../packages/stage-finalization/src/index.js';
+import { compileRelease } from '../packages/export/src/index.js';
+import { renderDesign } from '../packages/renderer/src/index.js';
+import { artifactHash, loadReleaseDocument, writeEvidenceArtifact } from '../packages/stage-finalization/src/index.js';
 
 const execFileAsync = promisify(execFile);
 const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(process.cwd(), 'artifacts', 'release');
@@ -35,7 +37,7 @@ async function run(name: string, args: string[]): Promise<RunnerOutcome> {
 interface VitestReport { numTotalTests?: number; numPassedTests?: number; numFailedTests?: number; success?: boolean }
 
 /** Vitest has no artifact of its own, so its JSON report becomes one. */
-async function vitestEvidence(): Promise<RunnerOutcome> {
+async function vitestEvidence(release: { digest: string; irHash: string }): Promise<RunnerOutcome> {
   const directory = await mkdtemp(join(tmpdir(), 'pwb-vitest-'));
   const outputFile = join(directory, 'report.json');
   let ok = true;
@@ -45,7 +47,7 @@ async function vitestEvidence(): Promise<RunnerOutcome> {
     const report = JSON.parse(await readFile(outputFile, 'utf8')) as VitestReport;
     const metrics = { total: report.numTotalTests ?? 0, passed: report.numPassedTests ?? 0, failed: report.numFailedTests ?? 0 };
     await writeEvidenceArtifact(evidenceDir, {
-      id: 'vitest-node', runner: 'vitest', engine: 'node', route: '/', state: 'unit',
+      id: 'vitest-node', runner: 'vitest', engine: 'node', releaseDigest: release.digest, irHash: release.irHash, route: '/', state: 'unit',
       status: metrics.failed === 0 && (report.success ?? ok) ? 'passed' : 'failed',
       path: 'vitest', hash: artifactHash(metrics), vetoes: [], metrics,
       notes: metrics.failed === 0 ? ['A suíte determinística passou; ela não prova layout, fonte nem acessibilidade de interação.'] : [`${metrics.failed} teste(s) falharam.`],
@@ -57,12 +59,19 @@ async function vitestEvidence(): Promise<RunnerOutcome> {
 }
 
 async function main(): Promise<void> {
+  // Every runner measures the same release, so every artifact names it and the
+  // gate can tell this run's evidence from what an earlier run left behind.
+  const ir = await loadReleaseDocument(evidenceDir);
+  const compiled = compileRelease(renderDesign(ir), ir, {
+    siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid',
+    siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder',
+  });
   const outcomes: RunnerOutcome[] = [
-    await vitestEvidence(),
+    await vitestEvidence({ digest: compiled.digest, irHash: compiled.irHash }),
     await run('playwright+axe', ['test:e2e:release']),
     await run('lighthouse', ['run:lighthouse']),
   ];
-  console.log(JSON.stringify({ evidenceDir, outcomes }, null, 2));
+  console.log(JSON.stringify({ evidenceDir, releaseDigest: compiled.digest, outcomes }, null, 2));
   if (outcomes.some((outcome) => !outcome.ok)) process.exitCode = 1;
 }
 

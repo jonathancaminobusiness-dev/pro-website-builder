@@ -41,6 +41,7 @@ export function createReleaseHarness(compiled: CompiledSite, rendered: RenderedD
     if (pathname === '/harness.json') {
       const body = JSON.stringify({
         digest: compiled.digest,
+        irHash: compiled.irHash,
         stylesheetPath: compiled.stylesheetPath,
         routes: compiled.routes.map((route) => ({ route: route.route, title: route.title, releasePath: `/release${route.route === '/' ? '/' : `${route.route}/`}`, previewPath: `/preview${route.route}` })),
       });

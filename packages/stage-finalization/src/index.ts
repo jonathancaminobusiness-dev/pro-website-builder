@@ -1,5 +1,6 @@
 export * from './critic-provider.js';
 export * from './critics.js';
+export * from './document.js';
 export * from './evidence.js';
 export * from './gate.js';
 export * from './parity.js';

@@ -66,11 +66,11 @@ export function routeMetadata(ir: DesignIR, siteUrl: string): RouteMetadata[] {
 }
 
 /** The `<meta>` and `<link>` tags a single route contributes to its `<head>`. */
-export function headTags(metadata: RouteMetadata, options: { siteName: string; locale: string; indexable: boolean; socialImage?: SocialImage }): string {
+export function headTags(metadata: RouteMetadata, options: { siteName: string; locale: string; socialImage?: SocialImage }): string {
   const tags: string[] = [
     `<meta name="description" content="${escapeHtml(metadata.description)}">`,
     `<link rel="canonical" href="${escapeHtml(metadata.canonical)}">`,
-    `<meta name="robots" content="${options.indexable ? 'index,follow' : 'noindex,nofollow'}">`,
+    '<meta name="robots" content="index,follow">',
     `<meta property="og:type" content="${metadata.ogType}">`,
     `<meta property="og:site_name" content="${escapeHtml(options.siteName)}">`,
     `<meta property="og:locale" content="${escapeHtml(options.locale.replace('-', '_'))}">`,
@@ -99,7 +99,7 @@ export function sitemapXml(metadata: RouteMetadata[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
 }
 
-export function robotsTxt(siteUrl: string, indexable: boolean): string {
+export function robotsTxt(siteUrl: string): string {
   const sitemap = new URL('sitemap.xml', siteUrl.endsWith('/') ? siteUrl : `${siteUrl}/`).toString();
-  return `User-agent: *\n${indexable ? 'Allow: /' : 'Disallow: /'}\nSitemap: ${sitemap}\n`;
+  return `User-agent: *\nAllow: /\nSitemap: ${sitemap}\n`;
 }

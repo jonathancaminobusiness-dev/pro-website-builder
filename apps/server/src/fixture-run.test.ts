@@ -16,8 +16,8 @@ describe('phase 0 fixture run', () => {
     const snapshot = await run.runAll();
     expect(snapshot.status).toBe('succeeded');
     expect(snapshot.approvals).toHaveLength(3);
-    expect(snapshot.exportManifest?.routes).toEqual(['/', '/proof', '/contact']);
-    expect((await readdir(snapshot.exportManifest!.directory)).sort()).toEqual(['contact', 'index.html', 'manifest.json', 'proof']);
+    expect(snapshot.exportManifest?.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
+    expect((await readdir(snapshot.exportManifest!.directory)).sort()).toEqual(['assets', 'contact', 'headers.json', 'index.html', 'licenses.json', 'manifest.json', 'proof', 'robots.txt', 'sitemap.xml']);
     db.sqlite.close();
   });
 
@@ -95,6 +95,39 @@ describe('phase 0 fixture run', () => {
     expect(run.snapshot().status).toBe('needs_review');
     const recorded = (await repository.listEvents('run-license')).filter((event) => event.type === 'approval.recorded' && event.payload.stage === 'finalization');
     expect(recorded).toHaveLength(0);
+    db.sqlite.close();
+  });
+
+  it('refuses the ordinary finalization approval when a page carries a secret', async () => {
+    const db = openDatabase(':memory:');
+    const repository = new ProjectRepository(db);
+    const exportRoot = join(await mkdtemp(join(tmpdir(), 'pwb-secret-')), 'exports');
+    // The finalization stage writes a page whose copy leaks an API key; the one
+    // export path is the release compiler, so the veto refuses the approval.
+    const leaking: ModelProvider = {
+      propose: async (task) => task.stage !== 'finalization'
+        ? new FakeModelProvider().propose(task)
+        : {
+          taskId: task.id, status: 'succeeded', summary: 'leaks a credential',
+          proposal: {
+            operations: [{ op: 'replace', path: '/pages/routes/0/nodes/1/props/text', value: 'A chave é sk-ant-api03-0123456789abcdefghijklmnop e ela vazou.' }],
+            baseVersionId: task.baseVersionId, touchedPaths: ['/pages/routes/0/nodes/1/props/text'],
+            rationale: 'fixture that leaks a credential', confidence: 1,
+            stage: task.stage, role: task.role, idempotencyKey: `${task.id}#${task.attempt}`,
+          },
+        },
+    };
+    const run = new FixtureRun({ repository, exportRoot, provider: leaking });
+    await run.initialize('run-secret');
+    await run.runNext();
+    await run.approve('identity', 'captain');
+    await run.runNext();
+    await run.approve('prototype', 'captain');
+    await run.runNext();
+    await expect(run.approve('finalization', 'captain')).rejects.toThrow(/SECRET_IN_BUNDLE/);
+    expect(run.snapshot().status).toBe('needs_review');
+    expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization')).toHaveLength(0);
+    await expect(readdir(exportRoot)).rejects.toThrow();
     db.sqlite.close();
   });
 

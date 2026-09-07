@@ -1,6 +1,6 @@
 import { hashJson, RELEASE_RUBRIC_MINIMUM, releaseGateReportSchema, type EvidenceArtifact, type ParityReport, type ReleaseCritique, type ReleaseGateReport, type ReleaseSummary, type ReleaseVeto } from '@pwb/domain';
 import type { CompiledSite } from '@pwb/export';
-import { evidenceCoverage, evidenceVetoes } from './evidence.js';
+import { evidenceCoverage, evidenceVetoes, partitionEvidence } from './evidence.js';
 import { RELEASE_CRITICS } from './critics.js';
 import { aggregateVetoes } from './veto-catalog.js';
 
@@ -60,7 +60,9 @@ function divergenceVetoes(input: ReleaseGateInput): ReleaseVeto[] {
  * verdict. Only the captain approves; `blocked` says whether they may.
  */
 export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateReport {
-  const vetoes = aggregateVetoes(input.compiled.vetoes, evidenceVetoes(input.evidence), divergenceVetoes(input));
+  // Only a measurement taken against this exact bundle says anything about it.
+  const evidence = partitionEvidence(input.evidence, { digest: input.compiled.digest, irHash: input.compiled.irHash });
+  const vetoes = aggregateVetoes(input.compiled.vetoes, evidenceVetoes(evidence.credited), divergenceVetoes(input));
   const rubric = input.critiques
     .map((critique) => ({ dimension: critique.dimension, score: critique.rubricScore, verdict: critique.verdict }))
     .sort((a, b) => (a.dimension < b.dimension ? -1 : a.dimension > b.dimension ? 1 : 0));
@@ -71,7 +73,11 @@ export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateReport 
     ...RELEASE_CRITICS.filter((critic) => !reported.has(critic.dimension)).map((critic) => `O crítico de ${critic.dimension} não entregou parecer; a evidência dessa dimensão está ausente.`),
     ...rubric.filter((row) => row.score < RELEASE_RUBRIC_MINIMUM).map((row) => `A dimensão ${row.dimension} pontuou ${row.score}/4, abaixo do mínimo ${RELEASE_RUBRIC_MINIMUM}.`),
     ...rubric.filter((row) => row.verdict === 'uncertain').map((row) => `O crítico de ${row.dimension} respondeu incerto; a decisão sobe para o capitão.`),
-    ...evidenceCoverage(input.evidence).missing,
+    ...evidenceCoverage(evidence.credited).missing,
+    ...evidence.escalations,
+    // An asset the bundle does not ship cannot be published without terms, so it
+    // is named for the captain rather than blocking the release.
+    ...input.compiled.licenses.warnings.map((warning) => warning.detail),
     ...(input.releasedVersionId === input.approved.versionId ? [] : [`O patch-refiner produziu a versão ${input.releasedVersionId} a partir da aprovada ${input.approved.versionId}; o capitão aprova o documento refinado.`]),
   ];
 
@@ -87,7 +93,7 @@ export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateReport 
     vetoes,
     rubric,
     parity: input.parity,
-    evidence: input.evidence,
+    evidence: evidence.credited,
     refinementCycles: input.refinementCycles,
     escalations: [...new Set(escalations)],
     ...(input.summary ? { summary: input.summary } : {}),

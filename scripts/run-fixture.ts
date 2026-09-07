@@ -49,7 +49,7 @@ async function main(): Promise<void> {
     await run.initialize('cli-fixture');
     const snapshot = await run.runAll();
     const render = process.argv.includes('--render') ? await renderMatrix(snapshot) : undefined;
-    console.log(JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id, exportDirectory: snapshot.exportManifest?.directory, routes: snapshot.exportManifest?.routes, ...(render ? { render } : {}) }, null, 2));
+    console.log(JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id, exportDirectory: snapshot.exportManifest?.directory, routes: snapshot.exportManifest?.routes.map((route) => route.route), ...(render ? { render } : {}) }, null, 2));
     if (snapshot.status !== 'succeeded' || (render && render.failed.length > 0)) process.exitCode = 1;
   } finally { database.sqlite.close(); }
 }

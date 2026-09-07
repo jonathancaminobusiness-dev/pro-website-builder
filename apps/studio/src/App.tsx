@@ -10,7 +10,7 @@ interface Snapshot {
   currentVersion: { id: string; hash: string };
   rendered: { routes: Array<{ route: string; title: string; html: string }> };
   approvals: Array<{ stage: string; decision: string; versionId: string }>;
-  exportManifest?: { directory: string; routes: string[] };
+  exportManifest?: { directory: string; digest: string; routes: Array<{ route: string; path: string }> };
   lintErrorCount: number;
 }
 

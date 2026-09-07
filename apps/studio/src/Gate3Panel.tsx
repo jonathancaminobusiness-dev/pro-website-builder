@@ -42,11 +42,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * which independent runners produced evidence. The summary is displayed with
  * its lack of authority stated, and publishing sends the digest the captain is
  * looking at, so a release that moved cannot be published by mistake.
+ *
+ * A gap the gate could not decide — a missing engine, an unresolved placeholder
+ * — does not block, but publishing over it takes a written reason that the
+ * bundle's manifest keeps.
  */
 export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null; apiOrigin: string }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<ReleaseSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [rationale, setRationale] = useState('');
 
   const act = useCallback(async (action: () => Promise<ReleaseSnapshot>) => {
     setBusy(true); setError('');
@@ -58,7 +63,7 @@ export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null;
   const prepare = (): void => { if (runId) void act(() => request<ReleaseSnapshot>(`${apiOrigin}/api/runs/${runId}/release`, { method: 'POST' })); };
   const publish = (): void => {
     if (!runId || !snapshot) return;
-    void act(async () => (await request<{ snapshot: ReleaseSnapshot }>(`${apiOrigin}/api/runs/${runId}/release/publish`, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', digest: snapshot.digest }) })).snapshot);
+    void act(async () => (await request<{ snapshot: ReleaseSnapshot }>(`${apiOrigin}/api/runs/${runId}/release/publish`, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', digest: snapshot.digest, rationale }) })).snapshot);
   };
 
   const report = snapshot?.report;
@@ -130,7 +135,11 @@ export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null;
           <h3>Sobe para o capitão</h3>
           {report.escalations.length === 0
             ? <p className="empty">Nada em aberto além da própria decisão.</p>
-            : <ul>{report.escalations.map((line) => <li key={line}>{line}</li>)}</ul>}
+            : <><ul>{report.escalations.map((line) => <li key={line}>{line}</li>)}</ul>
+                <label className="acceptance">
+                  <span>Aceitação do capitão, gravada no manifesto do release</span>
+                  <textarea value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Por que estes pontos podem ser aceitos neste release?" rows={3} />
+                </label></>}
         </div>
       </div>
 
@@ -142,7 +151,7 @@ export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null;
 
     <div className="actions">
       <button className="secondary" onClick={prepare} disabled={!runId || busy}>{busy ? 'Executando…' : report ? 'Recompilar e reavaliar' : 'Preparar release'}</button>
-      <button className="primary" onClick={publish} disabled={!report || report.blocked || busy || snapshot?.published !== undefined}>
+      <button className="primary" onClick={publish} disabled={!report || report.blocked || busy || snapshot?.published !== undefined || (report.escalations.length > 0 && rationale.trim() === '')}>
         {snapshot?.published ? 'Bundle publicado' : 'Publicar bundle (capitão)'}
       </button>
     </div>

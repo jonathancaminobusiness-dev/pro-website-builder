@@ -17,7 +17,6 @@ export interface ReleaseCompilerOptions {
   siteName: string;
   fonts?: FontSource[];
   socialImage?: SocialImage;
-  indexable?: boolean;
 }
 
 export interface CompiledFile { path: string; contents: string | Uint8Array; hash: string; bytes: number }
@@ -103,8 +102,6 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   } catch {
     throw new Error(`The release compiler needs an absolute http(s) site URL; it received ${JSON.stringify(options.siteUrl)}.`);
   }
-  const indexable = options.indexable ?? true;
-
   // Assets are linked from the site's own base path, so a release served under a
   // sub-path still resolves its stylesheet and its faces.
   const basePath = new URL(siteUrl).pathname.replace(/\/$/, '');
@@ -141,7 +138,7 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
     const filePath = routeFilePath(entry.route);
     try {
       const withPolicy = replaceOnce(extraction.html, '<meta charset="utf-8">', `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp.meta.replaceAll('"', '&quot;')}">`);
-      const head = headTags(entry, { siteName: options.siteName, locale: ir.identity.meta.locale, indexable, ...(options.socialImage ? { socialImage: options.socialImage } : {}) });
+      const head = headTags(entry, { siteName: options.siteName, locale: ir.identity.meta.locale, ...(options.socialImage ? { socialImage: options.socialImage } : {}) });
       const document = replaceOnce(withPolicy, `<style>${rendered.css}</style></head>`, `${head}<link rel="stylesheet" href="${basePath}/${STYLESHEET_PLACEHOLDER}"></head>`);
       files.push({ path: filePath, contents: document.replaceAll(STYLESHEET_PLACEHOLDER, stylesheetPath) });
       routes.push({ ...entry, path: filePath });
@@ -157,7 +154,7 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   for (const missing of licenses.missing) vetoes.push({ id: 'ASSET_WITHOUT_LICENSE', detector: 'compiler', where: missing.id, detail: missing.detail });
 
   files.push({ path: 'sitemap.xml', contents: sitemapXml(metadata) });
-  files.push({ path: 'robots.txt', contents: robotsTxt(siteUrl, indexable) });
+  files.push({ path: 'robots.txt', contents: robotsTxt(siteUrl) });
   files.push({ path: 'licenses.json', contents: `${JSON.stringify(licenses.entries, null, 2)}\n` });
   files.push({ path: 'headers.json', contents: `${JSON.stringify({ '/*': csp.headers }, null, 2)}\n` });
 

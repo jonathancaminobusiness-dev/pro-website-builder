@@ -1,10 +1,10 @@
-import type { DesignIR, ReleaseGateReport } from '@pwb/domain';
+import type { ReleaseGateReport } from '@pwb/domain';
 import { ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest } from '@pwb/export';
-import { Applier, PatchGate, VersionStore } from '@pwb/orchestrator';
+import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner } from '@pwb/providers';
 import {
   ClaudeReleaseCriticProvider, ClaudeReleaseRefiner, ClaudeReleaseSummarizer, DeterministicReleaseSummarizer,
-  FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage, PatchRefiner, readEvidence,
+  FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage, PatchRefiner, readEvidence, writeReleaseDocument,
   VETO_CATALOG, type ReleaseCriticProvider, type ReleaseRefinerProvider, type ReleaseSummarizerProvider,
 } from '@pwb/stage-finalization';
 
@@ -14,6 +14,18 @@ export interface ReleaseRunOptions {
   siteUrl: string;
   siteName: string;
   modelProvider?: string;
+}
+
+/**
+ * What Gate 3 needs from the run it is releasing: the version the captain
+ * approved at gate 2, the latest refinement of it, the run's own applier so a
+ * refinement becomes a real version, and the way to persist that version.
+ */
+export interface ReleaseContext {
+  approved: VersionRecord;
+  current: VersionRecord;
+  applier: Applier;
+  adopt(version: VersionRecord): Promise<void>;
 }
 
 export interface ReleaseSnapshot {
@@ -39,7 +51,8 @@ function providers(name: string): { critic: ReleaseCriticProvider; refiner: Rele
  * The captain publishes a specific bundle digest. If the report has moved on —
  * because the document changed, or because the refiner produced a new version —
  * publishing is refused, so what reaches disk is always the bundle the captain
- * actually looked at.
+ * actually looked at. Every escalation the gate raises has to be accepted in
+ * writing before the bundle is written, so a gap is never passed over silently.
  */
 export class ReleaseRun {
   private snapshotValue: ReleaseSnapshot | undefined;
@@ -47,10 +60,7 @@ export class ReleaseRun {
 
   constructor(private readonly runId: string, private readonly options: ReleaseRunOptions) {}
 
-  async prepare(ir: DesignIR, approvedVersionId: string, signal?: AbortSignal): Promise<ReleaseSnapshot> {
-    const store = new VersionStore();
-    const applier = new Applier(store, new PatchGate());
-    const approved = applier.createRoot({ ...ir, meta: { ...ir.meta, versionId: approvedVersionId } });
+  async prepare(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
     const chosen = providers(this.options.modelProvider ?? 'fake');
     const stage = new FinalizationStage({
       criticProvider: chosen.critic,
@@ -58,14 +68,25 @@ export class ReleaseRun {
       summarizer: chosen.summarizer,
       compilerOptions: { siteUrl: this.options.siteUrl, siteName: this.options.siteName },
     });
+    // The evidence runners compile the document the gate compiles, so they can
+    // stamp their artifacts with the release they actually measured.
+    await writeReleaseDocument(this.options.evidenceDir, context.current.ir);
     const evidence = await readEvidence(this.options.evidenceDir);
-    const result = await stage.run({ runId: this.runId, version: approved, evidence, applier, ...(signal ? { signal } : {}) });
+    const result = await stage.run({
+      runId: this.runId,
+      version: context.current,
+      approved: context.approved,
+      evidence,
+      applier: context.applier,
+      ...(signal ? { signal } : {}),
+    });
+    if (result.version.id !== context.current.id) await context.adopt(result.version);
     this.compiled = result.compiled;
     this.snapshotValue = {
       runId: this.runId,
       digest: result.compiled.digest,
       versionId: result.version.id,
-      refinedFromVersionId: approved.id,
+      refinedFromVersionId: context.approved.id,
       report: result.report,
       catalog: VETO_CATALOG,
     };
@@ -75,13 +96,21 @@ export class ReleaseRun {
   snapshot(): ReleaseSnapshot | undefined { return this.snapshotValue ? structuredClone(this.snapshotValue) : undefined; }
 
   /** Only the captain publishes, and only the exact bundle the report describes. */
-  async publish(approverRole: string, digest: string): Promise<ReleaseManifest> {
+  async publish(approverRole: string, digest: string, rationale?: string): Promise<ReleaseManifest> {
     if (approverRole !== 'captain') throw new Error('Só o capitão aprova o gate de release.');
     const current = this.snapshotValue;
     if (!current || !this.compiled) throw new Error('O release ainda não foi preparado nesta execução.');
     if (digest !== current.digest) throw new Error(`O capitão aprovou o bundle ${digest}, e o release atual é ${current.digest}.`);
     if (current.report.blocked) throw new ReleaseVetoError(current.report.vetoes);
-    const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot, { approvedVersionId: current.versionId });
+    const escalations = current.report.escalations;
+    const reason = rationale?.trim() ?? '';
+    if (escalations.length > 0 && reason === '') {
+      throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
+    }
+    const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot, {
+      approvedVersionId: current.versionId,
+      ...(escalations.length > 0 ? { acceptance: { approverRole: 'captain' as const, rationale: reason, escalations } } : {}),
+    });
     this.snapshotValue = { ...current, published: { directory: manifest.directory, digest: manifest.digest } };
     return manifest;
   }

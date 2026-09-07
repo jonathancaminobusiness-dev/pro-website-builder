@@ -1,4 +1,4 @@
-import { hashJson, stageRoles, stageWritablePaths, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding, type ReleaseGateReport } from '@pwb/domain';
+import { hashJson, stageRoles, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding, type ReleaseGateReport, type ReleaseSummary } from '@pwb/domain';
 import { compileRelease, type CompiledSite, type ReleaseCompilerOptions } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { Scheduler } from '@pwb/orchestrator';
@@ -16,15 +16,20 @@ export interface FinalizationStageOptions {
   summarizer?: ReleaseSummarizerProvider;
   scheduler?: Scheduler;
   compilerOptions: Omit<ReleaseCompilerOptions, 'fonts'> & Pick<ReleaseCompilerOptions, 'fonts'>;
-  /** Paths the refiner may write. Critics get none. */
-  refinerAllowedPaths?: string[];
   promptVersion?: string;
   modelAlias?: string;
 }
 
 export interface FinalizationStageInput {
   runId: string;
+  /** The document to compile: the approved one, or the last refinement of it. */
   version: VersionRecord;
+  /**
+   * The version the captain approved coming into the stage. It differs from
+   * `version` once a previous Gate 3 run refined the document, and it is what
+   * the divergence veto compares the release against.
+   */
+  approved?: VersionRecord;
   evidence: EvidenceArtifact[];
   applier: Applier;
   signal?: AbortSignal;
@@ -39,8 +44,12 @@ export interface FinalizationStageResult {
   cycles: number;
 }
 
-/** The refiner writes the review record; the stage may write more, and does not need to. */
-const DEFAULT_REFINER_PATHS: string[] = ['/reviewRecord'];
+/**
+ * The refiner writes the review record and nothing else: the bytes the release
+ * publishes have to be the bytes the captain approved, so a refinement that
+ * changed a rendered file could never be published anyway.
+ */
+const REFINER_PATHS: string[] = ['/reviewRecord'];
 
 /**
  * The finalization stage: compile, fan out five read-only critics, run the
@@ -58,10 +67,6 @@ export class FinalizationStage {
   constructor(private readonly options: FinalizationStageOptions) {
     this.scheduler = options.scheduler ?? new Scheduler();
     this.summarizer = options.summarizer ?? new DeterministicReleaseSummarizer();
-    // The foundation decides what the finalization stage may write; a caller can
-    // narrow the refiner's reach but never widen it past that boundary.
-    const outside = (options.refinerAllowedPaths ?? DEFAULT_REFINER_PATHS).filter((path) => !stageWritablePaths.finalization.some((allowed) => path === allowed || path.startsWith(`${allowed}/`)));
-    if (outside.length > 0) throw new Error(`The finalization stage may not write ${outside.join(', ')}; it writes ${stageWritablePaths.finalization.join(', ')}.`);
   }
 
   async run(input: FinalizationStageInput): Promise<FinalizationStageResult> {
@@ -70,7 +75,9 @@ export class FinalizationStage {
     let compiled = this.compile(version.ir);
     // What the captain approved coming into this stage, kept so the gate can see
     // whether refinement changed the release rather than only the review record.
-    const approved = { versionId: input.version.id, irHash: compiled.irHash, renderedFiles: compiled.files.map((file) => [file.path, file.hash] as [string, string]) };
+    const approvedVersion = input.approved ?? input.version;
+    const approvedCompile = approvedVersion.id === version.id ? compiled : this.compile(approvedVersion.ir);
+    const approved = { versionId: approvedVersion.id, irHash: approvedCompile.irHash, renderedFiles: approvedCompile.files.map((file) => [file.path, file.hash] as [string, string]) };
     let critiques = await this.critique(input, version, compiled);
     const escalations: string[] = [];
     let previousFindingIds: string[] = [];
@@ -82,9 +89,22 @@ export class FinalizationStage {
       if (decision.action === 'stop') { escalations.push(...decision.escalations); await emit('release.refinement.stopped', { reason: decision.reason, cycles }); break; }
       previousFindingIds = decision.findingIds;
       const task = this.refinerTask(input.runId, version, compiled, findings, cycles + 1);
-      const patch = await this.options.refiner.propose(task, findings.filter((finding) => finding.severity === 'error'), input.signal);
-      if (!patch) { escalations.push('O patch-refiner não produziu proposta; os achados abertos sobem para o capitão.'); await emit('release.refinement.stopped', { reason: 'no-proposal', cycles }); break; }
-      version = input.applier.apply(patch, task, version.id);
+      // A model session that fails takes its own cycle down, never the report:
+      // the vetoes and the evidence already computed are what the captain needs
+      // most when the refiner cannot answer.
+      let next: VersionRecord;
+      try {
+        const patch = await this.options.refiner.propose(task, findings.filter((finding) => finding.severity === 'error'), input.signal);
+        if (!patch) { escalations.push('O patch-refiner não produziu proposta; os achados abertos sobem para o capitão.'); await emit('release.refinement.stopped', { reason: 'no-proposal', cycles }); break; }
+        next = input.applier.apply(patch, task, version.id);
+      } catch (error) {
+        if (input.signal?.aborted) throw error;
+        const reason = error instanceof Error ? error.message : 'O patch-refiner falhou sem mensagem.';
+        escalations.push(`O patch-refiner falhou no ciclo ${cycles + 1} e os achados seguem abertos: ${reason}`);
+        await emit('release.refinement.stopped', { reason: 'refiner-failed', cycles, detail: reason });
+        break;
+      }
+      version = next;
       cycles += 1;
       await emit('release.refined', { cycle: cycles, versionId: version.id, findings: previousFindingIds });
       compiled = this.compile(version.ir);
@@ -102,7 +122,17 @@ export class FinalizationStage {
       refinementCycles: cycles,
       escalations,
     });
-    const summary = await this.summarizer.summarize({ bundleDigest: compiled.digest, vetoes: draft.vetoes, critiques, escalations: draft.escalations }, input.signal);
+    // The summarizer has no gate authority, so its failure cannot cost the
+    // captain the report either: it escalates and the report goes out unsummarized.
+    let summary: ReleaseSummary | undefined;
+    try {
+      summary = await this.summarizer.summarize({ bundleDigest: compiled.digest, vetoes: draft.vetoes, critiques, escalations: draft.escalations }, input.signal);
+    } catch (error) {
+      if (input.signal?.aborted) throw error;
+      const reason = error instanceof Error ? error.message : 'O release-summarizer falhou sem mensagem.';
+      escalations.push(`O release-summarizer falhou e o release segue sem resumo: ${reason}`);
+      await emit('release.summary.failed', { reason });
+    }
     // The report is rebuilt with the summary attached, never adjusted by it.
     const report = evaluateReleaseGate({
       compiled,
@@ -113,7 +143,7 @@ export class FinalizationStage {
       releasedVersionId: version.id,
       refinementCycles: cycles,
       escalations,
-      summary,
+      ...(summary ? { summary } : {}),
     });
     await emit('release.gate.ready', { blocked: report.blocked, vetoes: report.vetoes.length, digest: report.bundleDigest });
     return { version, compiled, critiques, report, cycles };
@@ -151,7 +181,6 @@ export class FinalizationStage {
   }
 
   private refinerTask(runId: string, version: VersionRecord, compiled: CompiledSite, findings: ReleaseFinding[], attempt: number): AgentTask {
-    const allowedPaths = this.options.refinerAllowedPaths ?? DEFAULT_REFINER_PATHS;
     const documentSlice: Record<string, unknown> = {
       '/identity': version.ir.identity,
       '/reviewRecord': version.ir.reviewRecord,
@@ -170,7 +199,7 @@ export class FinalizationStage {
       promptVersion: this.options.promptVersion ?? 'phase3-v1',
       modelAlias: this.options.modelAlias ?? 'claude-local',
       deadlineMs: 8 * 60_000,
-      allowedPaths,
+      allowedPaths: REFINER_PATHS,
       brief: 'Resolva os achados de release com o menor patch possível, sem reescrever o site.',
       documentSlice,
     };

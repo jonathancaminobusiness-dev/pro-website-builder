@@ -68,10 +68,19 @@ export const releaseCritiqueSchema = z.object({
   findings: z.array(releaseFindingSchema),
 });
 
+/**
+ * A measurement is only evidence about the release it was taken against, so
+ * every artifact names that release. The gate credits an artifact only when both
+ * identifiers match the bundle it is evaluating.
+ */
 export const evidenceArtifactSchema = z.object({
   id: z.string().min(1),
   runner: z.enum(['vitest', 'playwright', 'axe', 'lighthouse', 'compiler']),
   engine: z.enum(['node', 'chromium', 'firefox', 'webkit']),
+  /** Digest of the compiled bundle the runner measured. */
+  releaseDigest: z.string().min(1),
+  /** Hash of the document that bundle was compiled from. */
+  irHash: z.string().min(1),
   route: z.string(),
   state: z.string(),
   status: z.enum(['passed', 'failed']),

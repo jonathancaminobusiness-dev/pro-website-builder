@@ -3,7 +3,6 @@ export * from './bundle.js';
 export * from './compiler.js';
 export * from './csp.js';
 export * from './css-color.js';
-export * from './export.js';
 export * from './fonts.js';
 export * from './html-scan.js';
 export * from './licenses.js';

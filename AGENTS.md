@@ -15,6 +15,9 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - The node prop and semantic vocabularies are closed on purpose. Widening either means teaching the renderer to read the new field in the same change, the way `responsive` is read as a container query — a field nothing reads is the reason the earlier one was removed.
 - Release vetoes, the evidence runners and the Gate 3 commands are described under "Finalization stage and Gate 3" in `README.md`; the veto catalogue itself is `packages/stage-finalization/src/veto-catalog.ts`.
 - A veto is objective and blocking, and a critic can raise none: critic tasks carry an empty `allowedPaths`, `ReleaseFinding` has no veto severity, and `evaluateReleaseGate` recomputes every veto from the compiled bundle and the raw artifacts. Keep it that way when extending the stage.
+- There is one export path: `compileRelease` → `writeReleaseBundle`. Both the finalization approval and Gate 3 go through it, so a new export must not bypass the vetoes.
+- Evidence counts only when its `releaseDigest` matches the bundle being evaluated; a gap is an escalation the captain accepts in writing, never a silent pass.
+- `designIRSchema.parse` normalizes the document, so a version from the Applier can compile to a different digest than the same fixture compiled directly. Derive an expected digest from the version, not from `createFixtureIR()`.
 
 ## Maintaining this file
 

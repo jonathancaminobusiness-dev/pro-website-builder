@@ -11,10 +11,9 @@
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
-import { createFixtureIR } from '../packages/domain/src/index.js';
 import { compileRelease } from '../packages/export/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
-import { artifactHash, createReleaseHarness, writeEvidenceArtifact } from '../packages/stage-finalization/src/index.js';
+import { artifactHash, createReleaseHarness, loadReleaseDocument, writeEvidenceArtifact } from '../packages/stage-finalization/src/index.js';
 
 interface LighthouseResult { lhr: { categories: Record<string, { score: number | null }>; audits: Record<string, { numericValue?: number; score: number | null }>; runtimeError?: { message: string } } }
 type LighthouseFn = (url: string, flags: Record<string, unknown>) => Promise<LighthouseResult | undefined>;
@@ -41,7 +40,7 @@ const FORM_FACTORS = [
 ];
 
 async function main(): Promise<void> {
-  const ir = createFixtureIR();
+  const ir = await loadReleaseDocument(evidenceDir);
   const rendered = renderDesign(ir);
   const compiled = compileRelease(rendered, ir, { siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid', siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder' });
   const harness = createReleaseHarness(compiled, rendered, 0);
@@ -79,7 +78,7 @@ async function main(): Promise<void> {
         };
         written.push(await writeEvidenceArtifact(evidenceDir, {
           id: `lighthouse-${factor.name}-${route.route === '/' ? 'home' : route.route.slice(1)}`,
-          runner: 'lighthouse', engine: 'chromium', route: route.route, state: factor.name,
+          runner: 'lighthouse', engine: 'chromium', releaseDigest: compiled.digest, irHash: compiled.irHash, route: route.route, state: factor.name,
           status: lhr.runtimeError ? 'failed' : 'passed',
           path: route.path,
           hash: artifactHash(metrics),

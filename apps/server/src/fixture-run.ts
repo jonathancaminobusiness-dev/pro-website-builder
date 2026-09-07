@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { createFixtureIR, type AgentTask, type Approval } from '@pwb/domain';
-import { exportStatic, type ExportManifest } from '@pwb/export';
+import { compileRelease, writeReleaseBundle, type ReleaseManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type ScheduleResult, type VersionRecord, VersionStore } from '@pwb/orchestrator';
+import type { ReleaseContext } from './release-run.js';
 import type { ModelProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import type { ProjectRepository } from './db/repository.js';
@@ -28,7 +29,7 @@ export interface FixtureSnapshot {
   currentVersion: VersionRecord;
   rendered: RenderedDocument;
   approvals: Approval[];
-  exportManifest?: ExportManifest;
+  exportManifest?: ReleaseManifest;
   lintErrorCount: number;
 }
 
@@ -43,7 +44,7 @@ export class FixtureRun {
   private currentStage: Stage | null = null;
   private stageIndex = 0;
   private status: FixtureStatus = 'queued';
-  private exportManifest: ExportManifest | undefined;
+  private exportManifest: ReleaseManifest | undefined;
   private lintErrorCount = 0;
   private initialized = false;
   private started = false;
@@ -59,7 +60,15 @@ export class FixtureRun {
   private readonly attempts = new Map<Stage, number>();
   private readonly reported = new Set<string>();
 
-  constructor(private readonly options: { repository: ProjectRepository; exportRoot: string; provider: ModelProvider }) {}
+  /**
+   * The release refiner writes through the run's own versions, but never shares
+   * the stage gate's compare-and-swap bookkeeping: it proposes against the
+   * prototype-approved version, which the finalization stage already patched.
+   */
+  private readonly releaseGate = new PatchGate();
+  private releaseVersion: VersionRecord | undefined;
+
+  constructor(private readonly options: { repository: ProjectRepository; exportRoot: string; provider: ModelProvider; siteUrl?: string; siteName?: string }) {}
 
   async initialize(runId: string): Promise<void> {
     this.runIdentifier = runId;
@@ -129,9 +138,9 @@ export class FixtureRun {
     const approval: Approval = { id: `${this.runId()}-${stage}-approval`, stage, approverRole: 'captain', versionId: approved.id, versionHash: approved.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
     const previousStatus = this.status;
     this.status = 'queued';
-    let manifest: ExportManifest | undefined;
+    let manifest: ReleaseManifest | undefined;
     try {
-      manifest = stage === 'finalization' ? await exportStatic(this.rendered, approved.ir, this.options.exportRoot) : undefined;
+      manifest = stage === 'finalization' ? await this.writeRelease() : undefined;
       await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
       await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
     } catch (error) { this.status = previousStatus; throw error; }
@@ -186,6 +195,60 @@ export class FixtureRun {
   }
 
   snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
+
+  /**
+   * Why Gate 3 may not run yet, or nothing when it may.
+   *
+   * The plan closes three gates in order, so a release is only ever compiled
+   * from a document the captain approved at gate 2 — approving finalization
+   * without the first two approvals would publish a site nobody signed off.
+   */
+  releaseBlocker(): string | undefined {
+    this.requireInitialized();
+    for (const stage of ['identity', 'prototype'] as const) {
+      if (!this.approvedAt(stage)) return `O gate de release exige a aprovação do capitão na etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
+    }
+    const approval = this.approvedAt('prototype')!;
+    if (!this.store.get(approval.versionId)) return `A versão aprovada ${approval.versionId} não está no repositório desta execução.`;
+    return undefined;
+  }
+
+  /** The document Gate 3 releases: the prototype-approved version, plus any refinement of it. */
+  releaseContext(): ReleaseContext {
+    const blocker = this.releaseBlocker();
+    if (blocker) throw new Error(blocker);
+    const approved = this.store.get(this.approvedAt('prototype')!.versionId)!;
+    return {
+      approved,
+      current: this.releaseVersion ?? approved,
+      applier: new Applier(this.store, this.releaseGate),
+      adopt: async (version) => {
+        this.releaseVersion = version;
+        await ignoringDuplicate(this.options.repository.saveVersion({ id: version.id, projectId: this.projectId(), ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir }));
+        await this.record('version.created', { versionId: version.id, hash: version.hash });
+        await this.record('release.refined', { versionId: version.id, approvedVersionId: approved.id });
+      },
+    };
+  }
+
+  private approvedAt(stage: Stage): Approval | undefined {
+    return [...this.approvals].reverse().find((entry) => entry.stage === stage && entry.decision === 'approved');
+  }
+
+  /**
+   * The one export path. Approving finalization compiles the document through
+   * the release compiler and writes the content-addressed bundle, so every veto
+   * — a secret in a page, an asset without a licence, a broken link — refuses
+   * the ordinary approval exactly as it refuses Gate 3.
+   */
+  private async writeRelease(): Promise<ReleaseManifest> {
+    const source = this.releaseVersion ?? this.currentVersion;
+    const compiled = compileRelease(renderDesign(source.ir), source.ir, {
+      siteUrl: this.options.siteUrl ?? 'https://site.invalid',
+      siteName: this.options.siteName ?? 'pro-website-builder',
+    });
+    return writeReleaseBundle(compiled, this.options.exportRoot, { approvedVersionId: source.id });
+  }
 
   private launch(stage: Stage): Promise<void> {
     const plan = this.planner.plan(this.runId(), this.currentVersion.id, BRIEF);

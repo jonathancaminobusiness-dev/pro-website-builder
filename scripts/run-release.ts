@@ -1,7 +1,7 @@
 /**
  * Drives the finalization stage from the command line.
  *
- * Without arguments it compiles the fixture release, runs the five critics with
+ * Without arguments it compiles the release document, runs the five critics with
  * the deterministic providers, evaluates Gate 3 and writes the immutable bundle
  * when nothing vetoes it. With `--serve` it keeps the release and the preview of
  * the same document online so the independent evidence runners — Playwright on
@@ -12,12 +12,12 @@
  *   PWB_SITE_NAME      site name used in Open Graph (default "pro-website-builder")
  *   PWB_RELEASE_ROOT   where the content-addressed bundle is written (default releases/)
  *   PWB_EVIDENCE_DIR   where the evidence runners write their artifacts (default artifacts/release/)
- *   PWB_RELEASE_PORT   harness port for --serve (default 4312)
+ *   PWB_RELEASE_DOCUMENT  the DesignIR to release (default <PWB_EVIDENCE_DIR>/release-document.json, else the fixture)
+ *   PWB_RELEASE_PORT   harness port for --serve (default: a port the OS chooses)
  *   PWB_MODEL_PROVIDER "fake" (default) or "claude-code" for the real critic sessions
  */
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createFixtureIR } from '../packages/domain/src/index.js';
 import { ReleaseVetoError, writeReleaseBundle } from '../packages/export/src/index.js';
 import { Applier, PatchGate, VersionStore } from '../packages/orchestrator/src/index.js';
 import { ClaudeJsonRunner } from '../packages/providers/src/index.js';
@@ -25,7 +25,8 @@ import { renderDesign } from '../packages/renderer/src/index.js';
 import {
   ClaudeReleaseCriticProvider, ClaudeReleaseRefiner, ClaudeReleaseSummarizer, createReleaseHarness,
   DeterministicReleaseSummarizer, FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage,
-  PatchRefiner, readEvidence, type ReleaseCriticProvider, type ReleaseRefinerProvider, type ReleaseSummarizerProvider,
+  loadReleaseDocument, PatchRefiner, readEvidence, writeReleaseDocument,
+  type ReleaseCriticProvider, type ReleaseRefinerProvider, type ReleaseSummarizerProvider,
 } from '../packages/stage-finalization/src/index.js';
 
 const root = process.cwd();
@@ -49,7 +50,10 @@ async function main(): Promise<void> {
   await mkdir(releaseRoot, { recursive: true });
   const store = new VersionStore();
   const applier = new Applier(store, new PatchGate());
-  const approved = applier.createRoot(createFixtureIR());
+  const approved = applier.createRoot(await loadReleaseDocument(evidenceDir));
+  // The evidence runners compile this same document, so their artifacts name the
+  // release this run is about to evaluate.
+  await writeReleaseDocument(evidenceDir, approved.ir);
   const chosen = providers();
   const stage = new FinalizationStage({
     criticProvider: chosen.critic,
