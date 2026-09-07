@@ -13,12 +13,12 @@ const root = process.cwd();
 const databasePath = process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'cli-fixture.sqlite');
 const exportRoot = process.env.PWB_EXPORT_ROOT ?? join(root, 'exports');
 const renderCacheDir = process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
-const previewPort = Number(process.env.PWB_PREVIEW_PORT ?? 4311);
 
 async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSummary> {
   const versionId = snapshot.currentVersion.id;
   const reviewed = renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` });
-  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, previewPort);
+  // Port 0 keeps this CLI off the developer ports, so it runs beside the dev server and other checkouts.
+  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, 0);
   await preview.start();
   try {
     // `createRenderMatrix` owns the matrix; this CLI only chooses how wide a sweep to pay for and

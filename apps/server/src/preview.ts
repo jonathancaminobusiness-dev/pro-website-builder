@@ -1,4 +1,5 @@
 import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { RenderedDocument } from '@pwb/renderer';
 import { PREVIEW_ORIGIN, previewHeaders } from './security.js';
 
@@ -20,8 +21,17 @@ export function createPreviewServer(getRendered: (versionId: string) => Rendered
   });
   return {
     server,
-    origin: `http://127.0.0.1:${port}`,
-    start: () => new Promise((resolve) => server.listen(port, '127.0.0.1', resolve)),
+    // Read back from the socket, because a caller that asks for port 0 — as every script and test
+    // does, so parallel checkouts never contend — only learns its port once the server is listening.
+    get origin(): string {
+      const address = server.address();
+      if (typeof address !== 'object' || address === null) throw new Error('The preview origin is only known once the server is listening.');
+      return `http://127.0.0.1:${(address as AddressInfo).port}`;
+    },
+    start: () => new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); });
+    }),
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
 }

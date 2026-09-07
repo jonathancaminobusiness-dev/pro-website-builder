@@ -3,20 +3,9 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { renderDesign } from '@pwb/renderer';
-import { assertBrowserInstalled, cacheKey, createRenderCases, evaluateQa } from './index.js';
+import { assertBrowserInstalled, cacheKey, evaluateQa, type RenderCase } from './index.js';
 
 describe('render hub', () => {
-  it('enumerates the phase 0 responsive and state matrix', () => {
-    const ir = createFixtureIR();
-    const cases = createRenderCases(ir, `/preview/${ir.meta.versionId}`);
-    expect(cases).toHaveLength(ir.pages.routes.length * 3 * Object.keys(ir.stateFixtures).length);
-    expect(cases).toEqual(expect.arrayContaining([
-      { route: `/preview/${ir.meta.versionId}/`, width: 360, state: 'default', reducedMotion: false },
-      { route: `/preview/${ir.meta.versionId}/`, width: 360, state: 'reduced', reducedMotion: true },
-      { route: `/preview/${ir.meta.versionId}/proof`, width: 1440, state: 'default', reducedMotion: false },
-    ]));
-  });
-
   it('names the install command when Playwright has no browser to measure with', () => {
     expect(() => assertBrowserInstalled(join(tmpdir(), 'pwb-chromium-that-is-not-installed'))).toThrow(/playwright install chromium/);
   });
@@ -24,7 +13,7 @@ describe('render hub', () => {
   it('uses a content-addressed render cache key and deterministic QA checks', () => {
     const ir = createFixtureIR();
     const rendered = renderDesign(ir);
-    const renderCase = createRenderCases(ir, `/preview/${ir.meta.versionId}`)[0]!;
+    const renderCase: RenderCase = { route: '/', width: 1440, state: 'default', reducedMotion: false };
     expect(cacheKey(rendered, renderCase)).toHaveLength(64);
     expect(cacheKey({ ...rendered, css: `${rendered.css}\nbody { container-type: inline-size; }` }, renderCase)).not.toBe(cacheKey(rendered, renderCase));
     expect(cacheKey({ ...rendered }, renderCase)).toBe(cacheKey(rendered, renderCase));
