@@ -75,8 +75,16 @@ export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string
     licenses: compiled.licenses.entries,
   };
   // The manifest is written last and is excluded from the digest, so the same IR
-  // and toolchain always produce the same directory name and the same bytes.
-  await writeFile(join(directory, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  // and toolchain always produce the same directory name and the same bytes. The
+  // digest cannot cover the manifest that names it, so a second write into an
+  // existing bundle is refused rather than allowed to mutate it.
+  const manifestPath = join(directory, 'manifest.json');
+  const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
+  const existing = await readFile(manifestPath, 'utf8').catch(() => undefined);
+  if (existing !== undefined && existing !== serialized) {
+    throw new Error(`The bundle ${compiled.digest} already exists with a different manifest; an immutable release is never rewritten.`);
+  }
+  await writeFile(manifestPath, serialized, 'utf8');
   return manifest;
 }
 

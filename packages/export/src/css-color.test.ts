@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isFallbackFailure, needsColorFallback, srgbFallback, supportsConditionFor } from './css-color.js';
+import { isFallbackFailure, needsColorFallback, srgbFallback, srgbFallbackValue, supportsConditionFor } from './css-color.js';
 
 describe('sRGB fallbacks for modern colour syntax', () => {
   it('leaves values every browser already understands alone', () => {
@@ -45,9 +45,27 @@ describe('sRGB fallbacks for modern colour syntax', () => {
     }
   });
 
+  it('converts a colour that sits inside a larger value, keeping the rest intact', () => {
+    expect(srgbFallbackValue('0 18px 44px oklch(0% 0 0 / 0.5)')).toEqual({ text: '0 18px 44px #00000080' });
+    expect(srgbFallbackValue('linear-gradient(180deg, oklch(100% 0 0), oklab(0 0 0))')).toEqual({ text: 'linear-gradient(180deg, #ffffff, #000000)' });
+    expect(srgbFallbackValue('inset 0 0 0 1px color(srgb 1 0 0)')).toEqual({ text: 'inset 0 0 0 1px #ff0000' });
+  });
+
+  it('leaves a value with no modern colour syntax alone', () => {
+    expect(srgbFallbackValue('0 18px 44px rgba(68,52,36,.08)')).toBeUndefined();
+    expect(srgbFallbackValue('"Watercolor(Pro)", Georgia, serif')).toBeUndefined();
+  });
+
+  it('still refuses a value whose colour syntax it cannot convert', () => {
+    for (const value of ['0 2px 4px color-mix(in oklab, red, blue)', 'linear-gradient(180deg, light-dark(#fff, #000), #333)']) {
+      expect(isFallbackFailure(srgbFallbackValue(value)), value).toBe(true);
+    }
+  });
+
   it('guards each value with a condition the browser can actually test', () => {
     expect(supportsConditionFor('oklch(70% 0.1 145)')).toBe('color: oklch(0% 0 0)');
     expect(supportsConditionFor('lab(50% 20 -30)')).toBe('color: lab(0% 0 0)');
     expect(supportsConditionFor('color(display-p3 1 0 0)')).toBe('color: color(srgb 0 0 0)');
+    expect(supportsConditionFor('0 18px 44px oklch(30% 0.02 250)')).toBe('color: oklch(0% 0 0)');
   });
 });

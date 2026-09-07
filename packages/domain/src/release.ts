@@ -104,7 +104,10 @@ export const releaseGateReportSchema = z.object({
   stage: z.literal('finalization'),
   bundleDigest: z.string().min(1),
   irHash: z.string().min(1),
+  /** The version the captain approved coming into the stage. */
   approvedVersionId: z.string().min(1),
+  /** The version the bundle was compiled from; it differs when the refiner changed the document. */
+  releasedVersionId: z.string().min(1),
   rendererVersion: z.string().min(1),
   compilerVersion: z.string().min(1),
   blocked: z.boolean(),

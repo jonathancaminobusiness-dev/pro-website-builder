@@ -35,13 +35,19 @@ function textOf(file: AuditableFile): string | undefined {
   return undefined;
 }
 
+/** The renderer escapes quotes, and a secret is still a secret after the browser decodes them. */
+function decodeEntities(text: string): string {
+  return text.replaceAll('&quot;', '"').replaceAll('&#39;', "'").replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
+}
+
 export function scanBundleSecrets(files: AuditableFile[]): ReleaseVeto[] {
   const vetoes: ReleaseVeto[] = [];
   for (const file of files) {
     const text = textOf(file);
     if (text === undefined) continue;
+    const decoded = decodeEntities(text);
     for (const [name, pattern] of SECRET_PATTERNS) {
-      if (pattern.test(text)) vetoes.push({ id: 'SECRET_IN_BUNDLE', detector: 'compiler', where: file.path, detail: `The bundle file ${file.path} contains a ${name}.` });
+      if (pattern.test(text) || pattern.test(decoded)) vetoes.push({ id: 'SECRET_IN_BUNDLE', detector: 'compiler', where: file.path, detail: `The bundle file ${file.path} contains a ${name}.` });
     }
   }
   return vetoes;
@@ -50,6 +56,8 @@ export function scanBundleSecrets(files: AuditableFile[]): ReleaseVeto[] {
 export interface HtmlAuditContext {
   /** Paths present in the bundle, used to prove every internal link resolves. */
   paths: Set<string>;
+  /** The site's base path, stripped before a link is matched against the bundle. */
+  basePath: string;
 }
 
 function internalTarget(url: string): string | undefined {
@@ -85,8 +93,9 @@ export function auditHtmlDocument(path: string, html: string, context: HtmlAudit
       // `srcset` carries a comma-separated list; every candidate must resolve.
       const urls = attribute.name === 'srcset' ? value.split(',').map((entry) => entry.trim().split(/\s+/)[0] ?? '') : [value];
       for (const url of urls) {
-        const target = internalTarget(url);
-        if (target === undefined || target === '') continue;
+        const absolute = internalTarget(url);
+        if (absolute === undefined || absolute === '') continue;
+        const target = context.basePath !== '' && absolute.startsWith(`${context.basePath}/`) ? absolute.slice(context.basePath.length) : absolute;
         const stripped = target.replace(/^\//, '').replace(/\/$/, '');
         if (![target.replace(/^\//, ''), `${stripped}/index.html`].some((candidate) => context.paths.has(candidate))) {
           vetoes.push({ id: 'BROKEN_PRIMARY_LINK', detector: 'compiler', where: path, detail: `<${tag.name} ${attribute.name}> points at ${url}, which the bundle does not contain.` });

@@ -60,8 +60,31 @@ describe('independent evidence', () => {
       .toMatchObject({ id: 'BUILD_FAILED', detector: 'evidence', detail: 'overflow at 360px' });
   });
 
+  it('blocks on a veto an artifact mislabelled instead of crashing the gate', () => {
+    const vetoes = evidenceVetoes([artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', vetoes: [{ id: 'CRITICAL_AA_REGRESSION', detector: 'compiler', where: '/', detail: 'contraste' }] })]);
+    expect(vetoes).toHaveLength(1);
+    expect(vetoes[0]).toMatchObject({ id: 'CRITICAL_AA_REGRESSION', detector: 'evidence' });
+  });
+
+  it('turns a veto the evidence may not raise into a build failure rather than dropping it', () => {
+    const vetoes = evidenceVetoes([artifact({ id: 'lh-home', runner: 'lighthouse', engine: 'chromium', vetoes: [{ id: 'SECRET_IN_BUNDLE', detector: 'evidence', where: '/', detail: 'chave no bundle' }] })]);
+    expect(vetoes[0]).toMatchObject({ id: 'BUILD_FAILED', detector: 'evidence' });
+    expect(vetoes[0]!.detail).toContain('SECRET_IN_BUNDLE');
+  });
+
   it('keeps a clean run clean', () => {
     expect(evidenceVetoes([artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', metrics: { critical: 0, serious: 0, moderate: 3 } })])).toEqual([]);
+  });
+
+  it('does not let a browser scan stand in for a Playwright run on that engine', () => {
+    const coverage = evidenceCoverage([artifact({ id: 'axe', runner: 'axe', engine: 'chromium' })]);
+    expect(coverage.engines).toEqual([]);
+    expect(coverage.missing.join(' ')).toMatch(/Playwright em chromium/);
+  });
+
+  it('says out loud when a runner ran and failed instead of counting it as coverage', () => {
+    const coverage = evidenceCoverage([artifact({ id: 'lh-home', runner: 'lighthouse', engine: 'chromium', status: 'failed', notes: ['NO_FCP: a página não pintou'] })]);
+    expect(coverage.missing.join(' ')).toMatch(/NO_FCP/);
   });
 
   it('names every runner and engine that produced no evidence', () => {
@@ -222,7 +245,8 @@ describe('Gate 3', () => {
     return {
       compiled, critiques, evidence: [] as EvidenceArtifact[],
       parity: checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)),
-      approved: { versionId: 'v-approved', irHash: compiled.irHash },
+      approved: { versionId: 'v-approved', irHash: compiled.irHash, renderedFiles: compiled.files.map((file) => [file.path, file.hash] as [string, string]) },
+      releasedVersionId: 'v-approved',
       refinementCycles: 0, escalations: [] as string[], ...overrides,
     };
   }
@@ -239,15 +263,45 @@ describe('Gate 3', () => {
     const { ir } = compiledFixture();
     ir.assets.items[0]!.provenance.license = '';
     const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
-    const report = evaluateReleaseGate(gateInput({ compiled, approved: { versionId: 'v', irHash: compiled.irHash }, parity: checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)) }));
+    const report = evaluateReleaseGate(gateInput({
+      compiled,
+      approved: { versionId: 'v', irHash: compiled.irHash, renderedFiles: compiled.files.map((file) => [file.path, file.hash] as [string, string]) },
+      parity: checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)),
+    }));
     expect(report.blocked).toBe(true);
     expect(report.vetoes.map((entry) => entry.id)).toContain('ASSET_WITHOUT_LICENSE');
   });
 
-  it('blocks when the bundle was compiled from a document the captain did not approve', () => {
-    const report = evaluateReleaseGate(gateInput({ approved: { versionId: 'v-approved', irHash: 'a-different-hash' } }));
-    expect(report.vetoes.map((entry) => entry.id)).toContain('RELEASE_DIVERGES_FROM_APPROVED');
+  it('blocks when the release would publish something other than what was approved', () => {
+    const approvedIr = createFixtureIR();
+    approvedIr.pages.routes[0]!.nodes.find((node) => node.id === 'home-title')!.props.text = 'Outro título aprovado.';
+    const approvedCompile = compileRelease(renderDesign(approvedIr), approvedIr, COMPILER_OPTIONS);
+    const report = evaluateReleaseGate(gateInput({
+      approved: { versionId: 'v-approved', irHash: approvedCompile.irHash, renderedFiles: approvedCompile.files.map((file) => [file.path, file.hash] as [string, string]) },
+    }));
+    const divergence = report.vetoes.find((entry) => entry.id === 'RELEASE_DIVERGES_FROM_APPROVED');
+    expect(divergence?.detail).toContain('index.html');
     expect(report.blocked).toBe(true);
+  });
+
+  it('treats a refinement that only records findings as no divergence at all', () => {
+    const { ir } = compiledFixture();
+    const refined = createFixtureIR();
+    refined.reviewRecord.findings = ['accessibility:axe-home: contraste insuficiente'];
+    const refinedCompile = compileRelease(renderDesign(refined), refined, COMPILER_OPTIONS);
+    const approvedCompile = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
+    const report = evaluateReleaseGate(gateInput({
+      compiled: refinedCompile,
+      approved: { versionId: 'v-approved', irHash: approvedCompile.irHash, renderedFiles: approvedCompile.files.map((file) => [file.path, file.hash] as [string, string]) },
+      releasedVersionId: 'v-refined',
+      refinementCycles: 1,
+      parity: checkPreviewReleaseParity(renderDesign(refined), refinedCompile, pageIds(refined)),
+    }));
+    expect(report.vetoes).toEqual([]);
+    expect(report.blocked).toBe(false);
+    expect(report.approvedVersionId).toBe('v-approved');
+    expect(report.releasedVersionId).toBe('v-refined');
+    expect(report.escalations.join(' ')).toMatch(/patch-refiner produziu a versão v-refined/);
   });
 
   it('blocks when the release stops matching the preview', () => {
@@ -264,7 +318,7 @@ describe('Gate 3', () => {
     ir.assets.items[0]!.provenance.license = '';
     const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
     const lying = { headline: 'tudo certo', highlights: [], openQuestions: [], vetoCount: 0, gateAuthority: 'none' as const };
-    const report = evaluateReleaseGate(gateInput({ compiled, approved: { versionId: 'v', irHash: compiled.irHash }, parity: { matched: true, routes: [] }, summary: lying }));
+    const report = evaluateReleaseGate(gateInput({ compiled, approved: { versionId: 'v', irHash: compiled.irHash, renderedFiles: compiled.files.map((file) => [file.path, file.hash] as [string, string]) }, parity: { matched: true, routes: [] }, summary: lying }));
     expect(report.blocked).toBe(true);
     expect(report.summary?.vetoCount).toBe(0);
     expect(report.vetoes.length).toBeGreaterThan(0);
@@ -301,6 +355,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const { stage, applier, version, evidence } = stageFor([
       artifact({ id: 'vitest', runner: 'vitest', engine: 'node' }),
       artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium' }),
+      artifact({ id: 'pw-chromium', runner: 'playwright', engine: 'chromium' }),
       artifact({ id: 'pw-firefox', runner: 'playwright', engine: 'firefox' }),
       artifact({ id: 'pw-webkit', runner: 'playwright', engine: 'webkit' }),
       artifact({ id: 'lh-mobile', runner: 'lighthouse', engine: 'chromium', metrics: { performance: 0.98 } }),

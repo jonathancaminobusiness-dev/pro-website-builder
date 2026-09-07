@@ -91,7 +91,9 @@ export function planFonts(identity: IdentitySpec, fonts: FontSource[], hashOf: (
       `font-style:${font.style};`,
       `font-weight:${font.weight};`,
       'font-display:swap;',
-      `src:url("/${path}") format("${font.format}");`,
+      // Relative to the stylesheet, which lives beside the fonts in `assets/`,
+      // so the release works at any base path.
+      `src:url("${path.replace('assets/', '')}") format("${font.format}");`,
       ...(font.unicodeRange ? [`unicode-range:${font.unicodeRange};`] : []),
       '}',
     ].join(''));

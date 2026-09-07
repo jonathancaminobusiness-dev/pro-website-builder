@@ -63,6 +63,9 @@ export class FinalizationStage {
     const emit = async (type: string, payload: Record<string, unknown>): Promise<void> => { await input.onEvent?.(type, payload); };
     let version = input.version;
     let compiled = this.compile(version.ir);
+    // What the captain approved coming into this stage, kept so the gate can see
+    // whether refinement changed the release rather than only the review record.
+    const approved = { versionId: input.version.id, irHash: compiled.irHash, renderedFiles: compiled.files.map((file) => [file.path, file.hash] as [string, string]) };
     let critiques = await this.critique(input, version, compiled);
     const escalations: string[] = [];
     let previousFindingIds: string[] = [];
@@ -89,7 +92,8 @@ export class FinalizationStage {
       evidence: input.evidence,
       critiques,
       parity,
-      approved: { versionId: version.id, irHash: compiled.irHash },
+      approved,
+      releasedVersionId: version.id,
       refinementCycles: cycles,
       escalations,
     });
@@ -100,7 +104,8 @@ export class FinalizationStage {
       evidence: input.evidence,
       critiques,
       parity,
-      approved: { versionId: version.id, irHash: compiled.irHash },
+      approved,
+      releasedVersionId: version.id,
       refinementCycles: cycles,
       escalations,
       summary,

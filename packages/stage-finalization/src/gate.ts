@@ -1,4 +1,4 @@
-import { RELEASE_RUBRIC_MINIMUM, releaseGateReportSchema, type EvidenceArtifact, type ParityReport, type ReleaseCritique, type ReleaseGateReport, type ReleaseSummary, type ReleaseVeto } from '@pwb/domain';
+import { hashJson, RELEASE_RUBRIC_MINIMUM, releaseGateReportSchema, type EvidenceArtifact, type ParityReport, type ReleaseCritique, type ReleaseGateReport, type ReleaseSummary, type ReleaseVeto } from '@pwb/domain';
 import type { CompiledSite } from '@pwb/export';
 import { evidenceCoverage, evidenceVetoes } from './evidence.js';
 import { RELEASE_CRITICS } from './critics.js';
@@ -9,18 +9,39 @@ export interface ReleaseGateInput {
   evidence: EvidenceArtifact[];
   critiques: ReleaseCritique[];
   parity: ParityReport;
-  approved: { versionId: string; irHash: string };
+  approved: {
+    versionId: string;
+    irHash: string;
+    /** Path and hash of every file the approved document compiles to. */
+    renderedFiles: Array<[string, string]>;
+  };
+  releasedVersionId: string;
   refinementCycles: number;
   escalations: string[];
   /** Read for display only; it can never change a verdict. */
   summary?: ReleaseSummary;
 }
 
-/** The gate's own veto: the bundle must come from the version the captain approved. */
+/**
+ * The gate's own veto: what the release would publish must be what the captain
+ * approved.
+ *
+ * It compares the compiled files, not the document, so the refiner recording a
+ * finding in the review record is not a divergence while a token or a page that
+ * changed the rendered output is. Comparing the document hash instead would
+ * either be tautological — the bundle always comes from the document it was
+ * compiled from — or would fire on bookkeeping.
+ */
 function divergenceVetoes(input: ReleaseGateInput): ReleaseVeto[] {
   const vetoes: ReleaseVeto[] = [];
-  if (input.compiled.irHash !== input.approved.irHash) {
-    vetoes.push({ id: 'RELEASE_DIVERGES_FROM_APPROVED', detector: 'gate', where: input.approved.versionId, detail: `O bundle foi compilado do documento ${input.compiled.irHash.slice(0, 12)}, e o capitão aprovou ${input.approved.irHash.slice(0, 12)}.` });
+  const released = input.compiled.files.map((file) => [file.path, file.hash] as [string, string]);
+  if (hashJson(released) !== hashJson(input.approved.renderedFiles)) {
+    const approvedPaths = new Map(input.approved.renderedFiles);
+    const changed = [
+      ...released.filter(([path, hash]) => approvedPaths.get(path) !== hash).map(([path]) => path),
+      ...input.approved.renderedFiles.filter(([path]) => !released.some(([other]) => other === path)).map(([path]) => path),
+    ];
+    vetoes.push({ id: 'RELEASE_DIVERGES_FROM_APPROVED', detector: 'gate', where: input.approved.versionId, detail: `O release mudou depois da versão aprovada ${input.approved.versionId} em: ${[...new Set(changed)].sort().join(', ')}.` });
   }
   for (const route of input.parity.routes) {
     if (route.matched) continue;
@@ -51,6 +72,7 @@ export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateReport 
     ...rubric.filter((row) => row.score < RELEASE_RUBRIC_MINIMUM).map((row) => `A dimensão ${row.dimension} pontuou ${row.score}/4, abaixo do mínimo ${RELEASE_RUBRIC_MINIMUM}.`),
     ...rubric.filter((row) => row.verdict === 'uncertain').map((row) => `O crítico de ${row.dimension} respondeu incerto; a decisão sobe para o capitão.`),
     ...evidenceCoverage(input.evidence).missing,
+    ...(input.releasedVersionId === input.approved.versionId ? [] : [`O patch-refiner produziu a versão ${input.releasedVersionId} a partir da aprovada ${input.approved.versionId}; o capitão aprova o documento refinado.`]),
   ];
 
   return releaseGateReportSchema.parse({
@@ -58,6 +80,7 @@ export function evaluateReleaseGate(input: ReleaseGateInput): ReleaseGateReport 
     bundleDigest: input.compiled.digest,
     irHash: input.compiled.irHash,
     approvedVersionId: input.approved.versionId,
+    releasedVersionId: input.releasedVersionId,
     rendererVersion: input.compiled.rendererVersion,
     compilerVersion: input.compiled.compilerVersion,
     blocked: vetoes.length > 0,

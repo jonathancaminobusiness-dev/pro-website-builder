@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { cssCustomPropertyName, hashJson, resolveTokens, type DesignIR, type ReleaseVeto } from '@pwb/domain';
 import type { RenderedDocument } from '@pwb/renderer';
 import { auditHtmlDocument, auditRouteCoverage, scanBundleSecrets } from './audit.js';
-import { isFallbackFailure, needsColorFallback, srgbFallback, supportsConditionFor } from './css-color.js';
+import { isFallbackFailure, needsColorFallback, srgbFallbackValue, supportsConditionFor } from './css-color.js';
 import { planCsp } from './csp.js';
 import { planFonts, type FontDecision, type FontSource } from './fonts.js';
 import { extractInlineStyles, replaceOnce, styleRules, type ExtractedStyle } from './html-scan.js';
@@ -69,13 +69,13 @@ function applyColorFallbacks(css: string, ir: DesignIR): { css: string; vetoes: 
     const value = values[path];
     if (typeof value !== 'string' || !needsColorFallback(value)) continue;
     const property = cssCustomPropertyName(path);
-    const fallback = srgbFallback(value);
+    const fallback = srgbFallbackValue(value);
     if (fallback === undefined) continue;
     if (isFallbackFailure(fallback)) {
       vetoes.push({ id: 'BUILD_FAILED', detector: 'compiler', where: `/identity/tokens/${path.replaceAll('.', '/')}`, detail: fallback.reason });
       continue;
     }
-    rewritten = replaceOnce(rewritten, `${property}: ${value};`, `${property}: ${fallback.hex};`);
+    rewritten = replaceOnce(rewritten, `${property}: ${value};`, `${property}: ${fallback.text};`);
     const condition = supportsConditionFor(value);
     modern.set(condition, [...(modern.get(condition) ?? []), `${property}: ${value};`]);
   }
@@ -105,6 +105,9 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   }
   const indexable = options.indexable ?? true;
 
+  // Assets are linked from the site's own base path, so a release served under a
+  // sub-path still resolves its stylesheet and its faces.
+  const basePath = new URL(siteUrl).pathname.replace(/\/$/, '');
   const fontPlan = planFonts(ir.identity, options.fonts ?? [], (bytes) => sha256(bytes));
   for (const missing of fontPlan.missingFallbacks) {
     vetoes.push({ id: 'BUILD_FAILED', detector: 'compiler', where: `/identity/tokens/${missing.tokenPath.replaceAll('.', '/')}`, detail: `The font stack ${JSON.stringify(missing.value)} ends without a generic family, so a visitor whose browser cannot load the first face has no readable fallback.` });
@@ -139,7 +142,7 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
     try {
       const withPolicy = replaceOnce(extraction.html, '<meta charset="utf-8">', `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp.meta.replaceAll('"', '&quot;')}">`);
       const head = headTags(entry, { siteName: options.siteName, locale: ir.identity.meta.locale, indexable, ...(options.socialImage ? { socialImage: options.socialImage } : {}) });
-      const document = replaceOnce(withPolicy, `<style>${rendered.css}</style></head>`, `${head}<link rel="stylesheet" href="/${STYLESHEET_PLACEHOLDER}"></head>`);
+      const document = replaceOnce(withPolicy, `<style>${rendered.css}</style></head>`, `${head}<link rel="stylesheet" href="${basePath}/${STYLESHEET_PLACEHOLDER}"></head>`);
       files.push({ path: filePath, contents: document.replaceAll(STYLESHEET_PLACEHOLDER, stylesheetPath) });
       routes.push({ ...entry, path: filePath });
     } catch (error) {
@@ -165,7 +168,7 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   const paths = new Set(compiled.map((file) => file.path));
   for (const file of compiled) {
     if (!file.path.endsWith('.html') || typeof file.contents !== 'string') continue;
-    vetoes.push(...auditHtmlDocument(file.path, file.contents, { paths }));
+    vetoes.push(...auditHtmlDocument(file.path, file.contents, { paths, basePath }));
   }
   vetoes.push(...auditRouteCoverage(ir.pages.routes.map((page) => page.route), paths));
   vetoes.push(...scanBundleSecrets(compiled));

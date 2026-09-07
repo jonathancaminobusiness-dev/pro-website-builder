@@ -10,6 +10,7 @@ interface ReleaseSnapshot {
   refinedFromVersionId: string;
   report: {
     blocked: boolean; bundleDigest: string; irHash: string; rendererVersion: string; compilerVersion: string;
+    approvedVersionId: string; releasedVersionId: string;
     vetoes: Veto[]; rubric: RubricRow[]; escalations: string[]; refinementCycles: number;
     parity: { matched: boolean; routes: Array<{ route: string; matched: boolean; differences: string[] }> };
     evidence: EvidenceRow[];
@@ -80,7 +81,8 @@ export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null;
           <dl className="gate3-facts">
             <div><dt>digest</dt><dd>{report.bundleDigest.slice(0, 24)}…</dd></div>
             <div><dt>documento</dt><dd>{report.irHash.slice(0, 16)}…</dd></div>
-            <div><dt>versão</dt><dd>{snapshot.versionId}</dd></div>
+            <div><dt>versão aprovada</dt><dd>{report.approvedVersionId}</dd></div>
+            {report.releasedVersionId !== report.approvedVersionId && <div><dt>versão do release</dt><dd>{report.releasedVersionId}</dd></div>}
             <div><dt>renderer</dt><dd>{report.rendererVersion}</dd></div>
             <div><dt>compilador</dt><dd>{report.compilerVersion}</dd></div>
             <div><dt>ciclos de refino</dt><dd>{report.refinementCycles} / 2</dd></div>

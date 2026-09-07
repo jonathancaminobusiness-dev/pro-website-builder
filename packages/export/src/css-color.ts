@@ -18,7 +18,7 @@ export interface ColorFallback { hex: string; }
 export interface ColorFallbackFailure { reason: string; }
 export type ColorFallbackResult = ColorFallback | ColorFallbackFailure | undefined;
 
-export function isFallbackFailure(result: ColorFallbackResult): result is ColorFallbackFailure {
+export function isFallbackFailure<T extends object>(result: T | ColorFallbackFailure | undefined): result is ColorFallbackFailure {
   return result !== undefined && 'reason' in result;
 }
 
@@ -168,10 +168,61 @@ export function srgbFallback(value: string): ColorFallbackResult {
   return { reason: `Colour function ${parsed.name}() in ${value} has no deterministic sRGB fallback.` };
 }
 
+/** Colour functions this module can convert, wherever they appear in a value. */
+const CONVERTIBLE = /(?:^|[^a-z-])(oklch|oklab|lch|lab|color)\(/gi;
+
+interface Occurrence { name: string; start: number; end: number; text: string }
+
+/** Finds each convertible colour function, matching parentheses so a nested `calc()` stays intact. */
+function occurrences(value: string): Occurrence[] {
+  const found: Occurrence[] = [];
+  CONVERTIBLE.lastIndex = 0;
+  for (let match = CONVERTIBLE.exec(value); match; match = CONVERTIBLE.exec(value)) {
+    const start = match.index + match[0].length - match[1]!.length - 1;
+    let depth = 0;
+    let end = -1;
+    for (let index = start; index < value.length; index += 1) {
+      if (value[index] === '(') depth += 1;
+      else if (value[index] === ')') { depth -= 1; if (depth === 0) { end = index + 1; break; } }
+    }
+    if (end === -1) break;
+    found.push({ name: match[1]!.toLowerCase(), start, end, text: value.slice(start, end) });
+    CONVERTIBLE.lastIndex = end;
+  }
+  return found;
+}
+
+/**
+ * The sRGB companion for a whole declaration value.
+ *
+ * A token is not always a bare colour: a shadow carries offsets before the
+ * colour, and a gradient carries several. Each convertible colour function is
+ * replaced in place, so the rest of the value survives untouched. A value that
+ * needs a companion but holds nothing this module can convert is a failure, not
+ * a silent pass-through.
+ */
+export function srgbFallbackValue(value: string): { text: string } | ColorFallbackFailure | undefined {
+  if (!needsColorFallback(value)) return undefined;
+  const found = occurrences(value);
+  if (found.length === 0) return { reason: `Value ${value} uses colour syntax this compiler cannot convert to sRGB.` };
+  let text = '';
+  let cursor = 0;
+  for (const occurrence of found) {
+    const converted = srgbFallback(occurrence.text);
+    if (converted === undefined) return { reason: `Value ${value} holds ${occurrence.text}, which the compiler did not recognise as a colour.` };
+    if (isFallbackFailure(converted)) return converted;
+    text += value.slice(cursor, occurrence.start) + converted.hex;
+    cursor = occurrence.end;
+  }
+  text += value.slice(cursor);
+  // A value can still hold an unconvertible function alongside a convertible one.
+  if (needsColorFallback(text)) return { reason: `Value ${value} still holds colour syntax without an sRGB fallback after conversion.` };
+  return { text };
+}
+
 /** The `@supports` condition that guards a modern colour value. */
 export function supportsConditionFor(value: string): string {
-  const parsed = parseFunction(value);
-  const name = parsed?.name ?? 'oklch';
+  const name = (occurrences(value)[0]?.name ?? parseFunction(value)?.name ?? 'oklch');
   if (name === 'lab' || name === 'lch') return 'color: lab(0% 0 0)';
   if (name === 'color') return 'color: color(srgb 0 0 0)';
   return 'color: oklch(0% 0 0)';

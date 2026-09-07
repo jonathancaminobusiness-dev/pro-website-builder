@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { evidenceArtifactSchema, type EvidenceArtifact, type ReleaseVeto } from '@pwb/domain';
+import { vetoDefinition } from './veto-catalog.js';
 
 /**
  * Evidence is produced by runners that do not know what the gate wants to hear:
@@ -68,8 +69,21 @@ function runnerFailure(artifact: EvidenceArtifact): ReleaseVeto[] {
  * chose to set, so a runner that forgets to declare a veto still cannot hide
  * one, and no later summary can subtract from this list.
  */
+/**
+ * An artifact is written by a runner, so its `detector` field is untrusted input.
+ * A veto the catalogue does not let the evidence raise is not discarded and does
+ * not crash the gate: it becomes a build failure that names the original id, so
+ * a veto-shaped measurement always blocks.
+ */
+function declared(artifact: EvidenceArtifact): ReleaseVeto[] {
+  return artifact.vetoes.map((veto) => {
+    if (vetoDefinition(veto.id).detectors.includes('evidence')) return { ...veto, detector: 'evidence' as const };
+    return { id: 'BUILD_FAILED' as const, detector: 'evidence' as const, where: veto.where, detail: `O artefato ${artifact.id} reportou ${veto.id}, que a evidência não pode levantar: ${veto.detail}` };
+  });
+}
+
 export function evidenceVetoes(artifacts: EvidenceArtifact[]): ReleaseVeto[] {
-  return artifacts.flatMap((artifact) => [...artifact.vetoes, ...accessibilityRegression(artifact), ...runnerFailure(artifact)]);
+  return artifacts.flatMap((artifact) => [...declared(artifact), ...accessibilityRegression(artifact), ...runnerFailure(artifact)]);
 }
 
 export interface EvidenceCoverage {
@@ -87,11 +101,17 @@ const REQUIRED_RUNNERS: EvidenceArtifact['runner'][] = ['vitest', 'playwright', 
  * missing evidence named rather than assumed.
  */
 export function evidenceCoverage(artifacts: EvidenceArtifact[]): EvidenceCoverage {
-  const engines = [...new Set(artifacts.filter((artifact) => artifact.engine !== 'node').map((artifact) => artifact.engine))].sort();
+  // Only a Playwright run proves an engine rendered the release; an axe scan
+  // rides in a browser but measures something else.
+  const engines = [...new Set(artifacts.filter((artifact) => artifact.runner === 'playwright').map((artifact) => artifact.engine))].sort();
   const runners = [...new Set(artifacts.map((artifact) => artifact.runner))].sort();
   const missing = [
     ...REQUIRED_RUNNERS.filter((runner) => !runners.includes(runner)).map((runner) => `Nenhuma evidência do runner ${runner}.`),
     ...REQUIRED_ENGINES.filter((engine) => !engines.includes(engine)).map((engine) => `Nenhuma execução Playwright em ${engine}.`),
+    // A runner that ran and failed is not covered by its own veto rule; say so
+    // instead of letting a failed measurement read as a measurement.
+    ...artifacts.filter((artifact) => artifact.status === 'failed' && artifact.runner !== 'vitest' && artifact.runner !== 'playwright')
+      .map((artifact) => `O artefato ${artifact.id} do runner ${artifact.runner} falhou: ${artifact.notes[0] ?? 'sem detalhe registrado'}`),
   ];
   return { engines, runners, missing };
 }

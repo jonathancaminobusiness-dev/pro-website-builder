@@ -81,6 +81,27 @@ describe('deterministic release compiler', () => {
     expect(fileText(compiled, 'robots.txt')).toContain('Sitemap: https://oficina.example/sitemap.xml');
   });
 
+  it('links its assets from the site base path so a sub-path deployment resolves them', () => {
+    const ir = createFixtureIR();
+    const compiled = compileRelease(renderDesign(ir), ir, { ...OPTIONS, siteUrl: 'https://oficina.example/estudio' });
+    expect(compiled.vetoes).toEqual([]);
+    const home = compiled.files.find((file) => file.path === 'index.html')!.contents as string;
+    expect(home).toContain(`<link rel="stylesheet" href="/estudio/${compiled.stylesheetPath}">`);
+    expect(home).toContain('<link rel="canonical" href="https://oficina.example/estudio/">');
+  });
+
+  it('links a self-hosted face relative to the stylesheet that references it', () => {
+    const ir = createFixtureIR();
+    const compiled = compileRelease(renderDesign(ir), ir, {
+      ...OPTIONS,
+      siteUrl: 'https://oficina.example/estudio',
+      fonts: [{ family: 'Fraunces', weight: '400', style: 'normal', format: 'woff2', bytes: new Uint8Array([1, 2, 3]), license: 'OFL-1.1', source: 's', author: 'a', date: '2026-09-05' }],
+    });
+    const stylesheet = compiled.files.find((file) => file.path === compiled.stylesheetPath)!.contents as string;
+    expect(stylesheet).toMatch(/src:url\("fonts\/fraunces-400-normal\.[0-9a-f]{12}\.woff2"\)/);
+    expect(stylesheet).not.toContain('url("/assets');
+  });
+
   it('refuses a site URL that is not an absolute origin', () => {
     const ir = createFixtureIR();
     expect(() => compileRelease(renderDesign(ir), ir, { ...OPTIONS, siteUrl: '/relative' })).toThrow(/absolute http\(s\) site URL/i);
@@ -123,6 +144,13 @@ describe('release vetoes', () => {
     const ids = compiled.vetoes.map((veto) => veto.id);
     expect(ids).toContain('XSS_OR_JAVASCRIPT_URL');
     expect(ids).toContain('UNSANITIZED_HTML');
+  });
+
+  it('finds a secret whose quotes the renderer escaped', () => {
+    const compiled = compileFixture((ir) => {
+      ir.pages.routes[0]!.nodes.find((candidate) => candidate.id === 'home-title')!.props.text = 'api_key: "AbCdEf123456789"';
+    });
+    expect(compiled.vetoes.map((veto) => veto.id)).toContain('SECRET_IN_BUNDLE');
   });
 
   it('vetoes an inline event handler', () => {
@@ -176,6 +204,17 @@ describe('colour and font fallbacks in the compiled stylesheet', () => {
     expect(stylesheet).toContain('@supports (color: oklch(0% 0 0))');
     expect(stylesheet).toContain('--color-ink: oklch(25% 0.03 220);');
     expect(stylesheet.indexOf('--color-ink: #')).toBeLessThan(stylesheet.indexOf('@supports'));
+  });
+
+  it('gives a shadow token an sRGB companion instead of blocking the release', () => {
+    const compiled = compileFixture((ir) => {
+      ir.identity.tokens.shadow = { card: { $value: '0 18px 44px oklch(30% 0.02 250 / 0.12)', $type: 'shadow' } } as never;
+      ir.pages.routes[0]!.nodes.find((node) => node.id === 'home-proof')!.props.shadow = '{shadow.card}';
+    });
+    expect(compiled.vetoes).toEqual([]);
+    const stylesheet = fileText(compiled, compiled.stylesheetPath);
+    expect(stylesheet).toContain('--shadow-card: 0 18px 44px #');
+    expect(stylesheet).toContain('--shadow-card: 0 18px 44px oklch(30% 0.02 250 / 0.12);');
   });
 
   it('vetoes a colour the compiler cannot express in sRGB rather than shipping an unreadable page', () => {
@@ -239,6 +278,18 @@ describe('immutable content-addressed bundle', () => {
     const base = compileFixture();
     const changed = compileFixture((ir) => { ir.pages.routes[0]!.title = 'Oficina — outra coisa'; });
     expect(changed.digest).not.toBe(base.digest);
+  });
+
+  it('refuses to rewrite an existing bundle with a different manifest', async () => {
+    const compiled = compileFixture();
+    const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
+    try {
+      await writeReleaseBundle(compiled, root, { approvedVersionId: 'v-alpha' });
+      await expect(writeReleaseBundle(compiled, root, { approvedVersionId: 'v-beta' })).rejects.toThrow(/never rewritten/);
+      const raw = await readFile(join(root, compiled.digest, 'manifest.json'), 'utf8');
+      expect(JSON.parse(raw).approvedVersionId).toBe('v-alpha');
+      await writeReleaseBundle(compiled, root, { approvedVersionId: 'v-alpha' });
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it('refuses to write a file outside the bundle root', async () => {
