@@ -47,3 +47,56 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 @media (max-width: 780px) { .topbar { margin-bottom: 30px; } .workspace { grid-template-columns: 1fr; } .review-panel { grid-column: auto; } footer { align-items: flex-start; flex-direction: column; } }
 .gate2-link { color: #a84f37; font-size: .74rem; font-weight: 700; text-decoration: none; border-bottom: 1px solid #dca58e; }
 .gate2-link:hover { border-bottom-color: #d86445; }
+
+/* Gate 1 · identity stage */
+.view-tabs { display: flex; gap: 4px; }
+.view-tabs button { border: 1px solid transparent; border-radius: 999px; padding: 8px 14px; color: #697579; background: transparent; font-size: .78rem; }
+.view-tabs button.selected { color: #18252d; border-color: #b9ac9f; background: rgba(250,247,241,.8); }
+.workspace-single { grid-template-columns: minmax(0, 1fr); }
+.gate-panel { grid-column: 1 / -1; min-width: 0; border: 1px solid rgba(24,37,45,.12); border-radius: 22px; padding: 28px; background: rgba(250,247,241,.7); box-shadow: 0 18px 44px rgba(68,52,36,.08); }
+.gate-panel h3 { margin: 6px 0; font-family: Georgia, serif; font-size: 1.35rem; font-weight: 500; letter-spacing: -.03em; }
+.status-approved { color: #3f6b52; border-color: #a9c2b1; }
+.status-reopened, .status-failed { color: #8c3a2c; border-color: #c98d7c; }
+.gate-briefing { max-width: 70ch; color: #58676c; line-height: 1.6; }
+.gate-actions { margin: 18px 0 6px; }
+.gate-check { border-radius: 12px; padding: 10px 14px; margin: 12px 0; font-size: .82rem; line-height: 1.5; }
+.gate-check.ok { color: #3f6b52; background: rgba(169,194,177,.22); }
+.gate-check.blocked { color: #8c3a2c; background: rgba(216,100,69,.14); }
+.gate-brief, .direction-card details { margin: 12px 0; font-size: .82rem; }
+.gate-brief summary, .direction-card summary { cursor: pointer; color: #a84f37; font-weight: 700; }
+.gate-brief ul, .direction-card details ul { margin: 10px 0 0; padding-left: 18px; color: #58676c; line-height: 1.55; }
+.gate-brief small { color: #879095; }
+.gate-unknowns { margin-top: 10px; color: #879095; }
+.direction-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; margin-top: 20px; }
+.direction-card { min-width: 0; display: flex; flex-direction: column; border: 1px solid #d8cfc5; border-radius: 18px; padding: 20px; background: #faf7f1; }
+.direction-card.selected { border-color: #d86445; box-shadow: 0 0 0 2px rgba(216,100,69,.18); }
+.direction-thesis { margin-top: 6px; color: #58676c; font-size: .88rem; line-height: 1.5; }
+.swatch-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; padding: 0; list-style: none; }
+.swatch-row li { display: flex; align-items: center; gap: 6px; font-size: .68rem; }
+.swatch { display: inline-block; width: 18px; height: 18px; border: 1px solid rgba(24,37,45,.2); border-radius: 5px; }
+.axis-list { margin: 0; display: grid; gap: 8px; }
+.axis-list div { display: grid; grid-template-columns: minmax(0, 92px) minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.axis-list dt { color: #879095; font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; }
+.axis-list dd { margin: 0; min-width: 0; font-size: .8rem; line-height: 1.45; }
+.axis-list dd strong { display: block; color: #a84f37; font-family: ui-monospace, SFMono-Regular, monospace; font-size: .74rem; }
+.axis-list dd span { color: #58676c; }
+.direction-rationale, .direction-tension { margin-top: 12px; color: #58676c; font-size: .82rem; line-height: 1.55; }
+.decision-list { list-style: none; padding-left: 0; }
+.decision-list li { margin-bottom: 8px; }
+.decision-list code, .version-line code, .gate-record code, .asset-list code, .gate-brief code { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, monospace; font-size: .72rem; }
+.decision-list em { color: #a84f37; font-size: .72rem; font-style: normal; }
+.decision-list span { display: block; color: #879095; }
+.version-line { margin: 14px 0 8px; color: #879095; font-size: .72rem; overflow-wrap: anywhere; }
+.blocker-list { margin: 8px 0; padding-left: 18px; color: #8c3a2c; font-size: .78rem; line-height: 1.5; }
+.direction-card .actions { margin-top: auto; padding-top: 16px; }
+.gate-decision { display: grid; gap: 6px; margin-top: 22px; font-size: .8rem; }
+.gate-decision label { color: #58676c; }
+.gate-decision textarea { border: 1px solid #c7bcb0; border-radius: 12px; padding: 10px 12px; font: inherit; resize: vertical; }
+.gate-record { margin-top: 22px; border: 1px solid #a9c2b1; border-radius: 14px; padding: 14px 16px; background: rgba(169,194,177,.16); font-size: .82rem; line-height: 1.55; }
+.asset-list { margin: 10px 0 0; padding-left: 18px; }
+.gate-token-change { margin-top: 22px; }
+.token-form { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; font-size: .8rem; }
+.token-form input { border: 1px solid #c7bcb0; border-radius: 10px; padding: 8px 10px; font: inherit; }
+.gate-panel .preview-frame { margin-top: 20px; }
+@media (max-width: 780px) { .topbar { flex-wrap: wrap; } .view-tabs { order: 3; width: 100%; } }
+@media (max-width: 520px) { .axis-list div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
