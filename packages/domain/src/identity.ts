@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { documentRules } from './rules.js';
 import { flattenTokens, tokenGroupSchema } from './tokens.js';
 
 const provenanceSchema = z.object({
@@ -23,7 +24,7 @@ export const identitySpecSchema = z.object({
 }).superRefine((identity, ctx) => {
   const paths = flattenTokens(identity.tokens);
   for (const [role, path] of Object.entries(identity.tokenRoles)) {
-    if (!paths.has(path)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['tokenRoles', role], message: `Token role ${role} points at ${path}, which the identity does not define.` });
+    if (!paths.has(path)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['tokenRoles', role], message: `${documentRules.tokenRoles} Token role ${role} points at ${path}, which the identity does not define.` });
   }
 });
 

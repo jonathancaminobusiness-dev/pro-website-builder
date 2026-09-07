@@ -86,6 +86,7 @@ export class FixtureRun {
     await Promise.race([this.settled(), inFlight]);
     const failure = this.failure;
     this.failure = undefined;
+    if (failure) await inFlight.catch(() => undefined);
     const settled = this.snapshot();
     if (failure && settled.status !== 'cancelled') throw failure;
     return settled;

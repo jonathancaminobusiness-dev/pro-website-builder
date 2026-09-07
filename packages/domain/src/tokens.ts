@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { documentRules } from './rules.js';
 
 export const tokenTypeSchema = z.enum([
   'color', 'dimension', 'fontFamily', 'fontWeight', 'fontSize', 'duration',
@@ -47,11 +48,11 @@ export function cssTokenIssues(values: Record<string, string | number | boolean>
   const owners = new Map<string, string>();
   for (const [path, value] of Object.entries(values)) {
     const name = cssCustomPropertyName(path);
-    if (!/^--[A-Za-z0-9-]+$/.test(name)) issues.push({ path, message: `Token ${path} cannot become a CSS custom property.` });
+    if (!/^--[A-Za-z0-9-]+$/.test(name)) issues.push({ path, message: `${documentRules.cssTokens} Token ${path} cannot become a CSS custom property.` });
     const owner = owners.get(name);
     if (owner === undefined) owners.set(name, path);
-    else issues.push({ path, message: `Tokens ${owner} and ${path} both compile to the CSS custom property ${name}.` });
-    if (typeof value === 'string' && (/[<>;{}]/.test(value) || value.includes('/*') || value.includes('*/'))) issues.push({ path, message: `Token ${path} holds characters that cannot be emitted into CSS.` });
+    else issues.push({ path, message: `${documentRules.cssTokens} Tokens ${owner} and ${path} both compile to the CSS custom property ${name}.` });
+    if (typeof value === 'string' && (/[<>;{}]/.test(value) || value.includes('/*') || value.includes('*/'))) issues.push({ path, message: `${documentRules.cssTokens} Token ${path} holds characters that cannot be emitted into CSS.` });
   }
   return issues;
 }

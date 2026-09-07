@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { identitySpecSchema } from './identity.js';
+import { documentRules } from './rules.js';
 
 export const nodeKindSchema = z.enum(['stack', 'grid', 'cluster', 'media', 'type', 'surface', 'ornament', 'component']);
 export const visualValueSchema = z.union([z.string(), z.number(), z.boolean()]);
@@ -18,13 +19,6 @@ export const routeSchema = z.string()
 
 export const semanticSchema = z.enum(['h1', 'h2', 'h3', 'p', 'section', 'figure', 'div']);
 export const phrasingSemantics = new Set<string>(['h1', 'h2', 'h3', 'p']);
-
-export const documentRules = {
-  mediaFigure: 'A media node renders as figure, and only a media node may declare figure.',
-  phrasingLeaf: 'A node whose semantic is h1, h2, h3 or p carries its own text and must declare no slot children.',
-  pageGraph: 'Node ids are unique within a page, and every node a page lists is reachable exactly once by following slots from its rootNodeId.',
-  uniquePages: 'Page ids and page routes are unique across the document; routes are compared case-insensitively.',
-} as const;
 
 export const pageNodeSchema = z.object({
   id: z.string(),

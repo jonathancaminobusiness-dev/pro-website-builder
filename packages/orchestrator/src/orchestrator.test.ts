@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { agentTaskSchema, createFixtureIR, documentPathSchemas, hashJson, stageResultJsonSchemas, type AgentTask, type DesignIR } from '@pwb/domain';
-import { FakeModelProvider } from '@pwb/providers';
+import { CLAUDE_RUNNER_TIMEOUT_MS, FakeModelProvider } from '@pwb/providers';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, VersionStore } from './index.js';
 
 const ALLOWED = { allowedPaths: ['/identity', '/pages', '/assets', '/reviewRecord'], stage: 'identity' as const, role: 'director' as const };
@@ -17,6 +17,21 @@ describe('orchestrator', () => {
     expect(plan.tasks.map((item) => item.stage)).toEqual(['identity', 'prototype', 'finalization']);
     expect(plan.tasks.map((item) => item.id)).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
     expect(plan.edges).toEqual([['task-identity', 'task-prototype'], ['task-prototype', 'task-finalization']]);
+  });
+
+  it('budgets every stage for two full runner invocations and honours a single deadline override', () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const deadlines = new RunPlanner(store).plan('run-deadlines', root.id, 'brief').tasks.map((task) => task.deadlineMs);
+    for (const deadlineMs of deadlines) expect(deadlineMs).toBeGreaterThanOrEqual(2 * CLAUDE_RUNNER_TIMEOUT_MS);
+    const previous = process.env.PWB_STAGE_DEADLINE_MS;
+    process.env.PWB_STAGE_DEADLINE_MS = String(30 * 60_000);
+    try {
+      expect(new RunPlanner(store).plan('run-override', root.id, 'brief').tasks.map((task) => task.deadlineMs)).toEqual([30 * 60_000, 30 * 60_000, 30 * 60_000]);
+    } finally {
+      if (previous === undefined) delete process.env.PWB_STAGE_DEADLINE_MS; else process.env.PWB_STAGE_DEADLINE_MS = previous;
+    }
+    expect(new RunPlanner(store).plan('run-default', root.id, 'brief').tasks.map((task) => task.deadlineMs)).toEqual(deadlines);
   });
 
   it('gives each stage its own write boundary and refuses a later stage that touches the identity', () => {

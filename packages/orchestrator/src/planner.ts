@@ -5,6 +5,8 @@ export interface RunPlan { runId: string; tasks: AgentTask[]; edges: [string, st
 
 const readablePaths = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
+export const stageDeadlinesMs: Record<AgentTask['stage'], number> = { identity: 15 * 60_000, prototype: 15 * 60_000, finalization: 20 * 60_000 };
+
 function valueAt(ir: DesignIR, path: string): unknown {
   let current: unknown = ir;
   for (const segment of path.split('/').slice(1)) {
@@ -22,10 +24,12 @@ export class RunPlanner {
     if (!base) throw new Error(`Cannot plan run ${runId}; version ${baseVersionId} is not in the store.`);
     const documentSlice: Record<string, unknown> = { '/identity': base.ir.identity };
     for (const path of readablePaths) documentSlice[path] = valueAt(base.ir, path);
+    const override = Number(process.env.PWB_STAGE_DEADLINE_MS);
+    const deadline = (stage: AgentTask['stage']): number => Number.isFinite(override) && override > 0 ? override : stageDeadlinesMs[stage];
     const stages: Array<{ stage: AgentTask['stage']; deadlineMs: number }> = [
-      { stage: 'identity', deadlineMs: 5 * 60_000 },
-      { stage: 'prototype', deadlineMs: 5 * 60_000 },
-      { stage: 'finalization', deadlineMs: 8 * 60_000 },
+      { stage: 'identity', deadlineMs: deadline('identity') },
+      { stage: 'prototype', deadlineMs: deadline('prototype') },
+      { stage: 'finalization', deadlineMs: deadline('finalization') },
     ];
     const inputDigest = hashJson({ runId, brief, documentSlice });
     const tasks = stages.map((item) => ({ id: `task-${item.stage}`, ...item, role: stageRoles[item.stage], attempt: 1, state: 'queued' as const, lane: 'claude' as const, baseVersionId, inputDigest, promptVersion: 'phase0-v1', modelAlias: 'claude-local', allowedPaths: stageWritablePaths[item.stage], documentSlice, brief }));

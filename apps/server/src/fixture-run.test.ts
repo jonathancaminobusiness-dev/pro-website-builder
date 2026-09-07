@@ -189,7 +189,6 @@ describe('phase 0 fixture run', () => {
     const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-throw-')), 'exports'), provider: flaky });
     await run.initialize('run-throw');
     await expect(run.runNext()).rejects.toThrow(/the model process died/);
-    await new Promise((resolve) => setTimeout(resolve, 25));
     const afterFailure = (await repository.listEvents('run-throw')).map((event) => event.type);
     expect(afterFailure.at(-1)).toBe('task.failed');
     expect(run.snapshot().status).toBe('failed');

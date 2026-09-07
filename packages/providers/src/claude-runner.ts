@@ -8,12 +8,13 @@ import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
 const execFileAsync = promisify(execFile);
 const transientCodes = new Set(['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN', '429', 'OVERLOADED', 'RATE_LIMIT']);
 const deniedTools = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
+export const CLAUDE_RUNNER_TIMEOUT_MS = 7 * 60_000;
 
 export class ClaudeRunner implements ModelProvider {
   private readonly options: Required<ClaudeRunnerOptions>;
 
   constructor(options: ClaudeRunnerOptions = {}) {
-    this.options = { executable: 'claude', timeoutMs: 15 * 60_000, maxTurns: 4, ...options };
+    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, ...options };
   }
 
   async propose(task: AgentTask, signal?: AbortSignal): Promise<AgentResult> {
