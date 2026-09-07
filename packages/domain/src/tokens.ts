@@ -57,6 +57,12 @@ export function cssTokenIssues(values: Record<string, string | number | boolean>
   return issues;
 }
 
+/**
+ * `values` and `types` are prototype-free because every downstream token check is an `in` test
+ * against them (ir.ts, renderer/render.ts, linter/rules.ts) over paths a model proposes, so a
+ * reference such as `{constructor}` would otherwise be reported as defined and emitted as an
+ * undeclared custom property.
+ */
 export function resolveTokens(tokens: TokenTree): ResolvedTokenSet {
   const flat = flattenTokens(tokens);
   const values: Record<string, string | number | boolean> = Object.create(null);
