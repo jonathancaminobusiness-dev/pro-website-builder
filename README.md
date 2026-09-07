@@ -5,10 +5,10 @@ An AI-assisted local studio that compiles an original visual identity into an in
 ## Workflow
 
 1. Identity: a director proposes a typed identity and token contract.
-2. Prototype: a composer proposes page-graph changes for `/`, `/proof`, and `/contact`.
+2. Prototype: an information architect fixes the journey and the states, section composers fill disjoint windows of the page graph in parallel, and four critics review the result.
 3. Finalization: a compiler proposal is validated, rendered, reviewed, and exported.
 
-Each stage stops at a captain-only gate in v1. Agents return schema-validated JSON patches. The immutable `DesignIR` is the source of truth, and the pure renderer produces the editor preview, isolated preview, screenshots, and static export.
+Each stage stops at a captain-only gate in v1. Agents return schema-validated JSON — a proposal or a typed contract, never markup — and deterministic code turns it into the patch. The immutable `DesignIR` is the source of truth, and the pure renderer produces the editor preview, isolated preview, screenshots, and static export.
 
 ## Stack and boundaries
 
@@ -19,7 +19,9 @@ Each stage stops at a captain-only gate in v1. Agents return schema-validated JS
 - `packages/renderer` is pure TypeScript and emits semantic HTML/CSS with cascade layers, custom properties, container queries, and reduced-motion handling.
 - `packages/orchestrator` owns the fixed stage DAG, semaphores, deadlines, cancellation, patch CAS, immutable versions, and events. `RunPlanner` emits the identity to prototype to finalization edges. Every captain start request submits exactly one stage to `Scheduler.run`, together with those edges and the set of stages the captain has already approved in this run; the scheduler admits the task only when each of its dependencies is in that completed set or succeeded in the same call, and fails it with a named-dependency error otherwise, so no stage can run ahead of the gate before it. Approving a gate never spends a model call on its own; a rejection returns the stage to a re-runnable state and the next start request re-runs it under a new attempt number.
 - `packages/providers` isolates the owner's local Claude Code binary, optional Higgsfield MCP, and deterministic fakes.
-- `packages/render-hub` uses Playwright Chromium for responsive screenshots, DOM/accessibility data, and deterministic QA.
+- `packages/render-hub` uses Playwright Chromium to capture the full evidence matrix: 320/360/390/768/1024/1440 CSS px, every state fixture, light and dark when the identity declares one, reduced motion, screenshots, DOM and accessibility snapshots, per-node geometry, contrast and keyboard-focus samples, axe in each open state, console and network errors, and a content-addressed cache.
+- `packages/qa-deterministic` owns the Tier 0/1 gate. It is pure: evidence in, findings out. Tier 0 vetoes a revision before any model runs; Tier 1 observes without blocking.
+- `packages/stage-prototype` owns the prototype stage: the serial information architect, the parallel section composers, the four critics, the `PatchPlanner`, the refiner and the loop controller.
 - `packages/export` writes content-addressed static routes and a license/provenance manifest.
 
 The renderer refuses raw visual values. Colors, dimensions, font settings, radii, shadows, and motion must resolve through tokens, with no exception path in Fase 0. A page node's `semantic` is the tag it renders as, drawn from a closed vocabulary, so the schema refuses a landmark the renderer would silently drop; `body` carries the query container and `main` is the element the breakpoint restyles. Preview is served on port `4311`, separate from the Studio/API origin, and the Studio iframe uses `sandbox` without `allow-same-origin`.
@@ -91,8 +93,33 @@ That run is what the `pattern` claim rests on, and no more: the binary's strict 
 
 Higgsfield is an optional asynchronous raster boundary, delivered as `HiggsfieldMcpProvider` in `packages/providers`: when its MCP is not configured, `submit` returns a `not_configured` job whose provenance records `pending provider terms` and a placeholder note, and it never requests or persists credentials. Phase 0 does not submit a raster job from the three-stage journey — `RunPlanner` emits three `claude`-lane tasks and nothing writes an asset from a `RasterJob` — so a fixture run's asset ledger is the same whether or not Higgsfield is configured. Wiring the raster lane into the run is later-phase work.
 
+## The prototype stage
+
+An information architect runs first and alone. It proposes a typed `RouteManifest`: the routes, the order a visitor walks them, the sections of each route with plausible copy, the states the prototype must survive, and the node ids. Every route reserves slot 0 for a shell the architect owns; each section is then given a contiguous, disjoint window of node slots.
+
+Section composers run in parallel under the scheduler, one per section, each allowed to write only its own window. A composer proposes a typed `SectionComposition`, never a patch and never HTML; deterministic code checks that it filled exactly its window with a connected subtree inside the token system, compiles it into JSON Pointer operations, and the real `PatchGate` refuses any overlap between two windows before the merged patch reaches the applier.
+
+The revision is then rendered across the full matrix and handed to the deterministic gate. A Tier 0 veto stops the stage before a single model call. Only if it passes do four critics run, each in its own session, each seeing the identity contract and the rubric before the screenshots, each returning a `CritiqueReport` that moves from perception to comprehension to projection. A finding names its nodes, says why it matters against the contract, and carries at most one repair drawn from `set_token`, `set_constraint`, `set_crop`, `replace_copy` and `reorder_node`. A critic that cannot tell answers `uncertain`, which escalates instead of inventing precision.
+
+The `PatchPlanner` compiles at most three causal repairs per cycle, guards every write with a `test` against the value the critic saw, and rejects anything else with a stated reason. The loop then stops, always for a named reason: `clean`, `tier0_veto`, `uncertain`, `max_cycles`, `repeated_issue`, `improvement_below_noise`, `no_actionable_patch` or `budget_exhausted`.
+
+Run the stage without the UI:
+
+```bash
+corepack pnpm run:prototype            # deterministic evidence, no browser
+corepack pnpm run:prototype -- --render  # the real Playwright RenderHub
+```
+
+Both bind an ephemeral port, so several checkouts can run them at the same time.
+
+The Gate 2 screen is at `http://127.0.0.1:5173/#/gate-2`. It compares the composed revision with the refined one on the same route at the same width, offers an overlay and a difference blend, keeps the deterministic gate and the critics' opinion in separate panels, and records accept, reject or defer with a reason for each issue before the captain settles the gate. It also offers a control pair — a briefing whose declared grid beat the identity's own spacing cannot land on — because a loop only ever shown clean input has not been tested.
+
+## Real local Claude Code in the prototype stage
+
+`PWB_MODEL_PROVIDER=claude-code` swaps all four prototype workers at once: `ClaudeInformationArchitect`, `ClaudeSectionComposer` and `ClaudeCritiqueRunner` replace their deterministic counterparts, for both `corepack pnpm run:prototype` and `corepack pnpm --filter @pwb/server dev`. Each is a separate session with a fresh id, `--no-session-persistence`, a closed JSON schema, a deadline, an abort signal and a denied tool list. A critic keeps `Read` so it can open the screenshots it was handed; every other worker is denied the filesystem and the network entirely. No credential is read, requested, logged or stored, and no paid API is involved. CI never runs this path: it uses the deterministic providers, which produce the same typed contracts.
+
 ## Quality and security checks
 
-The test suite covers schema validation, page-graph integrity, alias cycles/orphans, byte-stable rendering, token-only linting, identity token roles, CSS-emittable tokens, forbidden defaults, CAS/overlap rejection, semaphore limits and deadlines, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, export licenses, the full fixture journey, cancellation/restart, and scans of database/log/export data for secret-like values. `corepack pnpm test:e2e` additionally drives the Studio through all three gates and exercises `RenderHub` against a live browser, both for a single cached case and for the whole route x viewport x state matrix served by the isolated preview server; run `corepack pnpm build` first so `vite preview` has a bundle to serve.
+The test suite covers schema validation, page-graph integrity, alias cycles/orphans, byte-stable rendering, token-only linting, identity token roles, CSS-emittable tokens, forbidden defaults, CAS/overlap rejection, semaphore limits and deadlines, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, export licenses, the full fixture journey, cancellation/restart, and scans of database/log/export data for secret-like values. The prototype stage adds the section-window contracts, the closed critic vocabulary, the guarded compilation of every allowlisted repair, each of the loop's stop conditions observed through the stage itself, and the seven prototype linter rules. `corepack pnpm test:e2e` additionally drives the Studio through all three gates and through the Gate 2 review, and exercises `RenderHub` against a live browser, both for a single cached case and for the whole route x viewport x state matrix served by the isolated preview server; run `corepack pnpm build` first so `vite preview` has a bundle to serve.
 
-Fase 0 intentionally does not include parallel identity directions, critic agents, the full linter catalog, Postgres, SaaS authentication, Yjs/CRDT collaboration, Astro output, or Lighthouse.
+Fase 0 intentionally does not include parallel identity directions, Postgres, SaaS authentication, Yjs/CRDT collaboration, Astro output, or Lighthouse. Fase 2 adds the prototype stage, its critics and the prototype half of the linter catalogue; the identity and release halves stay with their own phases.

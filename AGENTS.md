@@ -7,6 +7,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Use Corepack commands from `README.md` because pnpm is not assumed to be globally installed.
 - Keep generated sites flowing through `packages/domain` → `packages/orchestrator` → `packages/renderer`; agents must not write HTML/JSX directly.
 - The server/API and isolated preview ports, provider safety boundary, and fixture CLI are documented in `README.md` and `apps/server/src/index.ts`.
+- Several checkouts of this repo run side by side. Never kill a process you did not start, and bind every server a test or a script opens to port 0, so the fixed developer ports stay free.
+- An agent proposes domain-typed JSON validated by a Zod schema — a `RouteManifest`, a `SectionComposition`, a `CritiqueReport` — never a JSON Patch and never markup. Deterministic code compiles that JSON into the patch; see `packages/stage-prototype`.
+- Parallel workers stay disjoint by contract, not by locking: each section composer owns a contiguous window of node slots and the `PatchGate` refuses any overlap before the merged patch reaches the applier.
+- The preview origin serves `script-src 'none'`. Anything that has to run in a previewed page goes through `page.evaluate`, never `addScriptTag`; `packages/render-hub/src/hub.ts` shows both that and the `__name` shim a transpiler forces on serialized browser functions.
+- Deterministic checks that a browser measures live in `packages/qa-deterministic`; checks the typed document can decide live in the linter. Keep new rules on the side that can actually answer them.
 
 ## Maintaining this file
 
