@@ -1,7 +1,6 @@
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { agentResultSchema, agentTaskSchema, patchSchema } from './agent.js';
-import { approvalSchema } from './approval.js';
-import { designIRSchema } from './ir.js';
+import { agentResultSchema } from './agent.js';
+import { assetsSchema, pagesSchema, reviewRecordSchema } from './ir.js';
 import { identitySpecSchema } from './identity.js';
 
 function withoutUnionTypes(node: unknown): unknown {
@@ -14,10 +13,12 @@ function withoutUnionTypes(node: unknown): unknown {
 }
 
 export const schemaJson = {
-  AgentTask: withoutUnionTypes(zodToJsonSchema(agentTaskSchema)),
   AgentResult: withoutUnionTypes(zodToJsonSchema(agentResultSchema)),
-  Patch: withoutUnionTypes(zodToJsonSchema(patchSchema)),
-  Approval: withoutUnionTypes(zodToJsonSchema(approvalSchema)),
-  IdentitySpec: withoutUnionTypes(zodToJsonSchema(identitySpecSchema)),
-  DesignIR: withoutUnionTypes(zodToJsonSchema(designIRSchema)),
+};
+
+export const documentPathSchemas: Record<string, unknown> = {
+  '/identity': withoutUnionTypes(zodToJsonSchema(identitySpecSchema)),
+  '/pages': withoutUnionTypes(zodToJsonSchema(pagesSchema)),
+  '/assets': withoutUnionTypes(zodToJsonSchema(assetsSchema)),
+  '/reviewRecord': withoutUnionTypes(zodToJsonSchema(reviewRecordSchema)),
 };

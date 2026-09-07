@@ -58,22 +58,26 @@ export const assetSchema = z.object({
   status: z.enum(['placeholder', 'ready', 'failed']),
 });
 
+export const pagesSchema = z.object({ routes: z.array(pageSchema) }).superRefine((pages, ctx) => {
+  for (const key of ['id', 'route'] as const) {
+    const seen = new Set<string>();
+    for (const page of pages.routes) {
+      const value = key === 'route' ? page.route.toLowerCase() : page.id;
+      if (seen.has(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Pages must not share the ${key} ${page[key]}.` });
+      seen.add(value);
+    }
+  }
+});
+export const assetsSchema = z.object({ items: z.array(assetSchema) });
+export const reviewRecordSchema = z.object({ findings: z.array(z.string()), approvals: z.array(z.string()) });
+
 export const designIRSchema = z.object({
   meta: z.object({ id: z.string(), projectId: z.string(), versionId: z.string(), rendererVersion: z.string(), createdAt: z.string() }),
   identity: identitySpecSchema,
-  pages: z.object({ routes: z.array(pageSchema) }).superRefine((pages, ctx) => {
-    for (const key of ['id', 'route'] as const) {
-      const seen = new Set<string>();
-      for (const page of pages.routes) {
-        const value = key === 'route' ? page.route.toLowerCase() : page.id;
-        if (seen.has(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Pages must not share the ${key} ${page[key]}.` });
-        seen.add(value);
-      }
-    }
-  }),
-  assets: z.object({ items: z.array(assetSchema) }),
+  pages: pagesSchema,
+  assets: assetsSchema,
   stateFixtures: z.record(z.object({ description: z.string(), values: z.record(visualValueSchema) })),
-  reviewRecord: z.object({ findings: z.array(z.string()), approvals: z.array(z.string()) }),
+  reviewRecord: reviewRecordSchema,
 });
 
 export type PageNode = z.infer<typeof pageNodeSchema>;

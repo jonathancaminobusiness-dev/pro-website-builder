@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
-import { agentResultSchema, idempotencyKey, schemaJson, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
+import { agentResultSchema, documentPathSchemas, idempotencyKey, schemaJson, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
@@ -25,6 +25,7 @@ export class ClaudeRunner implements ModelProvider {
           `Answer as the ${task.role} of the ${task.stage} stage for taskId ${task.id}.`,
           `A proposal must set baseVersionId to ${task.baseVersionId} and may only touch these paths: ${task.allowedPaths.join(', ')}.`,
           `A page node may only declare these props: ${[...visualPropKeys].join(', ')} and text. Every visual prop must be a token reference such as {color.ink}.`,
+          `Every operation value must match the JSON Schema of the document subtree it writes: ${JSON.stringify(Object.fromEntries(task.allowedPaths.filter((path) => path in documentPathSchemas).map((path) => [path, documentPathSchemas[path]])))}`,
           `This is the immutable slice of the current document you may read; the identity contract is read-only: ${JSON.stringify(task.documentSlice)}`,
           correction ? 'Correct the previous schema violation and return only JSON matching the supplied schema.' : '',
         ].filter(Boolean).join('\n');

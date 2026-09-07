@@ -95,18 +95,19 @@ export class FixtureRun {
     this.requireInitialized();
     if (approverRole !== 'captain') throw new Error('Only the captain can approve v1 gates.');
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting approval.`);
-    const manifest = stage === 'finalization' ? await exportStatic(this.rendered, this.currentVersion.ir, this.options.exportRoot) : undefined;
-    const approval: Approval = { id: `${this.runId()}-${stage}-approval`, stage, approverRole: 'captain', versionId: this.currentVersion.id, versionHash: this.currentVersion.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
-    await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
+    const approved = this.currentVersion;
+    this.status = 'queued';
+    let manifest: ExportManifest | undefined;
+    try { manifest = stage === 'finalization' ? await exportStatic(this.rendered, approved.ir, this.options.exportRoot) : undefined; }
+    catch (error) { this.status = 'needs_review'; throw error; }
+    const approval: Approval = { id: `${this.runId()}-${stage}-approval`, stage, approverRole: 'captain', versionId: approved.id, versionHash: approved.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
     this.approvals.push(approval);
-    await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
     this.stageIndex += 1;
-    if (manifest) {
-      this.exportManifest = manifest;
-      this.status = 'succeeded';
-      await this.record('run.finished', { status: 'succeeded', digest: manifest.digest });
-    } else { this.currentStage = null; this.status = 'queued'; }
+    if (manifest) { this.exportManifest = manifest; this.status = 'succeeded'; } else { this.currentStage = null; }
     this.openGate('approved');
+    await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
+    await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
+    if (manifest) await this.record('run.finished', { status: 'succeeded', digest: manifest.digest });
     return this.snapshot();
   }
 
@@ -115,17 +116,17 @@ export class FixtureRun {
     if (approverRole !== 'captain') throw new Error('Only the captain can reject v1 gates.');
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting review.`);
     const rejection: Approval = { id: `${this.runId()}-${stage}-rejection-${this.approvals.length}`, stage, approverRole: 'captain', versionId: this.currentVersion.id, versionHash: this.currentVersion.hash, decision: 'rejected', rationale, createdAt: new Date().toISOString() };
-    await ignoringDuplicate(this.options.repository.createApproval({ ...rejection, runId: this.runId(), projectId: this.projectId() }));
     this.approvals.push(rejection);
     this.status = 'rejected';
-    await this.record('approval.recorded', { stage, decision: 'rejected', versionId: rejection.versionId });
     const parent = this.applier.rewind(this.currentVersion);
     if (parent) {
       this.currentVersion = parent;
       this.rendered = renderDesign(parent.ir);
       this.lintErrorCount = lintDesign(parent.ir).errorCount;
-      await this.record('version.rewound', { stage, rejectedVersionId: rejection.versionId, versionId: parent.id });
     }
+    await ignoringDuplicate(this.options.repository.createApproval({ ...rejection, runId: this.runId(), projectId: this.projectId() }));
+    await this.record('approval.recorded', { stage, decision: 'rejected', versionId: rejection.versionId });
+    if (parent) await this.record('version.rewound', { stage, rejectedVersionId: rejection.versionId, versionId: parent.id });
     return this.snapshot();
   }
 

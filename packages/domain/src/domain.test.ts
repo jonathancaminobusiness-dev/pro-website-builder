@@ -14,7 +14,6 @@ describe('domain contracts', () => {
   it('accepts the phase 0 fixture and exports model JSON schema', () => {
     const fixture = createFixtureIR();
     expect(designIRSchema.parse(fixture).meta.projectId).toBe('fixture-project');
-    expect(schemaJson.Patch).toBeDefined();
     expect(patchSchema.parse({
       operations: [{ op: 'replace', path: '/tokens/color/brand', value: { $value: '#18252d', $type: 'color' } }],
       baseVersionId: 'v1',

@@ -1,4 +1,4 @@
-import { idempotencyKey, visualPropKeys, type AgentResult, type AgentTask, type IdentitySpec } from '@pwb/domain';
+import { idempotencyKey, type AgentResult, type AgentTask, type IdentitySpec } from '@pwb/domain';
 import type { ModelProvider } from './model.js';
 
 export class FakeModelProvider implements ModelProvider {
@@ -13,7 +13,7 @@ export class FakeModelProvider implements ModelProvider {
         operations: [{ op: 'replace', path: '/reviewRecord/findings', value: [`${task.stage} proposal accepted for ${identity.meta.id}`] }],
         baseVersionId: task.baseVersionId,
         touchedPaths: ['/reviewRecord/findings'],
-        rationale: `Fixture ${task.role} produces a typed proposal for ${task.stage} using ${[...visualPropKeys].join(', ')} and text.`,
+        rationale: `Fixture ${task.role} produces a typed proposal for ${task.stage}.`,
         confidence: 1,
         stage: task.stage,
         role: task.role,

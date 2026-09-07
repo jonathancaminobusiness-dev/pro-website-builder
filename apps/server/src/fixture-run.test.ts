@@ -102,6 +102,40 @@ describe('phase 0 fixture run', () => {
     db.sqlite.close();
   });
 
+  it('refuses a second gate decision that races the first one', async () => {
+    const db = openDatabase(':memory:');
+    const repository = new ProjectRepository(db);
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-race-gate-')), 'exports'), provider: new FakeModelProvider() });
+    await run.initialize('run-race-gate');
+    await run.runNext();
+    await run.approve('identity', 'captain');
+    const approvedIdentity = run.snapshot().currentVersion.id;
+    await run.runNext();
+    const atGate = run.snapshot().currentVersion.id;
+    const [first, second] = await Promise.allSettled([run.reject('prototype', 'captain'), run.reject('prototype', 'captain')]);
+    expect(first.status).toBe('fulfilled');
+    expect(second.status).toBe('rejected');
+    const rewound = run.snapshot();
+    expect(rewound.currentVersion.id).toBe(approvedIdentity);
+    expect(rewound.currentVersion.id).not.toBe(atGate);
+    expect(rewound.approvals.filter((entry) => entry.decision === 'rejected')).toHaveLength(1);
+    expect((await run.runNext()).currentStage).toBe('prototype');
+    db.sqlite.close();
+  });
+
+  it('refuses a second approval that races the first one', async () => {
+    const db = openDatabase(':memory:');
+    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-race-approve-')), 'exports'), provider: new FakeModelProvider() });
+    await run.initialize('run-race-approve');
+    await run.runNext();
+    const [first, second] = await Promise.allSettled([run.approve('identity', 'captain'), run.approve('identity', 'captain')]);
+    expect(first.status).toBe('fulfilled');
+    expect(second.status).toBe('rejected');
+    expect(run.snapshot().approvals).toHaveLength(1);
+    expect((await run.runNext()).currentStage).toBe('prototype');
+    db.sqlite.close();
+  });
+
   it('drops a rejected proposal from the document the re-run starts from', async () => {
     const db = openDatabase(':memory:');
     const proposer: ModelProvider = {
