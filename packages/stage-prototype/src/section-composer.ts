@@ -1,6 +1,6 @@
 import { hashJson, resolveTokens, slotChildIds, visualPropKeys, type AgentTask, type IdentitySpec, type PageNode, type Patch } from '@pwb/domain';
 import { ClaudeSession, type ClaudeSessionOptions } from './claude-session.js';
-import { locateSection, sectionAllowedPaths, sectionCompositionSchema, stagePrototypeContractSchemaJson, type RouteManifest, type SectionComposition, type SectionPlan } from './contracts.js';
+import { locateSection, ROUTE_SHELL_SLOT, sectionAllowedPaths, sectionCompositionSchema, stagePrototypeContractSchemaJson, type RouteManifest, type SectionComposition, type SectionPlan } from './contracts.js';
 
 export const COMPOSER_PROMPT_VERSION = 'prototype-composer-v1';
 
@@ -41,9 +41,11 @@ export class FakeSectionComposer implements ComposerProvider {
       if (section.callToAction && index === childIds.length - 1 && section.role !== 'support') {
         return { id, kind: 'component', semantic: 'link', props: { color: ink, font: `{${identity.tokenRoles.bodyTypeface}}`, paddingBlock: `{${identity.tokenRoles.baseSpacing}}`, text: section.callToAction.label, href: section.callToAction.href }, slots: {}, responsive: [] };
       }
+      // Every route needs exactly one h1, and it belongs to the section that opens the route.
+      const opensRoute = section.nodeRange.start === ROUTE_SHELL_SLOT + 1;
       const heading = index === 0 && section.role !== 'support';
       return {
-        id, kind: 'type', semantic: heading ? (section.role === 'hero' ? 'h1' : 'h2') : 'p',
+        id, kind: 'type', semantic: heading ? (opensRoute ? 'h1' : 'h2') : 'p',
         props: { color: ink, font: `{${identity.tokenRoles.bodyTypeface}}`, text },
         slots: {}, responsive: [],
       };

@@ -109,6 +109,9 @@ importers:
       '@pwb/domain':
         specifier: workspace:*
         version: link:../domain
+      '@pwb/qa-deterministic':
+        specifier: workspace:*
+        version: link:../qa-deterministic
 
   packages/orchestrator:
     dependencies:

@@ -25,7 +25,7 @@ describe('identity linter', () => {
     ir.pages.routes[0]!.nodes[0]!.props.color = '{tokens.missing}';
     const findings = lintDesign(ir).findings;
     expect(findings.map((finding) => finding.id)).toEqual(expect.arrayContaining(['TOK-002']));
-    expect(findings.every((finding) => finding.stage === 'identity')).toBe(true);
+    expect(findings.filter((finding) => finding.id.startsWith('TOK-')).every((finding) => finding.stage === 'identity')).toBe(true);
   });
 
   it('reports an identity token role that the document does not define', () => {

@@ -3,9 +3,9 @@
   "references": [
     { "path": "packages/domain" },
     { "path": "packages/renderer" },
+    { "path": "packages/qa-deterministic" },
     { "path": "packages/linter" },
     { "path": "packages/export" },
-    { "path": "packages/qa-deterministic" },
     { "path": "packages/providers" },
     { "path": "packages/orchestrator" },
     { "path": "packages/render-hub" },

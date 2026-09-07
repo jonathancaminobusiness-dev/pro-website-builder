@@ -49,8 +49,8 @@ export class FakeInformationArchitect implements ArchitectProvider {
       {
         id: 'route-contact', route: '/contact', title: `${identity.direction.thesis} — contato`, journeyStep: 3, purpose: 'Fechar a jornada com um próximo passo claro.', rootNodeId: 'contact-shell',
         sections: [
-          { id: 'contact-action', route: '/contact', role: 'action', intent: 'Oferecer um único próximo passo.', headline: 'Vamos conversar', body: identity.strategy.job, callToAction: { label: 'Voltar ao início', href: '/' }, nodeIds: ['contact-root', 'contact-title', 'contact-body', 'contact-cta'], nodeRange: { start: 1, count: 4 } },
-          { id: 'contact-states', route: '/contact', role: 'support', intent: 'Cobrir carregamento, vazio e erro.', headline: 'Estados', body: 'Cada estado explica o que aconteceu.', nodeIds: ['contact-states-root', 'contact-loading', 'contact-empty', 'contact-error'], nodeRange: { start: 5, count: 4 } },
+          { id: 'contact-action', route: '/contact', role: 'action', intent: 'Ir do título direto ao próximo passo, sem intermediar com prova.', headline: 'Vamos conversar', body: identity.strategy.job, callToAction: { label: 'Voltar ao início', href: '/' }, nodeIds: ['contact-root', 'contact-title', 'contact-cta'], nodeRange: { start: 1, count: 3 } },
+          { id: 'contact-states', route: '/contact', role: 'support', intent: 'Cobrir carregamento, vazio e erro.', headline: 'Estados', body: 'Cada estado explica o que aconteceu.', nodeIds: ['contact-states-root', 'contact-loading', 'contact-empty', 'contact-error'], nodeRange: { start: 4, count: 4 } },
         ],
       },
     ];
