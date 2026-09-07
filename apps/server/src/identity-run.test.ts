@@ -1,3 +1,4 @@
+import type { AddressInfo } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -91,6 +92,19 @@ describe('identity run', () => {
     expect(reopened.gate.impact.staleRenderKeys.length).toBeGreaterThan(0);
   });
 
+  it('hands the next stage the approved version and marks it stale when a token moves', async () => {
+    const run = newRun();
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
+    const handed = run.snapshot().handoff!;
+    expect(handed.stale).toBe(false);
+    expect(handed.directionId).toBe('editorial-material');
+    const reopened = await run.changeToken({ tokenPath: 'color.paper', value: { $value: '#ffffff', $type: 'color' }, rationale: 'Papel mais claro.' });
+    expect(reopened.handoff?.stale).toBe(true);
+    expect(reopened.prunedRenders).toBeGreaterThan(0);
+  });
+
   it('refuses a rejection from anyone but the captain', async () => {
     const run = newRun();
     await run.initialize();
@@ -100,9 +114,11 @@ describe('identity run', () => {
 });
 
 describe('identity api', () => {
+  // Ephemeral ports: several worktrees of this repo run their suites on one machine.
   async function withServer<T>(work: (origin: string) => Promise<T>): Promise<T> {
-    const server = await startServer({ dbPath: join(directory, 'api.sqlite'), exportRoot: join(directory, 'exports'), apiPort: 4322, previewPort: 4323 });
-    try { return await work('http://127.0.0.1:4322'); } finally { await server.close(); }
+    const server = await startServer({ dbPath: join(directory, 'api.sqlite'), exportRoot: join(directory, 'exports'), apiPort: 0, previewPort: 0 });
+    const { port } = server.api.address() as AddressInfo;
+    try { return await work(`http://127.0.0.1:${port}`); } finally { await server.close(); }
   }
 
   const post = (origin: string, path: string, payload: unknown) => fetch(`${origin}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: STUDIO_ORIGIN }, body: JSON.stringify(payload) });

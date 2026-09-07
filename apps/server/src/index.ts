@@ -87,7 +87,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     },
     identity: {
       runs: identityRuns,
-      createRun: async (id) => { const run = new IdentityRun({ runId: id, repository, provider: identityProvider }); await run.initialize(); identityRuns.set(id, run); return run; },
+      createRun: async (id) => { const run = new IdentityRun({ runId: id, repository, provider: identityProvider, renderCacheDir }); await run.initialize(); identityRuns.set(id, run); return run; },
     },
   });
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);

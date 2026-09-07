@@ -4,7 +4,7 @@ An AI-assisted local studio that compiles an original visual identity into an in
 
 ## Workflow
 
-1. Identity: a director proposes a typed identity and token contract.
+1. Identity: a curator structures the briefing, three directors propose opposed typed identities in parallel, read-only critics score them, and the captain approves one at Gate 1.
 2. Prototype: an information architect fixes the journey and the states, section composers fill disjoint windows of the page graph in parallel, and four critics review the result.
 3. Finalization: a compiler proposal is validated, rendered, reviewed, and exported.
 
@@ -17,6 +17,7 @@ Each stage stops at a captain-only gate in v1. Agents return schema-validated JS
 - Node HTTP + SQLite WAL + Drizzle for `apps/server`.
 - `packages/domain` owns Zod contracts, DTCG-compatible tokens, JSON Schema, and immutable document fixtures.
 - `packages/renderer` is pure TypeScript and emits semantic HTML/CSS with cascade layers, custom properties, container queries, and reduced-motion handling.
+- `packages/stage-identity` owns the identity stage: the brief curator, the three opposed director seats, the divergence reducer, the read-only critics, the one-cycle refiner, the image art director and the Gate 1 record. It composes the existing `Scheduler`, `PatchGate` and `Applier` rather than adding an orchestrator of its own.
 - `packages/orchestrator` owns the fixed stage DAG, semaphores, deadlines, cancellation, patch CAS, immutable versions, and events. `RunPlanner` emits the identity to prototype to finalization edges. Every captain start request submits exactly one stage to `Scheduler.run`, together with those edges and the set of stages the captain has already approved in this run; the scheduler admits the task only when each of its dependencies is in that completed set or succeeded in the same call, and fails it with a named-dependency error otherwise, so no stage can run ahead of the gate before it. Approving a gate never spends a model call on its own; a rejection returns the stage to a re-runnable state and the next start request re-runs it under a new attempt number.
 - `packages/providers` isolates the owner's local Claude Code binary, optional Higgsfield MCP, and deterministic fakes.
 - `packages/render-hub` uses Playwright Chromium to capture the full evidence matrix: 320/360/390/768/1024/1440 CSS px, every state fixture, light and dark when the identity declares one, reduced motion, screenshots, DOM and accessibility snapshots, per-node geometry, contrast and keyboard-focus samples, axe in each open state, console and network errors, and a content-addressed cache.
@@ -24,6 +25,31 @@ Each stage stops at a captain-only gate in v1. Agents return schema-validated JS
 - `packages/stage-prototype` owns the prototype stage: the serial information architect, the parallel section composers, the four critics, the `PatchPlanner`, the refiner and the loop controller.
 - `packages/export` is the deterministic release compiler: per-route metadata with Open Graph and canonical URLs, a sitemap and robots file, a Content-Security-Policy derived from what the bundle contains, inline styles lifted into a content-addressed stylesheet, self-hosted fonts when the licence permits, sRGB companions for wide-gamut colour tokens, a licence inventory, and an immutable content-addressed bundle. It collects deterministic release vetoes instead of throwing, and `writeReleaseBundle` refuses to touch disk while any veto stands.
 - `packages/stage-finalization` owns the third stage: five release critics as separate read-only sessions, a patch-refiner capped at two cycles, a release-summarizer with no gate authority, the veto catalogue, preview/release parity, and the Gate 3 report.
+
+## The identity stage
+
+One briefing produces three directions, and they are made to disagree. Each director gets a seat with a fixed key on every one of the six divergence axes — composition, typography, materiality, colour, imagery, motion — and no two seats share a key on any axis. The three answers open three **alternative branches**: versions with the same parent that are never merged, so the captain compares whole documents instead of a blend nobody proposed. Each branch gets its own `PatchGate` over the shared `VersionStore`; only an `Applier` ever writes a version.
+
+The matrix that says how far apart the directions are is not something a model asserts. The stage builds it as a deterministic fan-in: the axis keys come from the seat, the descriptors come from the director, and the palette fingerprint is measured from the direction's own colour tokens. That fingerprint records lightness and chroma and deliberately drops hue, which is how `DIV-030` enforces the plan's rule that swapping the hue is not a new direction.
+
+Two rules join the linter registry:
+
+- `ID-003` requires exactly one grounded decision record for every token and every governed contract field. A decision is grounded when it cites briefing evidence that exists, carries a written rationale, or names a divergence axis. An identity that justifies nothing fails it, which is the point.
+- `DIV-030` requires every pair of directions to differ on at least four axes, refuses a colour difference that is only a hue rotation, and refuses a palette fingerprint that does not match the identity it is recorded on.
+
+Critics are separate sessions that receive the rubric before the document, score 0–4 with 3 as the minimum, may answer `uncertain`, and cannot edit anything: a critic that returns a patch has that patch discarded and the attempt recorded. The refiner gets one cycle, may change what a token means but not which tokens exist, and never redraws the divergence matrix.
+
+The image art director writes prompt plans for all three directions, with negatives and an expected licence per plan. Higgsfield generates for the approved direction only, after Gate 1, and the resulting assets are written into `/assets/items` by the applier so provenance and licence live in the versioned document. With no Higgsfield MCP configured the pipeline still records a provenance-marked placeholder instead of a silent gap.
+
+Gate 1 is captain-only. A failing check does not silently pass and does not silently block: automatic selection is refused and the captain may proceed only with a written override, which is recorded. Approval produces an `IdentityHandoff` — the approved version id plus the hash of the approved identity — and the next stage plans against it: `RunPlanner` hands the prototype worker exactly that identity, and the test suite asserts the hash it receives is the one the captain approved.
+
+Changing a token afterwards goes through the same applier, produces a new immutable version, and the derived gate state turns to `reopened`: the handoff is marked stale and the RenderHub cache entries the approved identity produced are deleted. There is no second bookkeeping system — the gate state is derived from the approval record and the current identity hash.
+
+```bash
+corepack pnpm --filter @pwb/server dev   # then, in the Studio, open the "Gate 1 · identidade" tab
+```
+
+Creating an identity run costs nothing. `POST /api/identity/runs/<id>/start` is the only route that spends a model turn, and every state-changing identity route is captain-only and accepted from the Studio origin alone.
 
 The renderer refuses raw visual values. Colors, dimensions, font settings, radii, shadows, and motion must resolve through tokens, with no exception path in Fase 0. A page node's `semantic` is the tag it renders as, drawn from a closed vocabulary, so the schema refuses a landmark the renderer would silently drop; `body` carries the query container and `main` is the element the breakpoint restyles. Preview is served on port `4311`, separate from the Studio/API origin, and the Studio iframe uses `sandbox` without `allow-same-origin`.
 
@@ -97,7 +123,14 @@ That run is what the `pattern` claim rests on, and no more: the binary's strict 
 
 Those runs are records of the commits they were made at, and `exports/<digest>/` is where that version of the command wrote. Neither directory nor exit code is what the command produces now: there is one publish path, it writes the content-addressed bundle under `PWB_RELEASE_ROOT` (default `releases/`), and `run:fixture` stops at Gate 3 and exits non-zero whenever the report carries a veto or an open escalation — which it does until the evidence runners have measured that exact bundle.
 
-Higgsfield is an optional asynchronous raster boundary, delivered as `HiggsfieldMcpProvider` in `packages/providers`: when its MCP is not configured, `submit` returns a `not_configured` job whose provenance records `pending provider terms` and a placeholder note, and it never requests or persists credentials. Phase 0 does not submit a raster job from the three-stage journey — `RunPlanner` emits three `claude`-lane tasks and nothing writes an asset from a `RasterJob` — so a fixture run's asset ledger is the same whether or not Higgsfield is configured. Wiring the raster lane into the run is later-phase work.
+The identity stage uses a fixture of its own, `FakeIdentityProvider`, because its workers answer with role-specific artefacts rather than the phase 0 patch. `PWB_MODEL_PROVIDER=claude-code` swaps in the same `ClaudeRunner`: the stage builds each role's prompt with that role's closed JSON schema inlined, and validates the returned artefact against it, giving one correction before escalating to human review. To exercise it manually:
+
+```bash
+PWB_MODEL_PROVIDER=claude-code corepack pnpm --filter @pwb/server dev
+# then open the Studio, choose "Gate 1 · identidade" and press "Executar etapa de identidade"
+```
+
+Higgsfield is an optional asynchronous raster boundary, delivered as `HiggsfieldMcpProvider` in `packages/providers`: when its MCP is not configured, `submit` returns a `not_configured` job whose provenance records `pending provider terms` and a placeholder note, and it never requests or persists credentials. The phase 0 three-stage journey submits no raster job — `RunPlanner` emits three `claude`-lane tasks and nothing writes an asset from a `RasterJob` — so a fixture run's asset ledger is the same whether or not Higgsfield is configured. The identity stage is the one that submits imagery, and only for the approved direction; when the MCP is not configured the pipeline continues with a provenance-marked placeholder asset.
 
 ## The prototype stage
 
@@ -351,6 +384,6 @@ The same variable switches the studio's Gate 3 routes when the server starts.
 
 ## Quality and security checks
 
-The test suite covers schema validation, page-graph integrity, alias cycles/orphans, byte-stable rendering, token-only linting, identity token roles, CSS-emittable tokens, forbidden defaults, CAS/overlap rejection, semaphore limits and deadlines, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, the licence inventory the release compiler writes, the full fixture journey, cancellation/restart, and scans of database, log and compiled-bundle data for secret-like values. The prototype stage adds the section-window contracts, the closed critic vocabulary, the guarded compilation of every allowlisted repair, each of the loop's stop conditions observed through the stage itself, and the seven prototype linter rules. `corepack pnpm test:e2e` additionally drives the Studio through all three gates and through the Gate 2 review, and exercises `RenderHub` against a live browser, both for a single cached case and for the whole route x viewport x state matrix served by the isolated preview server. Several checkouts of this repo share one machine, so set `PWB_E2E_PORT_BASE` to give a run its own API, preview and Studio ports instead of reusing whatever already listens on the developer ones: `PWB_E2E_PORT_BASE=4520 corepack pnpm test:e2e`. With that block the harness serves the Studio from Vite's dev server; on the default ports it serves the built bundle instead, so run `corepack pnpm build` first.
+The test suite covers schema validation, page-graph integrity, alias cycles/orphans, byte-stable rendering, token-only linting, identity token roles, CSS-emittable tokens, forbidden defaults, CAS/overlap rejection, semaphore limits and deadlines, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, the licence inventory the release compiler writes, the full fixture journey, cancellation/restart, and scans of database, log and compiled-bundle data for secret-like values. The identity stage adds hue-invariant palette comparison, `ID-003` and `DIV-030` against tampered documents, sibling branches that share one parent, the scheduler lane limit during the fan-out, a critic whose patch is discarded, a single refinement cycle, imagery generated only after approval, captain-only Gate 1 with a written override, and the token change that reopens the gate. The prototype stage adds the section-window contracts, the closed critic vocabulary, the guarded compilation of every allowlisted repair, each of the loop's stop conditions observed through the stage itself, and the seven prototype linter rules. `corepack pnpm test:e2e` additionally drives the Studio through all three gates and through the Gate 1 and Gate 2 reviews, checks the three-card Gate 1 layout for sideways scroll at 1440, 768 and 390 px, and exercises `RenderHub` against a live browser, both for a single cached case and for the whole route x viewport x state matrix served by the isolated preview server. Several checkouts of this repo share one machine, so set `PWB_E2E_PORT_BASE` to give a run its own API, preview and Studio ports instead of reusing whatever already listens on the developer ones: `PWB_E2E_PORT_BASE=4520 corepack pnpm test:e2e`. With that block the harness serves the Studio from Vite's dev server; on the default ports it serves the built bundle instead, so run `corepack pnpm build` first.
 
-Fase 0 intentionally does not include parallel identity directions, Postgres, SaaS authentication, Yjs/CRDT collaboration, or Astro output. Fase 2 adds the prototype stage, its critics and the prototype half of the linter catalogue; Fase 3 adds the release compiler, the release critics, the evidence runners and Lighthouse; parallel identity directions stay with the identity phase.
+Fase 1 adds parallel identity directions, the identity critics and the `ID-003` and `DIV-030` rules. Fase 2 adds the prototype stage, its critics and the prototype half of the linter catalogue. Fase 3 adds the release compiler, the release critics, the evidence runners and Lighthouse. Still absent: Postgres, SaaS authentication, Yjs/CRDT collaboration, and Astro output.

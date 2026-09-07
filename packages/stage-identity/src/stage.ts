@@ -39,7 +39,7 @@ import {
   type ImagePromptPlan,
 } from './contracts.js';
 import { identityCritics } from './critics.js';
-import { evaluateIdentityGate, identityHash, type IdentityGateRecord, type IdentityGateState } from './gate.js';
+import { evaluateIdentityGate, handoffOf, identityHash, type IdentityGateRecord, type IdentityGateState, type IdentityHandoff } from './gate.js';
 import { briefCuratorPrompt, criticPrompt, documentSliceOf, identityDirectorPrompt, identityRefinerPrompt, imageArtDirectorPrompt } from './prompts.js';
 
 export const IDENTITY_ALLOWED_PATHS = ['/identity'];
@@ -184,6 +184,12 @@ export class IdentityStage {
 
   /** The version the approved identity lives on right now, which a token change moves forward. */
   get approvedVersionId(): string | undefined { return this.currentVersionId ?? this.gateRecord?.versionId; }
+
+  /** The typed handoff the prototype stage plans against; undefined until the captain decides. */
+  handoff(): IdentityHandoff | undefined {
+    const versionId = this.approvedVersionId;
+    return versionId ? handoffOf(this.gateState(), versionId) : undefined;
+  }
 
   // ---------------------------------------------------------------- step 1
 

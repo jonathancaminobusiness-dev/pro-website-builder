@@ -6,6 +6,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Use Corepack commands from `README.md` because pnpm is not assumed to be globally installed.
 - Keep generated sites flowing through `packages/domain` → `packages/orchestrator` → `packages/renderer`; agents must not write HTML/JSX directly.
+- A stage package (`packages/stage-identity`, and its successors) composes the orchestrator; it must not grow a scheduler, patch gate or version writer of its own.
+- Alternative candidates are sibling versions that share a parent and are never merged. The mechanism is one `PatchGate` per branch over one shared `VersionStore`; see `packages/stage-identity/src/branches.ts`.
+- A model never asserts a fact the code can measure. Divergence axis keys are assigned by the seat and palette fingerprints are computed from tokens, so a stage re-imposes them rather than trusting the answer; see `packages/stage-identity/src/stage.ts`.
+- Fixture builders in `packages/domain/src/fixture.ts` must return fresh data on every call; callers mutate what they get.
+- Tests that bind a port must use an ephemeral one. Several worktrees of this repo run their suites on the same machine and fixed ports collide across lanes.
 - The server/API and isolated preview ports, provider safety boundary, and fixture CLI are documented in `README.md` and `apps/server/src/index.ts`.
 - Several checkouts of this repo run side by side. Never kill a process you did not start, bind every server a test or a script opens to port 0, and run the Playwright suite with `PWB_E2E_PORT_BASE` set — without it the harness reuses whatever already listens on the developer ports, which silently tests another checkout's build.
 - An agent proposes domain-typed JSON validated by a Zod schema — a `RouteManifest`, a `SectionComposition`, a `CritiqueReport` — never a JSON Patch and never markup. Deterministic code compiles that JSON into the patch; see `packages/stage-prototype`.

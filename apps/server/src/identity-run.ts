@@ -3,7 +3,7 @@ import { createFixtureIR, type Approval, type Token } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
-import { approvalOf, IdentityStage, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityStageResult } from '@pwb/stage-identity';
+import { approvalOf, IdentityStage, pruneRenderCache, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 
 const duplicateCodes = new Set(['SQLITE_CONSTRAINT_PRIMARYKEY', 'SQLITE_CONSTRAINT_UNIQUE']);
@@ -57,6 +57,9 @@ export interface IdentityRunSnapshot {
   approvals: Approval[];
   assets: IdentityAsset[];
   previewVersionId?: string;
+  /** What the prototype stage plans against once Gate 1 closes. */
+  handoff?: IdentityHandoff;
+  prunedRenders?: number;
   error?: string;
 }
 
@@ -76,11 +79,12 @@ export class IdentityRun {
   private status: IdentityRunStatus = 'queued';
   private assets: IdentityAsset[] = [];
   private failure: string | undefined;
+  private prunedRenders: number | undefined;
   private started = false;
   private inFlight: Promise<void> | undefined;
   private abort: AbortController | undefined;
 
-  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string }) {
+  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string }) {
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
     this.rendered.set(this.root.id, renderDesign(this.root.ir));
@@ -159,7 +163,13 @@ export class IdentityRun {
     const version = this.store.get(changed.versionId)!;
     await ignoringDuplicate(this.options.repository.saveVersion({ id: version.id, projectId: this.projectId, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir }));
     this.rendered.set(version.id, renderDesign(version.ir));
-    if (changed.gate.state === 'reopened') this.status = 'reopened';
+    if (changed.gate.state === 'reopened') {
+      this.status = 'reopened';
+      // The renders the approved identity produced are unreachable now; drop them
+      // instead of keeping screenshots of an identity nobody approved.
+      if (this.options.renderCacheDir) this.prunedRenders = (await pruneRenderCache(this.options.renderCacheDir, changed.gate.impact.staleRenderKeys)).length;
+      else this.prunedRenders = changed.gate.impact.staleRenderKeys.length;
+    }
     this.result = this.stage.snapshot();
     return this.snapshot();
   }
@@ -185,6 +195,8 @@ export class IdentityRun {
       approvals: structuredClone(this.approvals),
       assets: structuredClone(this.assets),
       ...(this.stage.approvedVersionId ? { previewVersionId: this.stage.approvedVersionId } : {}),
+      ...(this.stage.handoff() ? { handoff: this.stage.handoff()! } : {}),
+      ...(this.prunedRenders === undefined ? {} : { prunedRenders: this.prunedRenders }),
       ...(this.failure ? { error: this.failure } : {}),
     };
   }
