@@ -46,6 +46,11 @@ test('drives the whole route, viewport and state matrix against the preview serv
     expect(results.filter((result) => result.qa.passed)).toHaveLength(cases.length);
     expect(results.map((result) => result.qa.status)).toEqual(cases.map(() => 200));
     expect(new Set(results.map((result) => result.screenshotPath)).size).toBe(cases.length);
+    for (const [route, nodeId] of [['/', 'home-title'], ['/proof', 'proof-title'], ['/contact', 'contact-title']] as const) {
+      const forRoute = results.filter((result) => result.renderCase.route === `/preview/${ir.meta.versionId}${route}`);
+      expect(forRoute).toHaveLength(3 * Object.keys(ir.stateFixtures).length);
+      for (const result of forRoute) expect(result.dom).toContain(`data-node-id="${nodeId}"`);
+    }
   } finally {
     await preview.close();
     await rm(cacheDir, { recursive: true, force: true });

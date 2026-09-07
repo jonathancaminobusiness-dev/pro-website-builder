@@ -4,7 +4,7 @@ import { chromium, type Browser } from 'playwright';
 import type { RenderedDocument } from '@pwb/renderer';
 import { cacheKey, evaluateQa, type QaResult, type RenderCase } from './cases.js';
 
-export interface RenderCaseResult { renderCase: RenderCase; screenshotPath: string; dom: string; accessibility: unknown; qa: QaResult; cached: boolean; }
+export interface RenderCaseResult { renderCase: RenderCase; screenshotPath: string; dom: string; accessibility: string; qa: QaResult; cached: boolean; }
 
 export class RenderHub {
   constructor(private readonly options: { cacheDir: string; browser?: Browser }) {}
@@ -27,8 +27,7 @@ export class RenderHub {
         const response = await page.goto(new URL(renderCase.route, baseUrl).toString(), { waitUntil: 'networkidle' });
         await page.waitForFunction(() => document.fonts?.status === 'loaded');
         const metrics = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, dom: document.documentElement.outerHTML }));
-        const accessibilityApi = (page as unknown as { accessibility?: { snapshot: () => Promise<unknown> } }).accessibility;
-        const accessibility = accessibilityApi ? await accessibilityApi.snapshot() : await page.locator('body').ariaSnapshot();
+        const accessibility = await page.locator('body').ariaSnapshot();
         const qa = evaluateQa({ ...metrics, status: response?.status() ?? null, consoleErrors, networkErrors });
         const screenshotPath = join(this.options.cacheDir, `${key}.png`);
         await page.screenshot({ path: screenshotPath, fullPage: true });
