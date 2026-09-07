@@ -74,6 +74,34 @@ export class FixtureRun {
     await this.record('version.created', { versionId: this.currentVersion.id, hash: this.currentVersion.hash });
   }
 
+  /** Rebuilds a persisted run so a restarted server can serve, preview and continue it. */
+  async restore(runId: string): Promise<boolean> {
+    const run = await this.options.repository.getRun(runId);
+    if (!run) return false;
+    const versions = await this.options.repository.listVersions(run.projectId);
+    if (versions.length === 0) return false;
+    this.runIdentifier = runId;
+    const byId = new Map(versions.map((version) => [version.id, version]));
+    for (const version of versions) this.store.save({ id: version.id, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir });
+    const approvals = await this.options.repository.listApprovals(runId);
+    const approved = approvals.filter((approval) => approval.decision === 'approved');
+    const head = approved.at(-1) ? byId.get(approved.at(-1)!.versionId) : undefined;
+    const latest = head ?? versions.reduce((deepest, version) => {
+      const depth = (record: typeof version): number => { let steps = 0; let cursor: typeof version | undefined = record; while (cursor?.parentId) { steps += 1; cursor = byId.get(cursor.parentId); } return steps; };
+      return depth(version) > depth(deepest) ? version : deepest;
+    }, versions[0]!);
+    this.currentVersion = { id: latest.id, ...(latest.parentId ? { parentId: latest.parentId } : {}), hash: latest.hash, ir: latest.ir };
+    this.rendered = renderDesign(latest.ir);
+    this.lintErrorCount = lintDesign(latest.ir).errorCount;
+    this.approvals.push(...approvals);
+    this.stageIndex = Math.min(approved.length, STAGES.length);
+    this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
+    this.currentStage = null;
+    this.started = approved.length > 0;
+    this.initialized = true;
+    return true;
+  }
+
   async runNext(): Promise<FixtureSnapshot> {
     this.requireInitialized();
     if (this.status === 'succeeded' || this.status === 'cancelled' || this.status === 'needs_review') return this.snapshot();
@@ -97,17 +125,21 @@ export class FixtureRun {
     if (approverRole !== 'captain') throw new Error('Only the captain can approve v1 gates.');
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting approval.`);
     const approved = this.currentVersion;
+    const lint = lintDesign(approved.ir);
+    if (lint.errorCount > 0) throw new Error(`Stage ${stage} cannot be approved while version ${approved.id} has ${lint.errorCount} lint error(s): ${lint.findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} ${finding.path}`).join('; ')}`);
+    const approval: Approval = { id: `${this.runId()}-${stage}-approval`, stage, approverRole: 'captain', versionId: approved.id, versionHash: approved.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
+    const previousStatus = this.status;
     this.status = 'queued';
     let manifest: ExportManifest | undefined;
-    try { manifest = stage === 'finalization' ? await exportStatic(this.rendered, approved.ir, this.options.exportRoot) : undefined; }
-    catch (error) { this.status = 'needs_review'; throw error; }
-    const approval: Approval = { id: `${this.runId()}-${stage}-approval`, stage, approverRole: 'captain', versionId: approved.id, versionHash: approved.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
+    try {
+      manifest = stage === 'finalization' ? await exportStatic(this.rendered, approved.ir, this.options.exportRoot) : undefined;
+      await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
+      await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
+    } catch (error) { this.status = previousStatus; throw error; }
     this.approvals.push(approval);
     this.stageIndex += 1;
     if (manifest) { this.exportManifest = manifest; this.status = 'succeeded'; } else { this.currentStage = null; }
     this.openGate('approved');
-    await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
-    await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
     if (manifest) await this.record('run.finished', { status: 'succeeded', digest: manifest.digest });
     return this.snapshot();
   }

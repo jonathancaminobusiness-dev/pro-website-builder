@@ -83,4 +83,25 @@ describe('deterministic renderer', () => {
     colliding.identity.tokenRoles.text = 'color.ink-strong';
     expect(() => renderDesign(colliding)).toThrow(/compile to the CSS custom property/i);
   });
+
+  it('renders a ready asset a media node references so generated images reach preview and export', () => {
+    const ir = createFixtureIR();
+    ir.assets.items = [{ id: 'hero', kind: 'raster', uri: 'data:image/png;base64,iVBORw0KGgo=', alt: 'Bancada da oficina', provenance: { source: 'higgsfield', author: 'higgsfield', license: 'fixture license', date: '2026-09-07', hash: 'hero' }, status: 'ready' }];
+    const page = ir.pages.routes[0]!;
+    page.nodes.push({ id: 'home-media', kind: 'media', semantic: 'figure', props: { text: 'Bancada' }, slots: {}, assetId: 'hero' });
+    page.nodes[0]!.slots = { children: [...(page.nodes[0]!.slots.children ?? []), 'home-media'] };
+    const html = renderDesign(ir).routes[0]!.html;
+    expect(html).toContain('<img src="data:image/png;base64,iVBORw0KGgo=" alt="Bancada da oficina">');
+  });
+
+  it('omits the image for an asset that is not ready and refuses an unknown asset reference', () => {
+    const ir = createFixtureIR();
+    ir.assets.items = [{ id: 'hero', kind: 'raster', uri: 'about:blank', alt: 'Placeholder', provenance: { source: 'higgsfield', author: 'higgsfield', license: 'fixture license', date: '2026-09-07', hash: 'hero' }, status: 'placeholder' }];
+    const page = ir.pages.routes[0]!;
+    page.nodes.push({ id: 'home-media', kind: 'media', semantic: 'figure', props: { text: 'Bancada' }, slots: {}, assetId: 'hero' });
+    page.nodes[0]!.slots = { children: [...(page.nodes[0]!.slots.children ?? []), 'home-media'] };
+    expect(renderDesign(ir).routes[0]!.html).not.toContain('<img');
+    page.nodes.at(-1)!.assetId = 'absent';
+    expect(() => renderDesign(ir)).toThrow(/unknown asset absent/);
+  });
 });

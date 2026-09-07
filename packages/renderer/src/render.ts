@@ -1,4 +1,4 @@
-import { cssCustomPropertyName, cssTokenIssues, documentRules, hashJson, resolveTokens, slotChildIds, visualPropKeys, type DesignIR, type IdentitySpec, type Page, type PageNode } from '@pwb/domain';
+import { cssCustomPropertyName, cssTokenIssues, documentRules, hashJson, resolveTokens, slotChildIds, visualPropKeys, type Asset, type DesignIR, type IdentitySpec, type Page, type PageNode } from '@pwb/domain';
 
 export const RENDERER_VERSION = 'renderer-0.1.0';
 
@@ -41,7 +41,7 @@ function propertyName(key: string): string {
   return propertyAliases[key] ?? key.replaceAll(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
-function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<string, string | number | boolean>): string {
+function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<string, string | number | boolean>, assets: Map<string, Asset>): string {
   const styleEntries = Object.entries(node.props).filter((entry): entry is [string, string | number | boolean] => visualPropKeys.has(entry[0]) && entry[1] !== undefined);
   const styles = styleEntries.map(([key, value]) => `${propertyName(key)}:${cssValue(value, values, node, key)}`).join(';');
   const styleAttribute = styles ? ` style="${escapeHtml(styles)}"` : '';
@@ -50,17 +50,22 @@ function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<
   const children = slotChildIds(node).map((childId) => {
     const child = byId.get(childId);
     if (!child) throw new Error(`Node ${node.id} references unknown node ${childId}.`);
-    return renderNode(child, byId, values);
+    return renderNode(child, byId, values, assets);
   }).join('');
-  if (node.kind === 'media') return `<figure${common}><figcaption>${text}</figcaption>${children}</figure>`;
+  if (node.kind === 'media') {
+    const asset = node.assetId === undefined ? undefined : assets.get(node.assetId);
+    if (node.assetId !== undefined && !asset) throw new Error(`Node ${node.id} references unknown asset ${node.assetId}.`);
+    const image = asset && asset.status === 'ready' ? `<img src="${escapeHtml(asset.uri)}" alt="${escapeHtml(asset.alt)}">` : '';
+    return `<figure${common}>${image}<figcaption>${text}</figcaption>${children}</figure>`;
+  }
   return `<${node.semantic}${common}>${text}${children}</${node.semantic}>`;
 }
 
-function renderPage(page: Page, values: Record<string, string | number | boolean>): string {
+function renderPage(page: Page, values: Record<string, string | number | boolean>, assets: Map<string, Asset>): string {
   const byId = new Map(page.nodes.map((node) => [node.id, node]));
   const root = byId.get(page.rootNodeId);
   if (!root) throw new Error(`Page ${page.id} has no node ${page.rootNodeId} to use as its root.`);
-  const body = renderNode(root, byId, values);
+  const body = renderNode(root, byId, values, assets);
   return `<main data-page-id="${escapeHtml(page.id)}" data-route="${escapeHtml(page.route)}">${body}</main>`;
 }
 
@@ -78,7 +83,8 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
 
 export function renderDesign(ir: DesignIR): RenderedDocument {
   const values = resolveTokens(ir.identity.tokens).values;
+  const assets = new Map(ir.assets.items.map((asset) => [asset.id, asset]));
   const css = renderCss(ir, values);
-  const routes = ir.pages.routes.map((page) => ({ route: page.route, title: page.title, html: `<!doctype html><html lang="${escapeHtml(ir.identity.meta.locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(page.title)}</title><style>${css}</style></head><body>${renderPage(page, values)}</body></html>` }));
+  const routes = ir.pages.routes.map((page) => ({ route: page.route, title: page.title, html: `<!doctype html><html lang="${escapeHtml(ir.identity.meta.locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(page.title)}</title><style>${css}</style></head><body>${renderPage(page, values, assets)}</body></html>` }));
   return { html: routes[0]?.html ?? '<!doctype html><main></main>', css, routes, irHash: hashJson(ir), rendererVersion: RENDERER_VERSION };
 }

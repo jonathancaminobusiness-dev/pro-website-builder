@@ -3,7 +3,11 @@ import { randomUUID } from 'node:crypto';
 import type { FixtureRun } from './fixture-run.js';
 import { STUDIO_ORIGIN } from './security.js';
 
-interface ApiOptions { runs: Map<string, FixtureRun>; createRun: (id: string) => Promise<FixtureRun>; }
+export class RunConflictError extends Error {
+  constructor(runId: string) { super(`Run ${runId} already exists.`); this.name = 'RunConflictError'; }
+}
+
+interface ApiOptions { runs: Map<string, FixtureRun>; createRun: (id: string) => Promise<FixtureRun>; loadRun?: (id: string) => Promise<FixtureRun | undefined>; }
 const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' };
 const allowedOrigins = new Set<string>([STUDIO_ORIGIN]);
 function allowedOrigin(origin: string | undefined): string { return origin && allowedOrigins.has(origin) ? origin : STUDIO_ORIGIN; }
@@ -25,13 +29,16 @@ export function createApiServer(options: ApiOptions): Server {
         const input = await body(request);
         const runId = typeof input.runId === 'string' ? input.runId : `run-${randomUUID()}`;
         if (options.runs.has(runId)) { send(response, 409, { error: `Run ${runId} already exists.` }); return; }
-        const run = await options.createRun(runId);
-        send(response, 201, { runId, snapshot: run.snapshot() });
+        let created: FixtureRun;
+        try { created = await options.createRun(runId); }
+        catch (error) { if (error instanceof RunConflictError) { send(response, 409, { error: error.message }); return; } throw error; }
+        send(response, 201, { runId, snapshot: created.snapshot() });
         return;
       }
       const match = /^\/api\/runs\/([^/]+)(?:\/(stage|approve|reject|cancel|restart))?$/.exec(pathname);
       if (match) {
-        const run = options.runs.get(decodeURIComponent(match[1]!));
+        const runId = decodeURIComponent(match[1]!);
+        const run = options.runs.get(runId) ?? (options.loadRun ? await options.loadRun(runId) : undefined);
         if (!run) { send(response, 404, { error: 'Run not found.' }); return; }
         const action = match[2];
         if (request.method === 'GET' && !action) { send(response, 200, run.snapshot()); return; }

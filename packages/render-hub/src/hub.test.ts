@@ -26,4 +26,10 @@ describe('render hub', () => {
     expect(evaluateQa({ scrollWidth: 100, clientWidth: 100, status: 404, consoleErrors: [], networkErrors: [] }).passed).toBe(false);
     expect(evaluateQa({ scrollWidth: 100, clientWidth: 100, status: null, consoleErrors: [], networkErrors: [] }).passed).toBe(false);
   });
+
+  it('refuses a state fixture whose values the hub cannot apply instead of reporting duplicate coverage', () => {
+    const ir = createFixtureIR();
+    ir.stateFixtures.dense = { description: 'Dense spacing', values: { gap: '{space.sm}' } };
+    expect(() => createRenderCases(ir)).toThrow(/cannot apply/i);
+  });
 });

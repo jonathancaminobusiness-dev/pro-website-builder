@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { designIRSchema, hashJson, type AgentTask, type DesignIR, type Patch } from '@pwb/domain';
+import { designIRSchema, hashJson, type AgentTask, type Approval, type DesignIR, type Patch } from '@pwb/domain';
 import * as schema from './schema.js';
 
 export interface LocalDatabase { sqlite: Database.Database; orm: BetterSQLite3Database<typeof schema>; }
@@ -44,6 +44,20 @@ export class ProjectRepository {
   async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(designIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }
   async createApproval(input: ApprovalInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.approvals).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
   async appendEvent(input: EventInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.events).values({ id: input.id, runId: input.runId, type: input.type, payload: JSON.stringify(input.payload), createdAt: new Date().toISOString() }).run(); }); }
+  async getRun(runId: string): Promise<{ id: string; projectId: string } | undefined> {
+    const row = this.db.sqlite.prepare('SELECT id, project_id AS projectId FROM runs WHERE id = ?').get(runId) as { id: string; projectId: string } | undefined;
+    return row;
+  }
+
+  async listVersions(projectId: string): Promise<Array<{ id: string; parentId?: string; hash: string; ir: DesignIR }>> {
+    return (this.db.sqlite.prepare('SELECT id, parent_id AS parentId, hash, ir FROM versions WHERE project_id = ? ORDER BY rowid').all(projectId) as Array<{ id: string; parentId: string | null; hash: string; ir: string }>)
+      .map((row) => ({ id: row.id, ...(row.parentId ? { parentId: row.parentId } : {}), hash: row.hash, ir: designIRSchema.parse(JSON.parse(row.ir)) }));
+  }
+
+  async listApprovals(runId: string): Promise<Approval[]> {
+    return (this.db.sqlite.prepare('SELECT id, stage, approver_role AS approverRole, version_id AS versionId, version_hash AS versionHash, decision, rationale, created_at AS createdAt FROM approvals WHERE run_id = ? ORDER BY rowid').all(runId) as Approval[]);
+  }
+
   async listEvents(runId: string): Promise<Array<{ id: string; type: string; payload: Record<string, unknown> }>> { return this.db.sqlite.prepare('SELECT id, type, payload FROM events WHERE run_id = ? ORDER BY rowid').all(runId).map((row) => { const item = row as { id: string; type: string; payload: string }; return { id: item.id, type: item.type, payload: JSON.parse(item.payload) as Record<string, unknown> }; }); }
   dump(): string {
     const tables = (this.db.sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string }>).map((table) => table.name);

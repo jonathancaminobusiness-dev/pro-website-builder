@@ -382,4 +382,20 @@ describe('orchestrator', () => {
     expect(next.hash).toBe(hashJson(next.ir));
     expect(store.get(root.id)?.hash).toBe(root.hash);
   });
+
+  it('releases the scheduler when a cancel lands while a settle callback is still pending', async () => {
+    const scheduler = new Scheduler();
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const controller = new AbortController();
+    const task = { ...new RunPlanner(store).plan('run-settle', root.id, 'brief').tasks[0]!, deadlineMs: 60_000 };
+    const started = scheduler.run([task], async () => 'value', {
+      signal: controller.signal,
+      settle: () => new Promise<GateVerdict>(() => { /* a gate that never resolves */ }),
+    });
+    setTimeout(() => controller.abort(), 10);
+    const result = await started;
+    expect(result.cancelled).toBe(true);
+    expect(result.results[0]?.state).toBe('cancelled');
+  });
 });

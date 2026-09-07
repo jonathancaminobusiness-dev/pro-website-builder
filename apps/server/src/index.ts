@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createApiServer } from './api.js';
+import { createApiServer, RunConflictError } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
 import { createPreviewServer } from './preview.js';
@@ -16,7 +16,28 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
   const runs = new Map<string, FixtureRun>();
-  const api = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository, exportRoot, provider }); await run.initialize(id); runs.set(id, run); return run; } });
+  const claimed = new Set<string>();
+  const api = createApiServer({
+    runs,
+    createRun: async (id) => {
+      if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
+      claimed.add(id);
+      try {
+        const run = new FixtureRun({ repository, exportRoot, provider });
+        await run.initialize(id);
+        runs.set(id, run);
+        return run;
+      } finally { claimed.delete(id); }
+    },
+    loadRun: async (id) => {
+      const existing = runs.get(id);
+      if (existing) return existing;
+      const run = new FixtureRun({ repository, exportRoot, provider });
+      if (!await run.restore(id)) return undefined;
+      runs.set(id, run);
+      return run;
+    },
+  });
   const preview = createPreviewServer((versionId) => {
     for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return snapshot.rendered; }
     return undefined;

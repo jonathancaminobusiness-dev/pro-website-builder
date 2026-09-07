@@ -92,4 +92,34 @@ describe('local API', () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     db.sqlite.close();
   });
+
+  it('serves a persisted run after a restart instead of answering 404', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-restart-'));
+    const dbPath = join(dir, 'restart.sqlite');
+    const first = openDatabase(dbPath);
+    const seeded = new FixtureRun({ repository: new ProjectRepository(first), exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() });
+    await seeded.initialize('persisted-run');
+    await seeded.runNext();
+    await seeded.approve('identity', 'captain');
+    const expected = seeded.snapshot().currentVersion.id;
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const repository = new ProjectRepository(second);
+    const runs = new Map<string, FixtureRun>();
+    const server = createApiServer({
+      runs,
+      createRun: async (id) => { const run = new FixtureRun({ repository, exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
+      loadRun: async (id) => { const run = new FixtureRun({ repository, exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() }); if (!await run.restore(id)) return undefined; runs.set(id, run); return run; },
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    const response = await fetch(`${origin}/api/runs/persisted-run`);
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { currentVersion: { id: string } }).currentVersion.id).toBe(expected);
+    expect((await fetch(`${origin}/api/runs/never-created`)).status).toBe(404);
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    second.sqlite.close();
+  });
 });

@@ -14,6 +14,21 @@ export class DeadlineExceededError extends Error {
   constructor(public readonly taskId: string, public readonly deadlineMs: number) { super(`Task ${taskId} exceeded its ${deadlineMs}ms deadline.`); this.name = 'DeadlineExceededError'; }
 }
 
+/**
+ * Rejects as soon as the run is cancelled. Used to bound the settle callback, which is otherwise
+ * unbounded: a gate that never resolves would hold scheduler ownership forever and block restart.
+ * The worker itself is deliberately not raced against abort - cutting it off mid-flight would
+ * abandon an in-progress persist and break the cancel-then-restart integrity guarantee - because
+ * its own deadline already bounds it.
+ */
+function aborted(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    const fail = (): void => reject(new DOMException('The run was cancelled.', 'AbortError'));
+    if (signal.aborted) { fail(); return; }
+    signal.addEventListener('abort', fail, { once: true });
+  });
+}
+
 export class Scheduler {
   readonly maxActiveClaude: number;
   readonly maxActiveRaster: number;
@@ -54,7 +69,7 @@ export class Scheduler {
           if (timer) clearTimeout(timer);
           controller.signal.removeEventListener('abort', cascade);
         }
-        const verdict = options.settle ? await options.settle(current, value, controller.signal) : 'approved';
+        const verdict = options.settle ? await Promise.race([options.settle(current, value, controller.signal), aborted(controller.signal).catch(() => 'cancelled' as GateVerdict)]) : 'approved';
         if (verdict === 'rejected') continue;
         if (verdict === 'approved') { succeeded.add(current.id); results.push({ task: { ...current, state: 'succeeded' }, value, state: 'succeeded' }); return; }
         results.push({ task: { ...current, state: 'cancelled' }, value, state: 'cancelled' });

@@ -2,6 +2,7 @@ import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { createFixtureIR } from '@pwb/domain';
 import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
@@ -292,5 +293,58 @@ describe('phase 0 fixture run', () => {
     await run.restart();
     expect((await run.runAll()).status).toBe('succeeded');
     db.sqlite.close();
+  });
+
+  it('refuses to approve a version that carries lint errors', async () => {
+    const db = openDatabase(':memory:');
+    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-lint-')), 'exports'), provider: new FakeModelProvider() });
+    await run.initialize('run-lint');
+    await run.runNext();
+    const dirty = structuredClone((run as unknown as { currentVersion: { ir: ReturnType<typeof createFixtureIR> } }).currentVersion.ir);
+    dirty.identity.forbiddenDefaults.fonts = [...dirty.identity.forbiddenDefaults.fonts, String((dirty.identity.tokens as { type: { body: { $value: string } } }).type.body.$value)];
+    (run as unknown as { currentVersion: { ir: unknown } }).currentVersion.ir = dirty;
+    await expect(run.approve('identity', 'captain')).rejects.toThrow(/lint error/i);
+    expect(run.snapshot().approvals).toHaveLength(0);
+    db.sqlite.close();
+  });
+
+  it('keeps the gate reviewable when the approval cannot be persisted', async () => {
+    const db = openDatabase(':memory:');
+    class FailingRepository extends ProjectRepository {
+      override async createApproval(): Promise<void> { throw new Error('disk is full'); }
+    }
+    const run = new FixtureRun({ repository: new FailingRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-approve-')), 'exports'), provider: new FakeModelProvider() });
+    await run.initialize('run-approve-fail');
+    await run.runNext();
+    await expect(run.approve('identity', 'captain')).rejects.toThrow(/disk is full/);
+    const after = run.snapshot();
+    expect(after.status).toBe('needs_review');
+    expect(after.currentStage).toBe('identity');
+    expect(after.approvals).toHaveLength(0);
+    db.sqlite.close();
+  });
+
+  it('restores a persisted run so a restarted process can serve and continue it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-'));
+    const dbPath = join(dir, 'restore.sqlite');
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() });
+    await original.initialize('run-restore');
+    await original.runNext();
+    await original.approve('identity', 'captain');
+    const before = original.snapshot();
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-restore')).toBe(true);
+    const after = restored.snapshot();
+    expect(after.currentVersion.id).toBe(before.currentVersion.id);
+    expect(after.rendered.routes[0]!.html).toBe(before.rendered.routes[0]!.html);
+    expect(after.approvals).toHaveLength(1);
+    const next = await restored.runNext();
+    expect(next.currentStage).toBe('prototype');
+    expect(await restored.restore('absent-run')).toBe(false);
+    second.sqlite.close();
   });
 });

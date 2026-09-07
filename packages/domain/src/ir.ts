@@ -27,8 +27,10 @@ export const pageNodeSchema = z.object({
   semantic: semanticSchema,
   props: nodePropsSchema,
   slots: z.record(z.array(z.string())).default({}),
+  assetId: z.string().optional(),
 }).superRefine((node, ctx) => {
   if ((node.kind === 'media') !== (node.semantic === 'figure')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `${documentRules.mediaFigure} Node ${node.id} is a ${node.kind} declaring ${node.semantic}.` });
+  if (node.assetId !== undefined && node.kind !== 'media') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['assetId'], message: `${documentRules.mediaAsset} Node ${node.id} is a ${node.kind}.` });
   if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['slots'], message: `${documentRules.phrasingLeaf} Node ${node.id} renders as ${node.semantic}.` });
 });
 
@@ -94,8 +96,18 @@ export const designIRSchema = z.object({
     const path = /^\{([^}]+)\}$/.exec(value)?.[1];
     if (path !== undefined && !(path in defined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pages', 'routes'], message: `${documentRules.tokenReferences} Node ${node.id} sets ${key} to ${value}, which the identity does not define.` });
   }
+  const assetsById = new Map(ir.assets.items.map((asset) => [asset.id, asset]));
+  for (const page of ir.pages.routes) for (const node of page.nodes) {
+    if (node.assetId === undefined) continue;
+    const asset = assetsById.get(node.assetId);
+    if (!asset) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pages', 'routes'], message: `${documentRules.mediaAsset} Node ${node.id} references the unknown asset ${node.assetId}.` }); continue; }
+    if (asset.status !== 'ready') continue;
+    if (asset.alt.trim() === '') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['assets', 'items'], message: `${documentRules.mediaAsset} Asset ${asset.id} is ready but records no alt text.` });
+    if (!asset.uri.startsWith('data:')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['assets', 'items'], message: `${documentRules.mediaAsset} Asset ${asset.id} is ready but its URI ${asset.uri} is not a data: URI.` });
+  }
 });
 
+export type Asset = z.infer<typeof assetSchema>;
 export type PageNode = z.infer<typeof pageNodeSchema>;
 export type Page = z.infer<typeof pageSchema>;
 export type DesignIR = z.infer<typeof designIRSchema>;

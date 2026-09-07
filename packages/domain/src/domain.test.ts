@@ -82,6 +82,7 @@ describe('domain contracts', () => {
       tokenRoles: () => refused((ir) => { ir.identity.tokenRoles.surface = 'color.superficie'; }),
       cssTokens: () => emitted((ir) => { (ir.identity.tokens as { color: Record<string, unknown> }).color.papel_claro = { $value: '#f4efe6', $type: 'color' }; }),
       tokenReferences: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.props.color = '{color.accent-2}'; }),
+      mediaAsset: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.assetId = 'missing-asset'; }),
     };
     for (const [rule, collect] of Object.entries(violations) as Array<[keyof typeof documentRules, () => string[]]>) {
       const messages = collect();
