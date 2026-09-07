@@ -22,7 +22,8 @@ Each stage stops at a captain-only gate in v1. Agents return schema-validated JS
 - `packages/render-hub` uses Playwright Chromium to capture the full evidence matrix: 320/360/390/768/1024/1440 CSS px, every state fixture, light and dark when the identity declares one, reduced motion, screenshots, DOM and accessibility snapshots, per-node geometry, contrast and keyboard-focus samples, axe in each open state, console and network errors, and a content-addressed cache.
 - `packages/qa-deterministic` owns the Tier 0/1 gate. It is pure: evidence in, findings out. Tier 0 vetoes a revision before any model runs; Tier 1 observes without blocking.
 - `packages/stage-prototype` owns the prototype stage: the serial information architect, the parallel section composers, the four critics, the `PatchPlanner`, the refiner and the loop controller.
-- `packages/export` writes content-addressed static routes and a license/provenance manifest.
+- `packages/export` is the deterministic release compiler: per-route metadata with Open Graph and canonical URLs, a sitemap and robots file, a Content-Security-Policy derived from what the bundle contains, inline styles lifted into a content-addressed stylesheet, self-hosted fonts when the licence permits, sRGB companions for wide-gamut colour tokens, a licence inventory, and an immutable content-addressed bundle. It collects deterministic release vetoes instead of throwing, and `writeReleaseBundle` refuses to touch disk while any veto stands.
+- `packages/stage-finalization` owns the third stage: five release critics as separate read-only sessions, a patch-refiner capped at two cycles, a release-summarizer with no gate authority, the veto catalogue, preview/release parity, and the Gate 3 report.
 
 The renderer refuses raw visual values. Colors, dimensions, font settings, radii, shadows, and motion must resolve through tokens, with no exception path in Fase 0. A page node's `semantic` is the tag it renders as, drawn from a closed vocabulary, so the schema refuses a landmark the renderer would silently drop; `body` carries the query container and `main` is the element the breakpoint restyles. Preview is served on port `4311`, separate from the Studio/API origin, and the Studio iframe uses `sandbox` without `allow-same-origin`.
 
@@ -131,9 +132,83 @@ The review only offers what the run measured: `result.viewports` is the set of w
 ## Real local Claude Code in the prototype stage
 
 `PWB_MODEL_PROVIDER=claude-code` swaps all three prototype workers at once: `ClaudeInformationArchitect`, `ClaudeSectionComposer` and `ClaudeCritiqueRunner` replace their deterministic counterparts, for both `corepack pnpm run:prototype` and `corepack pnpm --filter @pwb/server dev`. Each is a separate session with a fresh id, `--no-session-persistence`, a closed JSON schema, a deadline, an abort signal and a denied tool list. A critic keeps `Read` so it can open the screenshots it was handed; every other worker is denied the filesystem and the network entirely. No credential is read, requested, logged or stored, and no paid API is involved. CI never runs this path: it uses the deterministic providers, which produce the same typed contracts.
+## Finalization stage and Gate 3
+
+The third stage compiles the approved document into an immutable release, has it
+reviewed, and stops at the captain.
+
+```bash
+corepack pnpm run:release          # compile, critique, evaluate Gate 3, write the bundle
+corepack pnpm run:release --serve  # keep the release and the matching preview online
+corepack pnpm run:evidence         # Vitest, Playwright on three engines, axe and Lighthouse
+corepack pnpm test:e2e:release     # only the browser evidence
+corepack pnpm run:lighthouse       # only the Lighthouse artifacts
+```
+
+Everything binds an ephemeral port the operating system chooses, so an evidence
+run never contends with the studio on `5173`, the preview on `4311`, or another
+worktree. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site name the
+canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT` and
+`PWB_EVIDENCE_DIR` move the bundle and the artifacts.
+
+**Release vetoes.** Eight objective stop conditions, catalogued in
+`packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
+XSS or `javascript:` URL, unsanitized HTML, an asset without a licence, a build
+failure, a broken primary link, a critical AA regression, and a release that
+diverges from the approved one. A veto is never scored or averaged: one veto
+blocks Gate 3, and the export refuses to write. Only the compiler, the evidence
+runners and the gate may raise one — a critic cannot raise or clear a veto, its
+tasks carry no writable path, and its findings have no veto severity.
+
+**Independent evidence.** Four runners that do not know what the gate wants to
+hear write typed artifacts into `artifacts/release/`, and the gate reads those
+files. `evidenceVetoes` derives an accessibility regression from axe's raw
+violation counts rather than from a field a runner chose to set, and
+`sealSummary` overwrites the summarizer's veto count with the authoritative one,
+so no summary can hide a veto. A runner that did not run leaves no artifact, and
+the gate reports the gap as an escalation instead of treating silence as a pass.
+`PWB_RELEASE_ENGINES=chromium,webkit` narrows the engine set on a host where one
+browser cannot launch; on macOS 26 and later, Playwright's Firefox build may
+fail to start with a `sandbox_extension_issue_file_to_process` error, and the
+gate then reports Firefox as missing evidence.
+
+Lighthouse is a laboratory run. It measures one machine and one network, does
+not observe a visitor, and does not measure INP without interaction; the
+artifacts say so rather than implying field data. axe finds part of what WCAG
+requires and returns `incomplete` where a human must look, which the artifacts
+also record.
+
+**Reproducibility and parity.** The bundle directory is the digest of every file
+it contains, the manifest carries no timestamp, and the same document and
+toolchain produce byte-identical bundles. Parity is proven twice: Vitest fixtures
+read the compiled stylesheet back with a parser that shares no code with the
+compiler that wrote it, and `tests/release/parity.spec.ts` compares computed
+styles and text between the preview and the release in every engine.
+
+**Gate 3.** The studio panel shows the digest, the standing vetoes, the rubric
+each critic gave on the 0–4 scale with a minimum of 3, parity per route, which
+runners produced evidence, and what escalates. Publishing sends the digest the
+captain is looking at, so a release that moved since the report cannot be
+published by mistake. Only the captain publishes.
+
+### Real critic sessions
+
+CI and the fixture use the deterministic providers. `PWB_MODEL_PROVIDER=claude-code`
+switches the five critics, the patch-refiner and the release-summarizer to the
+owner's local Claude Code binary through `ClaudeJsonRunner`, which uses the same
+boundary as `ClaudeRunner`: `execFile` with no shell, a fresh session that is
+never persisted, tools denied, a deadline and an abort signal. It never reads,
+stores, prints, forwards or asks for a credential, and no paid API is involved.
+
+```bash
+corepack pnpm run:evidence
+PWB_MODEL_PROVIDER=claude-code corepack pnpm run:release
+```
+
+The same variable switches the studio's Gate 3 routes when the server starts.
 
 ## Quality and security checks
 
 The test suite covers schema validation, page-graph integrity, alias cycles/orphans, byte-stable rendering, token-only linting, identity token roles, CSS-emittable tokens, forbidden defaults, CAS/overlap rejection, semaphore limits and deadlines, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, export licenses, the full fixture journey, cancellation/restart, and scans of database/log/export data for secret-like values. The prototype stage adds the section-window contracts, the closed critic vocabulary, the guarded compilation of every allowlisted repair, each of the loop's stop conditions observed through the stage itself, and the seven prototype linter rules. `corepack pnpm test:e2e` additionally drives the Studio through all three gates and through the Gate 2 review, and exercises `RenderHub` against a live browser, both for a single cached case and for the whole route x viewport x state matrix served by the isolated preview server. Several checkouts of this repo share one machine, so set `PWB_E2E_PORT_BASE` to give a run its own API, preview and Studio ports instead of reusing whatever already listens on the developer ones: `PWB_E2E_PORT_BASE=4520 corepack pnpm test:e2e`. With that block the harness serves the Studio from Vite's dev server; on the default ports it serves the built bundle instead, so run `corepack pnpm build` first.
 
-Fase 0 intentionally does not include parallel identity directions, Postgres, SaaS authentication, Yjs/CRDT collaboration, Astro output, or Lighthouse. Fase 2 adds the prototype stage, its critics and the prototype half of the linter catalogue; the identity and release halves stay with their own phases.
+Fase 0 intentionally does not include parallel identity directions, Postgres, SaaS authentication, Yjs/CRDT collaboration, or Astro output. Fase 2 adds the prototype stage, its critics and the prototype half of the linter catalogue; Fase 3 adds the release compiler, the release critics, the evidence runners and Lighthouse; parallel identity directions stay with the identity phase.

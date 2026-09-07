@@ -13,6 +13,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - The preview origin serves `script-src 'none'`. Anything that has to run in a previewed page goes through `page.evaluate`, never `addScriptTag`; `packages/render-hub/src/hub.ts` shows both that and the `__name` shim a transpiler forces on serialized browser functions.
 - Deterministic checks that a browser measures live in `packages/qa-deterministic`; checks the typed document can decide live in the linter. Keep new rules on the side that can actually answer them.
 - The node prop and semantic vocabularies are closed on purpose. Widening either means teaching the renderer to read the new field in the same change, the way `responsive` is read as a container query — a field nothing reads is the reason the earlier one was removed.
+- Release vetoes, the evidence runners and the Gate 3 commands are described under "Finalization stage and Gate 3" in `README.md`; the veto catalogue itself is `packages/stage-finalization/src/veto-catalog.ts`.
+- A veto is objective and blocking, and a critic can raise none: critic tasks carry an empty `allowedPaths`, `ReleaseFinding` has no veto severity, and `evaluateReleaseGate` recomputes every veto from the compiled bundle and the raw artifacts. Keep it that way when extending the stage.
 
 ## Maintaining this file
 

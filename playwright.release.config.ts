@@ -11,8 +11,7 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * The harness binds an ephemeral port in `globalSetup` and publishes its origin
  * through `PWB_RELEASE_ORIGIN`, so a run never competes for a fixed port.
- */
-/**
+ *
  * Every engine runs by default. `PWB_RELEASE_ENGINES` narrows the set on a host
  * where one of them cannot launch — the gate then reports that engine as
  * missing evidence instead of treating its absence as a pass.
