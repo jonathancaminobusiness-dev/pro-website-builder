@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { FixtureRun } from './fixture-run.js';
+import { handleIdentityRequest, type IdentityApiOptions } from './identity-api.js';
 import type { PrototypeRunRegistry } from './prototype-api.js';
 import { handlePrototypeRequest } from './prototype-routes.js';
 import { STUDIO_ORIGIN } from './security.js';
@@ -13,6 +14,7 @@ interface ApiOptions {
   runs: Map<string, FixtureRun>;
   createRun: (id: string) => Promise<FixtureRun>;
   loadRun?: (id: string) => Promise<FixtureRun | undefined>;
+  identity?: IdentityApiOptions;
   prototypes?: PrototypeRunRegistry;
 }
 
@@ -33,6 +35,7 @@ export function createApiServer(options: ApiOptions): Server {
       catch { send(response, 400, { error: 'Malformed request target.' }); return; }
       if (request.method === 'POST' && !allowedOrigins.has(request.headers.origin ?? '')) { send(response, 403, { error: 'State-changing requests must come from the local studio origin.' }); return; }
       if (request.method === 'GET' && pathname === '/health') { response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', ...corsHeaders }).end('ok'); return; }
+      if (options.identity && await handleIdentityRequest(request, response, pathname, options.identity, { send: (status, payload) => send(response, status, payload), body })) return;
       if (request.method === 'POST' && pathname === '/api/runs') {
         const input = await body(request);
         const runId = typeof input.runId === 'string' ? input.runId : `run-${randomUUID()}`;

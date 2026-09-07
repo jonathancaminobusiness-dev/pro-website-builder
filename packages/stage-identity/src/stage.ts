@@ -530,12 +530,32 @@ export class IdentityStage {
     await this.record('identity.gate.approved', { directionId: record.directionId, versionId: record.versionId, identityHash: record.identityHash, blockers, overridden: blockers.length > 0 });
 
     let assets: IdentityAsset[] = [];
+    let versionId = version.id;
     if (candidate.imagePlan && this.options.raster) {
       const generated = await generateApprovedImagery(candidate.imagePlan, { provider: this.options.raster, identityVersionId: version.id, ...(input.signal ? { signal: input.signal } : {}) });
       assets = generated.assets;
       await this.record('identity.imagery.generated', { directionId: candidate.directionId, assets: assets.map((asset) => ({ id: asset.id, status: asset.status, license: asset.provenance.license, hash: asset.provenance.hash })) });
+      // The asset ledger is part of the versioned document, so provenance and
+      // licence land through the applier rather than in a side table.
+      if (assets.length > 0) {
+        const ledgerPaths = [...IDENTITY_ALLOWED_PATHS, ...IDENTITY_ASSET_PATHS];
+        const ledger: Patch = {
+          operations: [{ op: 'replace', path: '/assets/items', value: [...version.ir.assets.items, ...assets] }],
+          baseVersionId: version.id,
+          touchedPaths: ['/assets/items'],
+          rationale: `Imagery generated for the approved direction ${candidate.directionId}, with provenance and licence per image.`,
+          confidence: 1,
+          stage: 'identity',
+          role: 'art-director',
+          idempotencyKey: hashJson({ base: version.id, assets: assets.map((asset) => asset.provenance.hash) }),
+        };
+        const withAssets = this.branches.applierFor(candidate.directionId).apply(ledger, ledgerPaths, version.id);
+        renderDesign(withAssets.ir);
+        this.currentVersionId = withAssets.id;
+        versionId = withAssets.id;
+      }
     }
-    return { record, assets, versionId: version.id, ...(input.overrideRationale ? { overrideRationale: input.overrideRationale } : {}) };
+    return { record, assets, versionId, ...(input.overrideRationale ? { overrideRationale: input.overrideRationale } : {}) };
   }
 
   /**

@@ -7,8 +7,9 @@ import { RenderHubEvidenceSource } from '@pwb/stage-prototype';
 import { createApiServer, RunConflictError } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
+import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
-import { createModelProvider } from './provider.js';
+import { createIdentityProvider, createModelProvider } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
 
 export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
@@ -18,15 +19,18 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   await mkdir(join(dbPath, '..'), { recursive: true });
   await mkdir(renderCacheDir, { recursive: true });
   const provider = createModelProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
+  const identityProvider = createIdentityProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
   const runs = new Map<string, FixtureRun>();
+  const identityRuns = new Map<string, IdentityRun>();
   const claimed = new Set<string>();
   const fontsDir = options.fontsDir ?? process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
     for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` }); }
+    for (const run of identityRuns.values()) { const rendered = run.renderedFor(versionId); if (rendered) return rendered; }
     return prototypes?.preview(versionId);
     // The preview reads the faces itself and memoises them against the manifest,
     // so a face added or replaced while the studio runs still reaches the captain.
@@ -80,6 +84,10 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
       if (!await run.restore(id)) return undefined;
       runs.set(id, run);
       return run;
+    },
+    identity: {
+      runs: identityRuns,
+      createRun: async (id) => { const run = new IdentityRun({ runId: id, repository, provider: identityProvider }); await run.initialize(); identityRuns.set(id, run); return run; },
     },
   });
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);
