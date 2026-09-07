@@ -39,6 +39,7 @@ import {
   directionVectorDraftSchema,
   imagePromptPlanSchemaFor,
   IDENTITY_PROMPT_VERSION,
+  RUBRIC_MINIMUM,
   type BriefSpec,
   type CritiqueFinding,
   type CritiqueReport,
@@ -89,6 +90,7 @@ export interface IdentityCandidate {
   lint: LintReport;
   refinedFromVersionId?: string;
   blocking: CritiqueFinding[];
+  scores: Array<{ criticId: string; dimension: string; score: number }>;
   rubricGaps: Array<{ dimension: string; score: number }>;
   abstained: boolean;
   imagePlan?: ImagePromptPlan;
@@ -112,7 +114,6 @@ export interface IdentityApproval {
   record: IdentityGateRecord;
   assets: IdentityAsset[];
   versionId: string;
-  overrideRationale?: string;
 }
 
 /** A refusal the caller can fix: a bad value, a decision the gate does not allow, a direction that is not in the run. */
@@ -344,6 +345,7 @@ export class IdentityStage {
       lint: lintDesign(version.ir),
       ...((refinedFrom ?? previous?.refinedFromVersionId) ? { refinedFromVersionId: (refinedFrom ?? previous!.refinedFromVersionId)! } : {}),
       blocking: previous?.blocking ?? [],
+      scores: previous?.scores ?? [],
       rubricGaps: previous?.rubricGaps ?? [],
       abstained: previous?.abstained ?? false,
       ...(previous?.imagePlan ? { imagePlan: previous.imagePlan } : {}),
@@ -432,6 +434,7 @@ export class IdentityStage {
       return {
         ...candidate,
         blocking: forCandidate.flatMap(blockingFindings),
+        scores: forCandidate.flatMap((report) => report.scores.map((entry) => ({ criticId: report.criticId, dimension: entry.dimension, score: entry.score }))),
         rubricGaps: forCandidate.flatMap(belowRubric),
         abstained: forCandidate.some((report) => report.abstain),
       };
@@ -609,6 +612,7 @@ export class IdentityStage {
       ...lintDesign(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir).findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
       ...this.divergence.blockedPairs,
       ...candidate.blocking.map((finding) => `${finding.id}: ${finding.observation}`),
+      ...candidate.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score}, below the absolute minimum of ${RUBRIC_MINIMUM}.`),
       ...candidate.imageryViolations,
     ];
     if (blockers.length > 0 && !(input.overrideRationale ?? '').trim()) {
@@ -623,12 +627,13 @@ export class IdentityStage {
       identityHash: identityHash(version.ir),
       approverRole: 'captain',
       rationale: input.rationale,
+      ...(input.overrideRationale ? { overrideRationale: input.overrideRationale } : {}),
       approvedAt: this.now(),
     };
     this.gateRecord = record;
     this.approvedIr = version.ir;
     this.currentVersionId = version.id;
-    await this.record('identity.gate.approved', { directionId: record.directionId, versionId: record.versionId, identityHash: record.identityHash, blockers, overridden: blockers.length > 0 });
+    await this.record('identity.gate.approved', { directionId: record.directionId, versionId: record.versionId, identityHash: record.identityHash, blockers, overridden: blockers.length > 0, ...(record.overrideRationale ? { overrideRationale: record.overrideRationale } : {}) });
 
     // Imagery for the approved direction only. The identity stage may write the
     // identity contract and the review record, never `/assets`, so the generated
@@ -641,7 +646,7 @@ export class IdentityStage {
       this.approvedAssets = assets;
       await this.record('identity.imagery.generated', { directionId: candidate.directionId, assets: assets.map((asset) => ({ id: asset.id, status: asset.status, license: asset.provenance.license, hash: asset.provenance.hash })) });
     }
-    return { record, assets, versionId: version.id, ...(input.overrideRationale ? { overrideRationale: input.overrideRationale } : {}) };
+    return { record, assets, versionId: version.id };
   }
 
   /**

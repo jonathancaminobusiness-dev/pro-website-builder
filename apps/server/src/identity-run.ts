@@ -36,6 +36,7 @@ export interface IdentityDirectionView {
   decisions: Array<{ choice: string; axis?: string; evidenceIds: string[]; rationale?: string }>;
   lintErrors: Array<{ id: string; path: string; message: string }>;
   blocking: Array<{ id: string; observation: string; why: string }>;
+  scores: Array<{ criticId: string; dimension: string; score: number }>;
   rubricGaps: Array<{ dimension: string; score: number }>;
   abstained: boolean;
   refinedFromVersionId?: string;
@@ -162,8 +163,10 @@ export class IdentityRun {
     const version = this.store.get(changed.versionId)!;
     await ignoringDuplicate(this.options.repository.saveVersion({ id: version.id, projectId: this.projectId, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir }));
     this.rendered.set(version.id, renderDesign(version.ir));
+    // The label follows the derived gate on both outcomes: a change that restores
+    // the approved identity leaves the gate closed, and the run approved with it.
+    this.status = changed.gate.state === 'reopened' ? 'reopened' : 'approved';
     if (changed.gate.state === 'reopened') {
-      this.status = 'reopened';
       // The renders the approved identity produced are unreachable now; drop them
       // instead of keeping screenshots of an identity nobody approved.
       if (this.options.renderCacheDir) await pruneRenderCache(this.options.renderCacheDir, changed.gate.impact.staleRenderKeys);
@@ -242,6 +245,7 @@ export class IdentityRun {
       decisions: identity.decisions.map((decision) => ({ choice: decision.choice, ...(decision.axis ? { axis: decision.axis } : {}), evidenceIds: decision.evidenceIds, ...(decision.rationale ? { rationale: decision.rationale } : {}) })),
       lintErrors: lint.findings.filter((finding) => finding.severity === 'error').map((finding) => ({ id: finding.id, path: finding.path, message: finding.message })),
       blocking: candidate.blocking.map((finding) => ({ id: finding.id, observation: finding.observation, why: finding.why })),
+      scores: candidate.scores,
       rubricGaps: candidate.rubricGaps,
       abstained: candidate.abstained,
       ...(candidate.refinedFromVersionId ? { refinedFromVersionId: candidate.refinedFromVersionId } : {}),

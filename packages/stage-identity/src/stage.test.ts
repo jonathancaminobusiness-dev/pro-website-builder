@@ -510,6 +510,26 @@ describe('image art director', () => {
     expect(stage.handoff()!.assets.map((asset) => asset.provenance.hash)).toEqual(first.assets.map((asset) => asset.provenance.hash));
   });
 
+  it('asks again for an image the provider never finished, under the same digest', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    let uri: string | undefined;
+    const { stage } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { ...(uri ? { uri } : {}), license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
+    await stage.run();
+    // The MCP accepted the prompt but returned no image, so the handoff carries a placeholder.
+    const first = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    expect(first.assets.map((asset) => asset.status)).toEqual(['placeholder']);
+
+    uri = 'higgsfield://asset-1';
+    await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    const again = await stage.approve({ directionId: 'modular-technical', rationale: 'Token revisado e aprovado.', approverRole: 'captain' });
+    // The unchanged digest is the idempotency key, so asking again costs nothing and picks up the finished image.
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.idempotency_key).toBe(calls[0]!.idempotency_key);
+    expect(again.assets.map((asset) => asset.status)).toEqual(['ready']);
+    expect(again.assets.map((asset) => asset.provenance.hash)).toEqual(first.assets.map((asset) => asset.provenance.hash));
+    expect(stage.handoff()!.assets.map((asset) => asset.uri)).toEqual(['higgsfield://asset-1']);
+  });
+
   it('refuses a plan that smuggles photography or an unadmitted source into a direction that declared neither', async () => {
     const { stage, store } = harness();
     const result = await stage.run();
@@ -567,6 +587,31 @@ describe('gate 1', () => {
     await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
     const approved = await stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain', overrideRationale: 'O veto é sobre um papel que esta rota não usa; registrado para o Gate 2.' });
     expect(approved.record.directionId).toBe('editorial-material');
+  });
+
+  it('blocks a direction whose critic scored below the absolute rubric until the captain overrides in writing', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-system-a11y-critic-editorial-material') return result;
+        const report = result.artifact as Record<string, unknown>;
+        // A sub-minimum score with no veto finding: the rubric is the only thing standing in the way.
+        return { ...result, artifact: { ...report, scores: [{ dimension: 'system-accessibility', score: 2, evidence: 'O sistema de tipos não sustenta o mínimo de leitura.' }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'editorial-material')!;
+    expect(candidate.blocking).toEqual([]);
+    expect(candidate.rubricGaps).toEqual([{ dimension: 'system-accessibility', score: 2 }]);
+    expect(candidate.scores).toContainEqual({ criticId: 'system-a11y-critic', dimension: 'system-accessibility', score: 2 });
+
+    await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/below the absolute minimum of 3/);
+    const approved = await stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain', overrideRationale: 'A nota é sobre uma rota que o Gate 2 vai refazer.' });
+    expect(approved.record.overrideRationale).toBe('A nota é sobre uma rota que o Gate 2 vai refazer.');
+    // The other two cards keep the rubric they passed, so the minimum blocks only where it failed.
+    for (const other of result.candidates.filter((entry) => entry.directionId !== 'editorial-material')) expect(other.rubricGaps).toEqual([]);
   });
 
   it('hands the next stage a hash of the approved identity, not of the whole document', async () => {

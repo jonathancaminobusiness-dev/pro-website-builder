@@ -15,6 +15,8 @@ export interface IdentityGateRecord {
   identityHash: string;
   approverRole: 'captain';
   rationale: string;
+  /** Why the captain approved over the blockers the gate listed, when they did. */
+  overrideRationale?: string;
   approvedAt: string;
 }
 
@@ -124,7 +126,7 @@ export function approvalOf(record: IdentityGateRecord): Approval {
     versionId: record.versionId,
     versionHash: record.versionHash,
     decision: 'approved',
-    rationale: record.rationale,
+    rationale: record.overrideRationale ? `${record.rationale}\n\nOverride: ${record.overrideRationale}` : record.rationale,
     createdAt: record.approvedAt,
   };
 }

@@ -16,6 +16,7 @@ export interface IdentityDirectionView {
   decisions: Array<{ choice: string; axis?: string; evidenceIds: string[]; rationale?: string }>;
   lintErrors: Array<{ id: string; path: string; message: string }>;
   blocking: Array<{ id: string; observation: string; why: string }>;
+  scores: Array<{ criticId: string; dimension: string; score: number }>;
   rubricGaps: Array<{ dimension: string; score: number }>;
   abstained: boolean;
   refinedFromVersionId?: string;
@@ -39,7 +40,7 @@ export interface IdentityGateSnapshot {
   error?: string;
 }
 
-interface GateRecord { directionId: string; versionId: string; identityHash: string; rationale: string; approvedAt: string; }
+interface GateRecord { directionId: string; versionId: string; identityHash: string; rationale: string; overrideRationale?: string; approvedAt: string; }
 
 const axisLabels: Record<string, string> = {
   composition: 'Composição', typography: 'Tipografia', materiality: 'Materialidade',
@@ -68,6 +69,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),
     ...direction.blocking.map((finding) => `${finding.id} · ${finding.observation}`),
+    ...direction.rubricGaps.map((gap) => `Rubrica ${gap.dimension} · nota ${gap.score} abaixo do mínimo absoluto`),
     ...direction.imageryViolations,
     ...(snapshot?.divergence?.blockedPairs ?? []),
   ], [snapshot]);
@@ -171,6 +173,12 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
               <ul>{direction.imagePlans.map((plan) => <li key={plan.id}><code>{plan.id}</code> · {plan.role} · {plan.alt} <small>{plan.licenceExpectation}</small></li>)}</ul>
             </details>}
 
+            {direction.scores.length > 0 && <ul className="score-row" aria-label={`Notas dos críticos para ${direction.label}`}>
+              {direction.scores.map((score) => <li key={`${score.criticId}-${score.dimension}`} className={direction.rubricGaps.some((gap) => gap.dimension === score.dimension && gap.score === score.score) ? 'below-rubric' : ''}>
+                <code>{score.dimension}</code> {score.score}/4 <small>{score.criticId}</small>
+              </li>)}
+            </ul>}
+
             <p className="version-line"><code>{direction.versionId}</code> ramo de <code>{direction.parentVersionId}</code>{direction.refinedFromVersionId ? ' · refinado uma vez' : ''}</p>
 
             {blockers.length > 0
@@ -198,6 +206,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       {record && <div className="gate-record" role="status">
         <p><strong>Decisão registrada.</strong> {record.directionId} · versão <code>{record.versionId}</code> · hash da identidade <code>{record.identityHash.slice(0, 16)}…</code></p>
         <p>{record.rationale}</p>
+        {record.overrideRationale && <p className="gate-override"><strong>Override registrado:</strong> {record.overrideRationale}</p>}
         {snapshot.assets.length > 0 && <ul className="asset-list">{snapshot.assets.map((asset) => <li key={asset.id}>
           <code>{asset.id}</code> · {asset.status} · licença: {asset.provenance.license}
         </li>)}</ul>}

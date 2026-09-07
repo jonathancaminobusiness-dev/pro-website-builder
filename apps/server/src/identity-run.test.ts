@@ -93,6 +93,46 @@ describe('identity run', () => {
     expect(reopened.gate.impact.staleRenderKeys.length).toBeGreaterThan(0);
   });
 
+  it('follows the gate back to approved when a token change is undone', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({ runId: 'identity-undo', repository, provider: new FakeIdentityProvider() });
+    await run.initialize();
+    const started = await run.start();
+    const before = started.directions.find((direction) => direction.directionId === 'modular-technical')!.swatches.find((swatch) => swatch.path === 'color.accent')!.value;
+    await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
+
+    const reopened = await run.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    expect(reopened.status).toBe('reopened');
+
+    // Restoring the approved value leaves the identity byte-identical, so the gate
+    // closes again and the label the captain reads cannot disagree with it.
+    const undone = await run.changeToken({ tokenPath: 'color.accent', value: before, rationale: 'Volta ao sinal aprovado.' });
+    expect(undone.gate.state).toBe('closed');
+    expect(undone.status).toBe('approved');
+    expect(undone.handoff?.stale).toBe(false);
+  });
+
+  it('records the written override with the decision it authorised', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({ runId: 'identity-override', repository, provider: new FakeIdentityProvider() });
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
+    await run.changeToken({ tokenPath: 'type.display', value: 'Inter-only hero, Georgia, serif', rationale: 'Testando a fonte proibida.' });
+    const override = 'A fonte proibida é intencional: o Gate 2 substitui essa rota.';
+    const reapproved = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Revisado.', overrideRationale: override });
+
+    if (reapproved.gate.state !== 'closed') throw new Error('unreachable');
+    expect(reapproved.gate.record.overrideRationale).toBe(override);
+    // The ledger keeps the sentence that authorised an approval over blockers.
+    const persisted = database.sqlite.prepare('SELECT rationale FROM approvals WHERE run_id = ?').all('identity-override') as Array<{ rationale: string }>;
+    expect(persisted.some((row) => row.rationale.includes(override))).toBe(true);
+    const events = await repository.listEvents('identity-override');
+    const approvedEvents = events.filter((event) => event.type === 'identity.gate.approved');
+    expect((approvedEvents.at(-1)!.payload as { overrideRationale?: string }).overrideRationale).toBe(override);
+    expect((approvedEvents[0]!.payload as { overrideRationale?: string }).overrideRationale).toBeUndefined();
+  });
+
   it('hands the next stage the approved version and marks it stale when a token moves', async () => {
     const run = newRun();
     await run.initialize();

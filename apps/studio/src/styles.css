@@ -88,12 +88,16 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .decision-list span { display: block; color: #879095; }
 .version-line { margin: 14px 0 8px; color: #879095; font-size: .72rem; overflow-wrap: anywhere; }
 .blocker-list { margin: 8px 0; padding-left: 18px; color: #8c3a2c; font-size: .78rem; line-height: 1.5; }
+.score-row { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 12px 0 0; padding: 0; list-style: none; color: #58676c; font-size: .72rem; }
+.score-row .below-rubric { color: #8c3a2c; font-weight: 600; }
+.score-row small { color: #879095; }
 .direction-card .actions { margin-top: auto; padding-top: 16px; }
 .gate-decision { display: grid; gap: 6px; margin-top: 22px; font-size: .8rem; }
 .gate-decision label { color: #58676c; }
 .gate-decision textarea { border: 1px solid #c7bcb0; border-radius: 12px; padding: 10px 12px; font: inherit; resize: vertical; }
 .gate-record { margin-top: 22px; border: 1px solid #a9c2b1; border-radius: 14px; padding: 14px 16px; background: rgba(169,194,177,.16); font-size: .82rem; line-height: 1.55; }
 .asset-list { margin: 10px 0 0; padding-left: 18px; }
+.gate-override { margin-top: 8px; color: #8c3a2c; }
 .gate-token-change { margin-top: 22px; }
 .token-form { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; font-size: .8rem; }
 .token-form input { border: 1px solid #c7bcb0; border-radius: 10px; padding: 8px 10px; font: inherit; }

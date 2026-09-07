@@ -14,7 +14,7 @@ export interface RasterGenerationOptions {
   identityVersionId: string;
   /** The approved contract, whose `imagery.allowedSources` decides whether anything may be generated at all. */
   identity: IdentitySpec;
-  /** Assets already generated for this direction; one whose digest still matches is reused, never shot again. */
+  /** Assets already generated for this direction; a finished one whose digest still matches is reused, never shot again. */
   existing?: IdentityAsset[];
   model?: string;
   signal?: AbortSignal;
@@ -26,8 +26,10 @@ export interface RasterGenerationOptions {
  * admits the raster source. Every asset carries the prompt, the model and the
  * licence the provider returned, so nothing enters the ledger whose origin
  * cannot be stated. The digest covers the plan alone, so re-approving a gate a
- * token change reopened reuses the image it already has instead of shooting an
- * identical prompt again. A provider that is not configured still yields a
+ * token change reopened reuses the finished image it already has instead of
+ * shooting an identical prompt again, while an asset that never became one is
+ * asked for again under that same digest, which the provider's idempotency key
+ * makes free. A provider that is not configured still yields a
  * provenance-marked placeholder rather than a silent gap, and no credential is
  * read, logged or stored anywhere here.
  */
@@ -39,7 +41,7 @@ export async function generateApprovedImagery(plan: ImagePromptPlan, options: Ra
   if (!admitsGeneratedImagery(options.identity)) return { assets, jobs };
   for (const item of plan.plans) {
     const digest = hashJson({ directionId: plan.directionId, id: item.id, prompt: item.prompt, negatives: item.negatives, aspect: item.aspect, model });
-    const reused = options.existing?.find((asset) => asset.provenance.hash === digest);
+    const reused = options.existing?.find((asset) => asset.status === 'ready' && asset.provenance.hash === digest);
     if (reused) { assets.push(reused); continue; }
     const job = await options.provider.submit({ id: `${plan.directionId}-${item.id}`, digest, prompt: item.prompt, model, aspect: item.aspect, identityVersionId: options.identityVersionId }, options.signal);
     jobs.push(job);
