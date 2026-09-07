@@ -62,10 +62,15 @@ export const pageSchema = z.object({
   }
 });
 
+export const assetCropSchema = z.object({
+  focalX: z.number().min(0).max(1), focalY: z.number().min(0).max(1), aspect: z.string().regex(/^\d+:\d+$/, 'A crop aspect must read as width:height.'),
+}).strict();
+
 export const assetSchema = z.object({
   id: z.string(), kind: z.enum(['raster', 'vector', 'font', 'manual']), uri: z.string(), alt: z.string(),
   provenance: z.object({ source: z.string(), author: z.string(), license: z.string().min(1, 'An asset must record the license its provenance grants before the site can be exported.'), date: z.string(), hash: z.string(), prompt: z.string().optional(), model: z.string().optional(), termsNote: z.string().optional() }),
   status: z.enum(['placeholder', 'ready', 'failed']),
+  crop: assetCropSchema.optional(),
 });
 
 export const pagesSchema = z.object({ routes: z.array(pageSchema) }).superRefine((pages, ctx) => {
@@ -110,6 +115,7 @@ export const designIRSchema = z.object({
 });
 
 export type Asset = z.infer<typeof assetSchema>;
+export type AssetCrop = z.infer<typeof assetCropSchema>;
 export type PageNode = z.infer<typeof pageNodeSchema>;
 export type Page = z.infer<typeof pageSchema>;
 export type DesignIR = z.infer<typeof designIRSchema>;

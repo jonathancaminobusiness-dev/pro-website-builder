@@ -129,6 +129,15 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
 
+  packages/qa-deterministic:
+    dependencies:
+      '@pwb/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+
   packages/render-hub:
     dependencies:
       '@pwb/domain':
@@ -146,6 +155,36 @@ importers:
       '@pwb/domain':
         specifier: workspace:*
         version: link:../domain
+
+  packages/stage-prototype:
+    dependencies:
+      '@pwb/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@pwb/linter':
+        specifier: workspace:*
+        version: link:../linter
+      '@pwb/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
+      '@pwb/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@pwb/qa-deterministic':
+        specifier: workspace:*
+        version: link:../qa-deterministic
+      '@pwb/render-hub':
+        specifier: workspace:*
+        version: link:../render-hub
+      '@pwb/renderer':
+        specifier: workspace:*
+        version: link:../renderer
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+      zod-to-json-schema:
+        specifier: ^3.24.5
+        version: 3.25.2(zod@3.25.76)
 
 packages:
 

@@ -69,6 +69,16 @@ function renderPage(page: Page, values: Record<string, string | number | boolean
   return `<main data-page-id="${escapeHtml(page.id)}" data-route="${escapeHtml(page.route)}">${body}</main>`;
 }
 
+function renderDarkScheme(ir: DesignIR, values: Record<string, string | number | boolean>): string {
+  const overrides = Object.entries(ir.identity.schemes?.dark ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  if (overrides.length === 0) return '';
+  const declarations = overrides.map(([target, source]) => {
+    for (const path of [target, source]) if (!(path in values)) throw new Error(`The dark scheme references ${path}, which the document does not define.`);
+    return `      ${cssCustomPropertyName(target)}: var(${cssCustomPropertyName(source)});`;
+  }).join('\n');
+  return `\n\n@layer tokens {\n  @media (prefers-color-scheme: dark) {\n    :root {\n${declarations}\n    }\n  }\n}`;
+}
+
 function renderCss(ir: DesignIR, values: Record<string, string | number | boolean>): string {
   const issues = cssTokenIssues(values);
   if (issues[0]) throw new Error(issues[0].message);
@@ -78,7 +88,7 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
   const bodyTypeface = roleVar(ir.identity, 'bodyTypeface', values);
   const baseSpacing = roleVar(ir.identity, 'baseSpacing', values);
   const sectionSpacing = roleVar(ir.identity, 'sectionSpacing', values);
-  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }\n}`;
+  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }\n}`;
 }
 
 export function renderDesign(ir: DesignIR): RenderedDocument {

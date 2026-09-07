@@ -21,11 +21,20 @@ export const identitySpecSchema = z.object({
   forbiddenDefaults: z.object({ fonts: z.array(z.string()), palettes: z.array(z.string()), motifs: z.array(z.string()) }),
   governance: z.object({ approverRole: z.literal('captain'), rationaleRequired: z.boolean(), changePolicy: z.string() }),
   provenance: provenanceSchema,
+  schemes: z.object({ dark: z.record(z.string()) }).partial().optional(),
 }).superRefine((identity, ctx) => {
   const paths = flattenTokens(identity.tokens);
   for (const [role, path] of Object.entries(identity.tokenRoles)) {
     if (!paths.has(path)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['tokenRoles', role], message: `${documentRules.tokenRoles} Token role ${role} points at ${path}, which the identity does not define.` });
   }
+  for (const [target, source] of Object.entries(identity.schemes?.dark ?? {})) {
+    if (!paths.has(target)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schemes', 'dark', target], message: `The dark scheme overrides ${target}, which the identity does not define.` });
+    if (!paths.has(source)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schemes', 'dark', target], message: `The dark scheme reads ${source}, which the identity does not define.` });
+  }
 });
+
+export function declaresDarkScheme(identity: IdentitySpec): boolean {
+  return Object.keys(identity.schemes?.dark ?? {}).length > 0;
+}
 
 export type IdentitySpec = z.infer<typeof identitySpecSchema>;
