@@ -15,6 +15,8 @@
 .gate2-issues { grid-column: 1 / -1; }
 
 .gate2-controls { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px; }
+.gate2-controls .route-tabs { flex-wrap: wrap; margin-bottom: 0; }
+.gate2-controls .route-tabs small { flex: 1 1 100%; padding-bottom: 8px; color: #6f7c81; font-size: .72rem; line-height: 1.5; }
 .gate2-selects { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .gate2-selects label { display: inline-flex; align-items: center; gap: 8px; color: #58676c; font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; }
 .gate2-selects select { border: 1px solid #b9ac9f; border-radius: 999px; padding: 7px 10px; color: #18252d; background: #f8f5ef; font: inherit; font-size: .78rem; text-transform: none; letter-spacing: 0; }

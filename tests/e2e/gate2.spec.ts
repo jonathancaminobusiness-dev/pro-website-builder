@@ -108,6 +108,16 @@ test.describe('Gate 2 review screen', () => {
     const updated = await frames.evaluateAll((nodes) => nodes.map((node) => (node as HTMLIFrameElement).src));
     expect(updated.every((source) => source.endsWith('/proof'))).toBe(true);
 
+    // The composed call to action is a real anchor, so a pane can navigate itself out of the
+    // comparison. The route tabs stay the only navigation: both panes go back to the selected route.
+    const navigated: string[] = [];
+    page.on('framenavigated', (frame) => { if (frame.parentFrame()) navigated.push(frame.url()); });
+    await page.frameLocator('.compare .base iframe').locator('[data-node-id="proof-cta"]').click();
+    await expect.poll(() => navigated.some((url) => url.endsWith('/contact'))).toBe(true);
+    await expect.poll(() => page.frames().filter((frame) => frame.parentFrame()).map((frame) => frame.url().endsWith('/proof'))).toEqual([true, true]);
+    await expect(page.frameLocator('.compare .base iframe').locator('main[data-route="/proof"]')).toBeVisible();
+    await expect(page.frameLocator('.compare .top iframe').locator('main[data-route="/proof"]')).toBeVisible();
+
     await page.getByRole('button', { name: 'sobreposição' }).click();
     await expect(page.locator('.compare-overlay')).toBeVisible();
     await page.getByRole('button', { name: 'diferença' }).click();

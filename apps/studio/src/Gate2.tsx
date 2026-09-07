@@ -95,8 +95,19 @@ function describePatch(patch: ProposedPatch | undefined): string {
 function Compare(props: { mode: 'side' | 'overlay' | 'difference'; viewport: number; before: string; after: string; route: string }): ReactElement {
   const container = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
+  // A comparison is only a comparison while both panes hold the same route, so a pane that navigates
+  // itself — the composed call to action is a real anchor — sends both back to the selected route.
+  const [pin, setPin] = useState(0);
+  const expectedLoads = useRef(0);
   // Two narrow viewports fit next to each other; a wide one is only readable stacked.
   const columns = props.mode === 'side' && props.viewport <= 768 ? 2 : 1;
+
+  useLayoutEffect(() => { expectedLoads.current = 2; }, [props.before, props.after, props.route, pin]);
+
+  const onLoad = (): void => {
+    if (expectedLoads.current > 0) { expectedLoads.current -= 1; return; }
+    setPin((value) => value + 1);
+  };
 
   useLayoutEffect(() => {
     const element = container.current;
@@ -112,7 +123,7 @@ function Compare(props: { mode: 'side' | 'overlay' | 'difference'; viewport: num
   }, [columns, props.viewport]);
 
   const frame = (versionId: string, label: string, layer: 'base' | 'top'): ReactElement => (
-    <div className={`compare-slot ${layer}`} key={`${versionId}-${layer}`} style={{ width: props.viewport * scale, height: FRAME_HEIGHT * scale }}>
+    <div className={`compare-slot ${layer}`} key={`${versionId}-${layer}-${pin}`} style={{ width: props.viewport * scale, height: FRAME_HEIGHT * scale }}>
       <iframe
         title={`Preview ${label} — ${props.route}`}
         src={`${PREVIEW_ORIGIN}/preview/${encodeURIComponent(versionId)}${props.route}`}
@@ -120,6 +131,7 @@ function Compare(props: { mode: 'side' | 'overlay' | 'difference'; viewport: num
         width={props.viewport}
         height={FRAME_HEIGHT}
         style={{ transform: `scale(${scale})` }}
+        onLoad={onLoad}
       />
       <span className="compare-label">{label}</span>
     </div>
@@ -296,6 +308,7 @@ export default function Gate2(): ReactElement {
               {result.routes.map((entry) => (
                 <button key={entry.route} className={route === entry.route ? 'selected' : ''} onClick={() => setRoute(entry.route)}>{entry.route}</button>
               ))}
+              <small>Estas abas são a única navegação daqui: um link seguido dentro da comparação volta para a rota selecionada.</small>
             </div>
             <div className="gate2-selects">
               <label>Largura

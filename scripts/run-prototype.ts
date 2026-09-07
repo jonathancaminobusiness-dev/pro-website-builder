@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   const base = applier.createRoot(createFixtureIR());
 
   // Port 0 keeps this CLI off the fixed developer ports, so several checkouts can run it at once.
-  const preview = createPreviewServer((versionId) => { const version = store.get(versionId); return version ? renderDesign(version.ir) : undefined; }, 0);
+  const preview = createPreviewServer((versionId) => { const version = store.get(versionId); return version ? renderDesign(version.ir, { routePrefix: `/preview/${versionId}` }) : undefined; }, 0);
   await preview.start();
   const { port } = preview.server.address() as AddressInfo;
   const cacheDir = process.env.PWB_RENDER_CACHE ?? await mkdtemp(join(tmpdir(), 'pwb-prototype-render-'));

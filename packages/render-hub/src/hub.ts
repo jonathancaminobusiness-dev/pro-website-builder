@@ -146,10 +146,11 @@ export class RenderHub {
     if (await target.count() === 0) return;
     const reachable = await target.evaluate((element: HTMLElement) => {
       const selector = 'a[href], button, input, select, textarea, [tabindex]';
-      return element.matches(selector) || element.querySelector(selector) !== null;
+      const focusable = element.matches(selector) ? element : element.querySelector<HTMLElement>(selector);
+      return focusable !== null && focusable.checkVisibility();
     });
-    // A state may name a node with nothing focusable in it; pressing Tab first would ring whatever
-    // the keyboard happened to reach and label that screenshot as this node's focus state.
+    // A state may hide the node it names, or name one with nothing focusable in it; pressing Tab
+    // first would ring whatever the keyboard reached and label that screenshot as this node's focus.
     if (!reachable) return;
     // `:focus-visible` only answers a keyboard, so the state screenshot has to be preceded by a real
     // Tab; scripting focus on a cold page would capture the control without the ring a visitor sees.
