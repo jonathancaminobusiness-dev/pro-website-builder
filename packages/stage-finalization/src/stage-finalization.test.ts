@@ -449,6 +449,18 @@ describe('the finalization stage end to end with the deterministic providers', (
     expect(events).toContain('release.gate.ready');
   });
 
+  it('never scores a critic on evidence measured against another release', async () => {
+    const { stage, applier, version, evidence } = stageFor([
+      artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', status: 'failed', metrics: { critical: 2, serious: 1 }, releaseDigest: 'digest-de-outra-execucao' }),
+    ]);
+    const result = await stage.run({ runId: 'run-stale', version, evidence, applier });
+    expect(result.report.evidence).toEqual([]);
+    expect(result.cycles).toBe(0);
+    expect(result.critiques.find((critique) => critique.dimension === 'accessibility')).toMatchObject({ rubricScore: 4, verdict: 'pass' });
+    expect(result.version.ir.reviewRecord.findings.join(' ')).not.toMatch(/axe-home/);
+    expect(result.report.escalations.join(' ')).toMatch(/axe-home.*não conta como cobertura/);
+  });
+
   it('escalates a refiner session that failed instead of losing the whole report', async () => {
     const failing: ReleaseRefinerProvider = { refine: async () => { throw new Error('claude -p saiu com código 1'); } };
     const store = new VersionStore();

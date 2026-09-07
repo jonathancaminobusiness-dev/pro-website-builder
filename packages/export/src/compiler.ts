@@ -7,7 +7,7 @@ import { planCsp } from './csp.js';
 import { planFonts, type FontDecision, type FontSource } from './fonts.js';
 import { extractInlineStyles, replaceOnce, styleRules, type ExtractedStyle } from './html-scan.js';
 import { buildLicenseInventory, isUsableLicense, type LicenseInventory } from './licenses.js';
-import { headTags, robotsTxt, routeMetadata, sitemapXml, type RouteMetadata, type SocialImage } from './metadata.js';
+import { headTags, robotsTxt, routeMetadata, sitemapXml, type RouteMetadata } from './metadata.js';
 
 export const COMPILER_VERSION = 'compiler-0.1.0';
 
@@ -16,7 +16,6 @@ export interface ReleaseCompilerOptions {
   siteUrl: string;
   siteName: string;
   fonts?: FontSource[];
-  socialImage?: SocialImage;
 }
 
 export interface CompiledFile { path: string; contents: string | Uint8Array; hash: string; bytes: number }
@@ -114,7 +113,7 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   vetoes.push(...colors.vetoes);
 
   const metadata = routeMetadata(ir, siteUrl);
-  const csp = planCsp(ir, options.socialImage ? { imageUris: [options.socialImage.url] } : {});
+  const csp = planCsp(ir);
 
   // First pass: strip inline styles so the release can ship `style-src 'self'`.
   const extractions = new Map<string, { html: string; styles: ExtractedStyle[] }>();
@@ -138,7 +137,7 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
     const filePath = routeFilePath(entry.route);
     try {
       const withPolicy = replaceOnce(extraction.html, '<meta charset="utf-8">', `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp.meta.replaceAll('"', '&quot;')}">`);
-      const head = headTags(entry, { siteName: options.siteName, locale: ir.identity.meta.locale, ...(options.socialImage ? { socialImage: options.socialImage } : {}) });
+      const head = headTags(entry, { siteName: options.siteName, locale: ir.identity.meta.locale });
       const document = replaceOnce(withPolicy, `<style>${rendered.css}</style></head>`, `${head}<link rel="stylesheet" href="${basePath}/${STYLESHEET_PLACEHOLDER}"></head>`);
       files.push({ path: filePath, contents: document.replaceAll(STYLESHEET_PLACEHOLDER, stylesheetPath) });
       routes.push({ ...entry, path: filePath });

@@ -5,6 +5,7 @@ import { Scheduler } from '@pwb/orchestrator';
 import { renderDesign } from '@pwb/renderer';
 import { criticTasks, type CriticTaskContext } from './critics.js';
 import type { ReleaseCriticProvider } from './critic-provider.js';
+import { partitionEvidence } from './evidence.js';
 import { evaluateReleaseGate } from './gate.js';
 import { checkPreviewReleaseParity } from './parity.js';
 import { PatchRefiner } from './refiner.js';
@@ -180,7 +181,7 @@ export class FinalizationStage {
       baseVersionId: version.id,
       ir: version.ir,
       compiled,
-      evidence: input.evidence,
+      evidence: partitionEvidence(input.evidence, { digest: compiled.digest, irHash: compiled.irHash }).credited,
       attempt: 1,
       promptVersion: this.options.promptVersion ?? 'phase3-v1',
       modelAlias: this.options.modelAlias ?? 'claude-local',

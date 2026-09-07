@@ -139,7 +139,12 @@ describe('Gate 3 over the local API', () => {
     expect(run.snapshot().status).toBe('succeeded');
     expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization')).toHaveLength(1);
     const again = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Republicando os mesmos bytes.' }) });
-    expect(again.status).toBe(500);
+    expect(again.status).toBe(409);
+    expect((await again.json() as { error: string }).error).toMatch(/não está aberto/);
+    // A closed gate does not reopen: preparing again would move a finished run's document.
+    const reprepare = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
+    expect(reprepare.status).toBe(409);
+    expect(run.snapshot().currentVersion.id).toBe(prepared.versionId);
     expect((await readdir(releaseRoot)).filter((entry) => !entry.endsWith('.json'))).toEqual([prepared.digest]);
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
   });

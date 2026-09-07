@@ -138,7 +138,7 @@ The third stage compiles the approved document into an immutable release, has it
 reviewed, and stops at the captain.
 
 ```bash
-corepack pnpm run:release          # compile, critique, evaluate Gate 3, write the bundle
+corepack pnpm run:release          # compile, critique, evaluate Gate 3, publish only a clean report
 corepack pnpm run:release --serve  # keep the release and the matching preview online
 corepack pnpm run:evidence         # Vitest, Playwright on three engines, axe and Lighthouse
 corepack pnpm test:e2e:release     # only the browser evidence
@@ -166,10 +166,14 @@ with the gate's open points unaccepted. The approve route refuses `finalization`
 and the studio's finalization row points at the Gate 3 panel. One code path owns
 the vetoes, the written acceptance, the `release.published` event, the release
 record and the single bundle root, and it claims the gate before its first
-await, so two publishes that race cannot both close it.
+await, so two publishes that race cannot both close it. A closed gate does not
+reopen either: once the bundle is published the run has finished, so preparing
+again is refused rather than moving a finished run's document.
 
-Only the captain may accept an open escalation in writing. A scripted run
-publishes under the `fixture` role and only when the report is clean, so the
+Only the captain may accept an open escalation in writing. A scripted run —
+`run:fixture` and `run:release` alike — goes through that same publish path
+under the `fixture` role and only when the report is clean; with a veto or an
+open point it prints the report and exits non-zero without writing, so the
 release record never carries an acceptance no human wrote.
 
 The finalization stage writes through the same boundary as every other stage:
@@ -193,9 +197,8 @@ build failure, a broken primary link, a critical AA regression, and a release
 that diverges from the approved one. Only what the bundle ships can be published
 without terms, so an asset the release never publishes — a provider placeholder
 — escalates to the captain instead of blocking. A veto is never scored or averaged: one veto
-blocks Gate 3, and both writers — the studio's publish button and
-`run:release` — refuse to write. Only the compiler, the evidence
-runners and the gate may raise one — a critic cannot raise or clear a veto, its
+blocks Gate 3, and the single publish path refuses to write. Only the compiler,
+the evidence runners and the gate may raise one — a critic cannot raise or clear a veto, its
 tasks carry no writable path, and its findings have no veto severity.
 
 **Independent evidence.** Four runners that do not know what the gate wants to
@@ -207,8 +210,9 @@ so no summary can hide a veto. A runner that did not run leaves no artifact, and
 the gate reports the gap as an escalation instead of treating silence as a pass.
 
 Every artifact names the release it measured — the bundle digest and the
-document hash — and the gate credits only the artifacts that measured this
-bundle. Anything else is set aside and reported as coverage the gate does not
+document hash — and only the artifacts that measured this bundle are credited,
+by the gate and by the five critics alike, so a stale measurement can neither
+block a release nor score a rubric. Anything else is set aside and reported as coverage the gate does not
 have, so a run never inherits an earlier run's evidence in silence. An artifact
 that measured the same bytes from a different document is credited and the
 difference is named, because that is what the refiner recording a finding does.

@@ -26,8 +26,8 @@ function originsOf(uris: string[]): string[] {
   return [...origins].sort();
 }
 
-export function planCsp(ir: DesignIR, options: { imageUris?: string[] } = {}): CspPlan {
-  const imageOrigins = originsOf([...ir.assets.items.map((asset) => asset.uri), ...(options.imageUris ?? [])]);
+export function planCsp(ir: DesignIR): CspPlan {
+  const imageOrigins = originsOf(ir.assets.items.map((asset) => asset.uri));
   const directives: Array<[string, string]> = [
     ["default-src", "'none'"],
     ['style-src', "'self'"],

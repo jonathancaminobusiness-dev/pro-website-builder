@@ -84,6 +84,25 @@ describe('phase 0 fixture run', () => {
     db.sqlite.close();
   });
 
+  it('refuses to prepare the release again once publishing closed the gate', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-reprepare-'));
+    const db = openDatabase(join(dir, 'run.sqlite'));
+    const releaseRoot = join(dir, 'releases');
+    const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await run.initialize('run-reprepare');
+    await atFinalizationGate(run);
+    await completeEvidence(run, join(releaseRoot, '..', 'evidence'));
+    const prepared = await run.prepareRelease();
+    await run.publishRelease(prepared.digest, 'Publicado por um fixture.', 'fixture');
+
+    expect(run.releaseBlocker()).toMatch(/não está aberto/);
+    await expect(run.prepareRelease()).rejects.toThrow(/não está aberto/);
+    expect(run.snapshot().status).toBe('succeeded');
+    expect(run.snapshot().currentVersion.id).toBe(prepared.versionId);
+    expect(run.releaseSnapshot()?.published?.digest).toBe(prepared.digest);
+    db.sqlite.close();
+  });
+
   it('writes an append-only event log for the whole journey', async () => {
     const db = openDatabase(':memory:');
     const repository = new ProjectRepository(db);

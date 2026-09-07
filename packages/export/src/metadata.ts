@@ -8,8 +8,6 @@ export interface RouteMetadata {
   ogType: 'website' | 'article';
 }
 
-export interface SocialImage { url: string; alt: string }
-
 function escapeHtml(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }
@@ -66,7 +64,7 @@ export function routeMetadata(ir: DesignIR, siteUrl: string): RouteMetadata[] {
 }
 
 /** The `<meta>` and `<link>` tags a single route contributes to its `<head>`. */
-export function headTags(metadata: RouteMetadata, options: { siteName: string; locale: string; socialImage?: SocialImage }): string {
+export function headTags(metadata: RouteMetadata, options: { siteName: string; locale: string }): string {
   const tags: string[] = [
     `<meta name="description" content="${escapeHtml(metadata.description)}">`,
     `<link rel="canonical" href="${escapeHtml(metadata.canonical)}">`,
@@ -78,15 +76,7 @@ export function headTags(metadata: RouteMetadata, options: { siteName: string; l
     `<meta property="og:description" content="${escapeHtml(metadata.description)}">`,
     `<meta property="og:url" content="${escapeHtml(metadata.canonical)}">`,
   ];
-  if (options.socialImage) {
-    tags.push(
-      `<meta property="og:image" content="${escapeHtml(options.socialImage.url)}">`,
-      `<meta property="og:image:alt" content="${escapeHtml(options.socialImage.alt)}">`,
-      '<meta name="twitter:card" content="summary_large_image">',
-    );
-  } else {
-    tags.push('<meta name="twitter:card" content="summary">');
-  }
+  tags.push('<meta name="twitter:card" content="summary">');
   tags.push(`<meta name="twitter:title" content="${escapeHtml(metadata.title)}">`, `<meta name="twitter:description" content="${escapeHtml(metadata.description)}">`);
   return tags.join('');
 }

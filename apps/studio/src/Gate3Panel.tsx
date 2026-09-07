@@ -157,7 +157,7 @@ export default function Gate3Panel({ runId, apiOrigin, onPublished }: { runId: s
     </>}
 
     <div className="actions">
-      <button className="secondary" onClick={prepare} disabled={!runId || busy}>{busy ? 'Executando…' : report ? 'Recompilar e reavaliar' : 'Preparar release'}</button>
+      <button className="secondary" onClick={prepare} disabled={!runId || busy || snapshot?.published !== undefined}>{busy ? 'Executando…' : report ? 'Recompilar e reavaliar' : 'Preparar release'}</button>
       <button className="primary" onClick={publish} disabled={!report || report.blocked || busy || snapshot?.published !== undefined || (report.escalations.length > 0 && rationale.trim() === '')}>
         {snapshot?.published ? 'Bundle publicado' : 'Publicar bundle e aprovar o gate (capitão)'}
       </button>

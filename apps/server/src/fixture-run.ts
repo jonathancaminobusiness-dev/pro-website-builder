@@ -256,7 +256,9 @@ export class FixtureRun {
    *
    * The plan closes three gates in order: a release is only ever compiled after
    * the captain approved identity and prototype, and only from what the
-   * finalization stage produced for them to look at.
+   * finalization stage produced for them to look at. Publishing the bundle
+   * closes this gate, and a closed gate does not reopen: preparing again would
+   * move the document of a run that already finished.
    */
   releaseBlocker(): string | undefined {
     this.requireInitialized();
@@ -264,6 +266,7 @@ export class FixtureRun {
       if (!this.approvedAt(stage)) return `O gate de release exige a aprovação do capitão na etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
     }
     if (!this.finalizationVersion) return 'A etapa de finalização ainda não produziu a versão que o gate de release compila.';
+    if (this.status !== 'needs_review' || this.currentStage !== 'finalization') return 'O gate de finalização não está aberto: o release só é preparado e publicado enquanto a etapa aguarda a decisão do capitão.';
     return undefined;
   }
 
