@@ -252,23 +252,74 @@ describe('identity stage fan-out', () => {
     expect(approved.record.directionId).toBe('editorial-material');
   });
 
-  it('discards a critique that scored nothing in its own rubric, and says so', async () => {
+  it('keeps the veto of a critic that scored nothing in its own rubric', async () => {
     const inner = new FakeIdentityProvider();
     const provider: ModelProvider = {
       async propose(task, signal) {
         const result = await inner.propose(task, signal);
         if (task.id !== 'identity-critic-brand-fit-critic-editorial-material') return result;
         const report = result.artifact as Record<string, unknown>;
-        return { ...result, artifact: { ...report, scores: [{ dimension: 'divergence', score: 1, evidence: 'Rubrica que este assento não recebeu.' }] } };
+        // Every score names a rubric this seat was not given; the veto is still its own.
+        return { ...result, artifact: { ...report, scores: [{ dimension: 'divergence', score: 1, evidence: 'Rubrica que este assento não recebeu.' }], findings: [{ id: 'bf-veto', dimension: 'brand-fit', severity: 'veto', path: '/identity/direction/rationale', observation: 'A rationale não cita nenhuma evidência do briefing.', why: 'A escolha não pode ser auditada.', evidenceIds: [], confidence: 0.9 }] } };
       },
     };
-    const { stage, events } = harness({ provider });
+    const { stage } = harness({ provider });
     const result = await stage.run();
     const candidate = result.candidates.find((entry) => entry.directionId === 'editorial-material')!;
+    // The score is not the seat's to give, so it contributes no gap; the veto reaches the card.
     expect(candidate.rubricGaps).toEqual([]);
-    expect(result.critiques.some((report) => report.criticId === 'brand-fit-critic' && report.subject.kind === 'direction' && report.subject.directionId === 'editorial-material')).toBe(false);
-    expect(result.failures.some((failure) => failure.taskId === 'identity-critic-brand-fit-critic-editorial-material')).toBe(true);
-    expect(events.some((event) => event.type === 'identity.critic.rejected' && event.payload.taskId === 'identity-critic-brand-fit-critic-editorial-material')).toBe(true);
+    expect(candidate.blocking.map((finding) => finding.id)).toContain('bf-veto');
+    await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
+  });
+
+  it('keeps a set-level rubric gap on the set, off the cards and out of the refinement cycle', async () => {
+    const inner = new FakeIdentityProvider();
+    const refinerCalls: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-refiner-')) refinerCalls.push(task.id);
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-divergence-critic') return result;
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, scores: [{ dimension: 'divergence', score: 2, evidence: 'As direções diferem em menos eixos do que a matriz exige.' }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    // A judgement about the fan-out is recorded once, and no direction is refined for it.
+    expect(result.setCritique.rubricGaps).toEqual([{ dimension: 'divergence', score: 2, evidence: 'As direções diferem em menos eixos do que a matriz exige.' }]);
+    expect(refinerCalls).toEqual([]);
+    for (const candidate of result.candidates) {
+      expect(candidate.rubricGaps).toEqual([]);
+      expect(candidate.refinedFromVersionId).toBeUndefined();
+      expect(candidate.scores.some((score) => score.dimension === 'divergence')).toBe(false);
+    }
+    // It still blocks every direction until the captain writes an override.
+    await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/for the fan-out as a whole/);
+    const approved = await stage.approve({ directionId: 'modular-technical', rationale: 'Gosto dessa.', approverRole: 'captain', overrideRationale: 'A divergência medida passa DIV-030; sigo com a nota do crítico registrada.' });
+    expect(approved.record.directionId).toBe('modular-technical');
+  });
+
+  it('tells the refiner what the low score was about, not just that it was low', async () => {
+    const inner = new FakeIdentityProvider();
+    const briefs: string[] = [];
+    const evidence = 'O par de texto de anotação sobre papel não alcança AA.';
+    const summary = 'O sistema lê bem no corpo principal e falha nas anotações.';
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-refiner-editorial-material') briefs.push(task.brief);
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-system-a11y-critic-editorial-material') return result;
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, summary, scores: [{ dimension: 'system-accessibility', score: 2, evidence }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    await stage.run();
+    // The emitted repair brief is the interface the refiner acts on: the gap arrives with its cause.
+    expect(briefs).toHaveLength(1);
+    const rubric = JSON.parse(briefs[0]!.match(/The blocking findings you must clear:\n(\{.*\})/)![1]!) as { rubric: Array<{ criticId: string; dimension: string; score: number; evidence: string; summary: string }> };
+    expect(rubric.rubric).toEqual([{ criticId: 'system-a11y-critic', dimension: 'system-accessibility', score: 2, evidence, summary }]);
   });
 
   it('spends exactly one corrective re-invocation on an artefact that misses its schema', async () => {
@@ -676,7 +727,7 @@ describe('gate 1', () => {
     const result = await stage.run();
     const candidate = result.candidates.find((entry) => entry.directionId === 'editorial-material')!;
     expect(candidate.blocking).toEqual([]);
-    expect(candidate.rubricGaps).toEqual([{ dimension: 'system-accessibility', score: 2 }]);
+    expect(candidate.rubricGaps).toEqual([{ dimension: 'system-accessibility', score: 2, evidence: 'O sistema de tipos não sustenta o mínimo de leitura.' }]);
     expect(candidate.scores).toContainEqual({ criticId: 'system-a11y-critic', dimension: 'system-accessibility', score: 2 });
 
     await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/below the absolute minimum of 3/);

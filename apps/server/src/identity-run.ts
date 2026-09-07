@@ -37,7 +37,7 @@ export interface IdentityDirectionView {
   lintErrors: Array<{ id: string; path: string; message: string }>;
   blocking: Array<{ id: string; observation: string; why: string }>;
   scores: Array<{ criticId: string; dimension: string; score: number }>;
-  rubricGaps: Array<{ dimension: string; score: number }>;
+  rubricGaps: Array<{ dimension: string; score: number; evidence: string }>;
   abstained: boolean;
   refinedFromVersionId?: string;
   imagePlans: Array<{ id: string; role: string; axis: string; alt: string; licenceExpectation: string }>;
@@ -54,6 +54,8 @@ export interface IdentityRunSnapshot {
   directions: IdentityDirectionView[];
   divergence?: { passed: boolean; blockedPairs: string[]; pairs: Array<{ a: string; b: string; distinctAxes: string[]; hueOnlyColor: boolean }> };
   critiques: IdentityStageResult['critiques'];
+  /** What the critics said about the fan-out as a whole; it belongs to the gate, not to a card. */
+  setCritique: IdentityStageResult['setCritique'];
   failures: Array<{ taskId: string; reason: string }>;
   gate: IdentityGateState;
   approvals: Approval[];
@@ -196,6 +198,7 @@ export class IdentityRun {
       directions: this.result ? this.result.candidates.map((candidate) => this.viewOf(candidate, decided === candidate.directionId ? this.store.get(this.stage.approvedVersionId!) : undefined)) : [],
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),
       critiques: this.result?.critiques ?? [],
+      setCritique: this.result?.setCritique ?? { scores: [], rubricGaps: [] },
       failures: this.result?.failures ?? [],
       gate,
       approvals: structuredClone(this.approvals),

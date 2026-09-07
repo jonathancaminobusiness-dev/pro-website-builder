@@ -88,6 +88,7 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .decision-list span { display: block; color: #879095; }
 .version-line { margin: 14px 0 8px; color: #879095; font-size: .72rem; overflow-wrap: anywhere; }
 .blocker-list { margin: 8px 0; padding-left: 18px; color: #8c3a2c; font-size: .78rem; line-height: 1.5; }
+.set-critique { margin-top: 14px; }
 .score-row { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 12px 0 0; padding: 0; list-style: none; color: #58676c; font-size: .72rem; }
 .score-row .below-rubric { color: #8c3a2c; font-weight: 600; }
 .score-row small { color: #879095; }

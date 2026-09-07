@@ -75,8 +75,8 @@ export function blockingFindings(report: CritiqueReport): CritiqueFinding[] {
   return report.findings.filter((finding) => finding.severity === 'veto' || finding.severity === 'error');
 }
 
-export function belowRubric(report: CritiqueReport): Array<{ dimension: CritiqueDimension; score: number }> {
-  return report.scores.filter((entry) => entry.score < RUBRIC_MINIMUM).map((entry) => ({ dimension: entry.dimension, score: entry.score }));
+export function belowRubric(report: CritiqueReport): Array<{ dimension: CritiqueDimension; score: number; evidence: string }> {
+  return report.scores.filter((entry) => entry.score < RUBRIC_MINIMUM).map((entry) => ({ dimension: entry.dimension, score: entry.score, evidence: entry.evidence }));
 }
 
 /**

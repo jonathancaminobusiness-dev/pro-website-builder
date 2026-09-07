@@ -17,7 +17,7 @@ export interface IdentityDirectionView {
   lintErrors: Array<{ id: string; path: string; message: string }>;
   blocking: Array<{ id: string; observation: string; why: string }>;
   scores: Array<{ criticId: string; dimension: string; score: number }>;
-  rubricGaps: Array<{ dimension: string; score: number }>;
+  rubricGaps: Array<{ dimension: string; score: number; evidence: string }>;
   abstained: boolean;
   refinedFromVersionId?: string;
   imagePlans: Array<{ id: string; role: string; axis: string; alt: string; licenceExpectation: string }>;
@@ -32,6 +32,7 @@ export interface IdentityGateSnapshot {
   brief?: { audience: string; promise: string; proof: string[]; exclusions: string[]; evidence: Array<{ id: string; quote: string; source: string }>; unknowns: string[]; assumptions: Array<{ id: string; statement: string; risk: string }> };
   directions: IdentityDirectionView[];
   divergence?: { passed: boolean; blockedPairs: string[]; pairs: Array<{ a: string; b: string; distinctAxes: string[]; hueOnlyColor: boolean }> };
+  setCritique: { scores: Array<{ criticId: string; dimension: string; score: number }>; rubricGaps: Array<{ dimension: string; score: number; evidence: string }> };
   gate: { state: 'open'; reason: string } | { state: 'closed'; record: GateRecord } | { state: 'reopened'; record: GateRecord; impact: { changedTokenPaths: string[]; changedContractFields: string[]; staleRenderKeys: string[] } };
   approvals: Array<{ stage: string; decision: string; versionId: string; rationale: string }>;
   assets: Array<{ id: string; alt: string; status: string; provenance: { license: string; prompt?: string; termsNote?: string } }>;
@@ -69,7 +70,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),
     ...direction.blocking.map((finding) => `${finding.id} · ${finding.observation}`),
-    ...direction.rubricGaps.map((gap) => `Rubrica ${gap.dimension} · nota ${gap.score} abaixo do mínimo absoluto`),
+    ...direction.rubricGaps.map((gap) => `Rubrica ${gap.dimension} · nota ${gap.score} abaixo do mínimo absoluto · ${gap.evidence}`),
     ...direction.imageryViolations,
     ...(snapshot?.divergence?.blockedPairs ?? []),
   ], [snapshot]);
@@ -115,6 +116,18 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
           ? `DIV-030 aprovado: cada par de direções difere em ${Math.min(...snapshot.divergence.pairs.map((pair) => pair.distinctAxes.length))} eixos ou mais.`
           : `DIV-030 bloqueia a seleção automática: ${snapshot.divergence.blockedPairs.join(' ')}`}
       </p>}
+
+      {snapshot.setCritique.scores.length > 0 && <div className="set-critique">
+        <p className="eyebrow">Rubrica do conjunto — vale para as três direções</p>
+        <ul className="score-row" aria-label="Notas dos críticos sobre o conjunto">
+          {snapshot.setCritique.scores.map((score) => <li key={`${score.criticId}-${score.dimension}`} className={snapshot.setCritique.rubricGaps.some((gap) => gap.dimension === score.dimension && gap.score === score.score) ? 'below-rubric' : ''}>
+            <code>{score.dimension}</code> {score.score}/4 <small>{score.criticId}</small>
+          </li>)}
+        </ul>
+        {snapshot.setCritique.rubricGaps.length > 0 && <ul className="blocker-list" aria-label="Bloqueios do conjunto">
+          {snapshot.setCritique.rubricGaps.map((gap) => <li key={gap.dimension}>Rubrica {gap.dimension} · nota {gap.score} abaixo do mínimo absoluto para o conjunto · {gap.evidence}</li>)}
+        </ul>}
+      </div>}
 
       {snapshot.brief && <details className="gate-brief">
         <summary>Briefing estruturado e evidências ({snapshot.brief.evidence.length})</summary>

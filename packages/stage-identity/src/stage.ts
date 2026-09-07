@@ -90,8 +90,8 @@ export interface IdentityCandidate {
   lint: LintReport;
   refinedFromVersionId?: string;
   blocking: CritiqueFinding[];
-  scores: Array<{ criticId: string; dimension: string; score: number }>;
-  rubricGaps: Array<{ dimension: string; score: number }>;
+  scores: CritiqueScore[];
+  rubricGaps: RubricGap[];
   abstained: boolean;
   imagePlan?: ImagePromptPlan;
   imageryViolations: string[];
@@ -99,12 +99,23 @@ export interface IdentityCandidate {
 
 export interface DivergenceOutcome { pairs: DirectionComparison[]; passed: boolean; blockedPairs: string[]; }
 
+export interface CritiqueScore { criticId: string; dimension: string; score: number; }
+export interface RubricGap { dimension: string; score: number; evidence: string; }
+
+/** What the critics said about the fan-out as a whole, which belongs to no single card. */
+export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[]; }
+
+function scoresOf(reports: CritiqueReport[]): CritiqueScore[] {
+  return reports.flatMap((report) => report.scores.map((entry) => ({ criticId: report.criticId, dimension: entry.dimension, score: entry.score })));
+}
+
 export interface IdentityStageResult {
   runId: string;
   baseVersionId: string;
   brief: BriefSpec;
   candidates: IdentityCandidate[];
   critiques: CritiqueReport[];
+  setCritique: SetCritique;
   divergence: DivergenceOutcome;
   gate: IdentityGateState;
   failures: Array<{ taskId: string; reason: string }>;
@@ -157,6 +168,7 @@ export class IdentityStage {
   private brief: BriefSpec | undefined;
   private candidates: IdentityCandidate[] = [];
   private critiques: CritiqueReport[] = [];
+  private setCritique: SetCritique = { scores: [], rubricGaps: [] };
   private divergence: DivergenceOutcome = { pairs: [], passed: false, blockedPairs: [] };
   private failures: Array<{ taskId: string; reason: string }> = [];
   private gateRecord: IdentityGateRecord | undefined;
@@ -198,6 +210,7 @@ export class IdentityStage {
       brief: this.brief,
       candidates: this.candidates.map((candidate) => structuredClone(candidate)),
       critiques: this.critiques.map((report) => structuredClone(report)),
+      setCritique: structuredClone(this.setCritique),
       divergence: structuredClone(this.divergence),
       gate: this.gateState(),
       failures: [...this.failures],
@@ -412,12 +425,11 @@ export class IdentityStage {
         // The critic, its dimension and the subject are the seat the task was
         // issued for, not what the answer says they are: attribution is a fact
         // the stage knows. A seat scores only the rubric it was given, so a
-        // score in another dimension is not the seat's to give and is dropped.
+        // score in another dimension is not the seat's to give; what it found
+        // and whether it abstained still reach the candidate either way.
         const report = requireArtifact(critiqueReportSchema, result.artifact, result.taskId, 'CritiqueReport');
         const seat = seatOf.get(result.taskId)!;
-        const scores = report.scores.filter((entry) => entry.dimension === seat.dimension);
-        if (scores.length === 0) throw new StageError(`Critic ${result.taskId} scored no ${seat.dimension}, the only rubric its seat was given.`);
-        reports.push({ ...report, ...seat, scores });
+        reports.push({ ...report, ...seat, scores: report.scores.filter((entry) => entry.dimension === seat.dimension) });
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'The critique did not validate.';
         this.failures.push({ taskId: result.taskId, reason });
@@ -431,19 +443,34 @@ export class IdentityStage {
   /**
    * A direction carries the findings written about it and the findings written
    * about the set it belongs to: a matrix critic judges the fan-out as a whole,
-   * so its findings weigh on every candidate in it.
+   * so its findings weigh on every candidate in it. Its scores do not: a
+   * set-level rubric is about the fan-out, not about any one direction, so it
+   * is recorded once and blocks the gate once instead of on all three cards.
    */
   private applyCritiqueToCandidates(): void {
+    const forSet = this.critiques.filter((report) => report.subject.kind === 'matrix');
+    this.setCritique = { scores: scoresOf(forSet), rubricGaps: forSet.flatMap(belowRubric) };
     this.candidates = this.candidates.map((candidate) => {
-      const forCandidate = this.critiques.filter((report) => (report.subject.kind === 'direction' && report.subject.directionId === candidate.directionId) || report.subject.kind === 'matrix');
+      const own = this.critiques.filter((report) => report.subject.kind === 'direction' && report.subject.directionId === candidate.directionId);
       return {
         ...candidate,
-        blocking: forCandidate.flatMap(blockingFindings),
-        scores: forCandidate.flatMap((report) => report.scores.map((entry) => ({ criticId: report.criticId, dimension: entry.dimension, score: entry.score }))),
-        rubricGaps: forCandidate.flatMap(belowRubric),
-        abstained: forCandidate.some((report) => report.abstain),
+        blocking: [...own, ...forSet].flatMap(blockingFindings),
+        scores: scoresOf(own),
+        rubricGaps: own.flatMap(belowRubric),
+        abstained: [...own, ...forSet].some((report) => report.abstain),
       };
     });
+  }
+
+  /**
+   * What the refiner is told about a rubric gap: the dimension and score that
+   * blocks the gate, plus the evidence the critic wrote for that score and the
+   * summary of the report it came from, so the repair has a cause to act on.
+   */
+  private rubricFindingsFor(directionId: string): Array<RubricGap & { criticId: string; summary: string }> {
+    return this.critiques
+      .filter((report) => report.subject.kind === 'direction' && report.subject.directionId === directionId)
+      .flatMap((report) => belowRubric(report).map((gap) => ({ ...gap, criticId: report.criticId, summary: report.summary })));
   }
 
   /**
@@ -480,7 +507,7 @@ export class IdentityStage {
         allowedPaths: IDENTITY_ALLOWED_PATHS,
         ir: base.ir,
         baseVersionId: base.id,
-        brief: identityRefinerPrompt({ brief, directionId: candidate.directionId, baseVersionId: base.id, allowedPaths: IDENTITY_ALLOWED_PATHS, identity: base.ir.identity, findings: { critique: candidate.blocking, rubric: candidate.rubricGaps, lint: candidate.lint.findings } }),
+        brief: identityRefinerPrompt({ brief, directionId: candidate.directionId, baseVersionId: base.id, allowedPaths: IDENTITY_ALLOWED_PATHS, identity: base.ir.identity, findings: { critique: candidate.blocking, rubric: this.rubricFindingsFor(candidate.directionId), lint: candidate.lint.findings } }),
       });
       const [result] = await this.dispatch([task], signal);
       if (!result?.proposal) { this.failures.push({ taskId: task.id, reason: 'The refiner produced no proposal; the candidate keeps its findings for the captain.' }); continue; }
@@ -616,6 +643,7 @@ export class IdentityStage {
     const blockers = [
       ...lintDesign(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir).findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
       ...this.divergence.blockedPairs,
+      ...this.setCritique.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score} for the fan-out as a whole, below the absolute minimum of ${RUBRIC_MINIMUM}: ${gap.evidence}`),
       ...candidate.blocking.map((finding) => `${finding.id}: ${finding.observation}`),
       ...candidate.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score}, below the absolute minimum of ${RUBRIC_MINIMUM}.`),
       ...candidate.imageryViolations,
