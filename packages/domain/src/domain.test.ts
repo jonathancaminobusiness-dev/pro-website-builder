@@ -8,6 +8,8 @@ import {
   createFixtureIR,
   hashJson,
   resolveTokens,
+  stageResultJsonSchemas,
+  visualPropKeys,
 } from './index.js';
 
 describe('domain contracts', () => {
@@ -133,6 +135,34 @@ describe('domain contracts', () => {
     const declared = createFixtureIR();
     declared.pages.routes[0]!.nodes[1]!.props.fontWeight = '{type.body}';
     expect(designIRSchema.parse(declared).pages.routes[0]!.nodes[1]!.props.fontWeight).toBe('{type.body}');
+  });
+
+  it('admits exactly the visual prop values the gate accepts in the schema the worker is handed', () => {
+    const declared = (node: unknown, found: Array<{ type?: string; pattern?: string }> = []): Array<{ type?: string; pattern?: string }> => {
+      if (Array.isArray(node)) { for (const item of node) declared(item, found); return found; }
+      if (!node || typeof node !== 'object') return found;
+      for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+        if (key === 'properties' && value && typeof value === 'object') {
+          for (const prop of visualPropKeys) { const entry = (value as Record<string, unknown>)[prop]; if (entry) found.push(entry as { type?: string; pattern?: string }); }
+        }
+        declared(value, found);
+      }
+      return found;
+    };
+    const emitted = declared(stageResultJsonSchemas.prototype);
+    expect(emitted.length).toBeGreaterThanOrEqual(visualPropKeys.size);
+    for (const entry of emitted) {
+      expect(entry.type).toBe('string');
+      const admits = new RegExp(entry.pattern!);
+      expect(admits.test('{type.body}')).toBe(true);
+      expect(admits.test('700')).toBe(false);
+      expect(admits.test('#d86445')).toBe(false);
+    }
+    const numeric = createFixtureIR();
+    (numeric.pages.routes[0]!.nodes[1]!.props as Record<string, unknown>).fontWeight = 700;
+    const refusal = designIRSchema.safeParse(numeric);
+    expect(refusal.success).toBe(false);
+    expect(refusal.success ? [] : refusal.error.issues.map((issue) => issue.message)).toContain(documentRules.visualPropTokens);
   });
 
   it('rejects an identity without the visual contract fields', () => {

@@ -5,11 +5,12 @@ import { documentRules } from './rules.js';
 
 export const nodeKindSchema = z.enum(['stack', 'grid', 'cluster', 'media', 'type', 'surface', 'ornament', 'component']);
 export const visualValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+export const tokenReferenceSchema = z.string({ invalid_type_error: documentRules.visualPropTokens }).regex(/^\{[^}]+\}$/, documentRules.visualPropTokens);
 export const visualPropsSchema = z.object({
-  color: visualValueSchema, background: visualValueSchema, padding: visualValueSchema, paddingBlock: visualValueSchema,
-  paddingInline: visualValueSchema, gap: visualValueSchema, radius: visualValueSchema, font: visualValueSchema,
-  fontSize: visualValueSchema, fontWeight: visualValueSchema, shadow: visualValueSchema, motion: visualValueSchema,
-  width: visualValueSchema, height: visualValueSchema, margin: visualValueSchema, maxWidth: visualValueSchema,
+  color: tokenReferenceSchema, background: tokenReferenceSchema, padding: tokenReferenceSchema, paddingBlock: tokenReferenceSchema,
+  paddingInline: tokenReferenceSchema, gap: tokenReferenceSchema, radius: tokenReferenceSchema, font: tokenReferenceSchema,
+  fontSize: tokenReferenceSchema, fontWeight: tokenReferenceSchema, shadow: tokenReferenceSchema, motion: tokenReferenceSchema,
+  width: tokenReferenceSchema, height: tokenReferenceSchema, margin: tokenReferenceSchema, maxWidth: tokenReferenceSchema,
 }).partial();
 export const visualPropKeys = new Set<string>(Object.keys(visualPropsSchema.shape));
 export const nodePropsSchema = visualPropsSchema.extend({ text: z.string().optional() }).strict();
@@ -93,9 +94,8 @@ export const designIRSchema = z.object({
   catch (error) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['identity', 'tokens'], message: error instanceof Error ? error.message : `${documentRules.tokenReferences} Token aliases do not resolve.` }); return; }
   for (const issue of cssTokenIssues(defined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['identity', 'tokens'], message: issue.message });
   for (const page of ir.pages.routes) for (const node of page.nodes) for (const [key, value] of Object.entries(node.props)) {
-    if (!visualPropKeys.has(key) || value === undefined) continue;
-    const path = typeof value === 'string' ? /^\{([^}]+)\}$/.exec(value)?.[1] : undefined;
-    if (path === undefined) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pages', 'routes'], message: `${documentRules.visualPropTokens} Node ${node.id} sets ${key} to ${JSON.stringify(value)}.` }); continue; }
+    if (!visualPropKeys.has(key) || typeof value !== 'string') continue;
+    const path = value.slice(1, -1);
     if (!(path in defined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pages', 'routes'], message: `${documentRules.tokenReferences} Node ${node.id} sets ${key} to ${value}, which the identity does not define.` });
   }
   const assetsById = new Map(ir.assets.items.map((asset) => [asset.id, asset]));

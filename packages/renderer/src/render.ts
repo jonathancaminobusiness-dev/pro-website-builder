@@ -26,8 +26,8 @@ function roleVar(identity: IdentitySpec, role: keyof IdentitySpec['tokenRoles'],
   return `var(${cssCustomPropertyName(path)})`;
 }
 
-function cssValue(value: string | number | boolean, values: Record<string, string | number | boolean>, node: PageNode, key: string): string {
-  if (typeof value === 'string' && /^\{[^}]+\}$/.test(value)) {
+function cssValue(value: string, values: Record<string, string | number | boolean>, node: PageNode, key: string): string {
+  if (/^\{[^}]+\}$/.test(value)) {
     const path = value.slice(1, -1);
     if (!(path in values)) throw new Error(`${documentRules.tokenReferences} Unresolved token reference ${value} on ${node.id}.${key}`);
     return `var(${cssCustomPropertyName(path)})`;
@@ -42,7 +42,7 @@ function propertyName(key: string): string {
 }
 
 function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<string, string | number | boolean>, assets: Map<string, Asset>): string {
-  const styleEntries = Object.entries(node.props).filter((entry): entry is [string, string | number | boolean] => visualPropKeys.has(entry[0]) && entry[1] !== undefined);
+  const styleEntries = Object.entries(node.props).filter((entry): entry is [string, string] => visualPropKeys.has(entry[0]) && typeof entry[1] === 'string');
   const styles = styleEntries.map(([key, value]) => `${propertyName(key)}:${cssValue(value, values, node, key)}`).join(';');
   const styleAttribute = styles ? ` style="${escapeHtml(styles)}"` : '';
   const common = ` data-node-id="${escapeHtml(node.id)}" data-node-kind="${escapeHtml(node.kind)}"${styleAttribute}`;

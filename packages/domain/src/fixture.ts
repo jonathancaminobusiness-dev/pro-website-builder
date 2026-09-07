@@ -42,7 +42,7 @@ export function createFixtureIdentity(): IdentitySpec {
 
 export function createFixtureIR(): DesignIR {
   const identity = createFixtureIdentity();
-  const node = (id: string, kind: 'stack' | 'grid' | 'cluster' | 'media' | 'type' | 'surface' | 'ornament' | 'component', semantic: 'h1' | 'h2' | 'h3' | 'p' | 'section' | 'figure' | 'div', props: Record<string, string | number | boolean>, slots: Record<string, string[]> = {}) => ({ id, kind, semantic, props, slots });
+  const node = (id: string, kind: 'stack' | 'grid' | 'cluster' | 'media' | 'type' | 'surface' | 'ornament' | 'component', semantic: 'h1' | 'h2' | 'h3' | 'p' | 'section' | 'figure' | 'div', props: Record<string, string>, slots: Record<string, string[]> = {}) => ({ id, kind, semantic, props, slots });
   return {
     meta: { id: 'fixture-ir', projectId: 'fixture-project', versionId: 'v0', rendererVersion: 'renderer-0.1', createdAt: '2026-09-05T00:00:00.000Z' },
     identity,
