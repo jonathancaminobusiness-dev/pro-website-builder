@@ -12,7 +12,6 @@ export class ReleaseVetoError extends Error {
 
 export interface ReleaseManifest {
   digest: string;
-  directory: string;
   rendererVersion: string;
   compilerVersion: string;
   siteUrl: string;
@@ -43,8 +42,10 @@ function safeTarget(directory: string, path: string): string {
  * never reaches disk in a form that could be published by accident.
  *
  * The manifest is a pure function of the compiled bytes and the toolchain that
- * produced them: it names no document, no version and no publication, so the
- * same site always writes the same manifest and publishing it twice succeeds.
+ * produced them: it names no document, no version, no publication and no host
+ * path, so the same site always writes the same manifest and publishing it
+ * twice succeeds. The bundle is a public artifact, so nothing about the machine
+ * that compiled it belongs in there either.
  * Which document produced these bytes, and who accepted what to publish them,
  * is the release record beside the bundle — see `appendReleasePublication`.
  */
@@ -62,7 +63,6 @@ export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string
   const byPath = new Map(compiled.files.map((file) => [file.path, file]));
   const manifest: ReleaseManifest = {
     digest: compiled.digest,
-    directory,
     rendererVersion: compiled.rendererVersion,
     compilerVersion: compiled.compilerVersion,
     siteUrl: compiled.siteUrl,
@@ -90,10 +90,10 @@ export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string
 }
 
 /** Reads a written bundle back as a path → sha256 map, for reproducibility checks. */
-export async function readBundleHashes(manifest: ReleaseManifest): Promise<Record<string, string>> {
+export async function readBundleHashes(rootDir: string, manifest: ReleaseManifest): Promise<Record<string, string>> {
   const { createHash } = await import('node:crypto');
   const entries = await Promise.all(manifest.files.map(async (file) => {
-    const contents = await readFile(join(manifest.directory, file.path));
+    const contents = await readFile(join(rootDir, manifest.digest, file.path));
     return [file.path, createHash('sha256').update(contents).digest('hex')] as const;
   }));
   return Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));

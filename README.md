@@ -159,9 +159,11 @@ stage has produced the version they are looking at — rejecting that proposal
 closes Gate 3 again until the stage runs anew. That version, plus the review
 record the refiner writes onto it, is the run's release: Gate 3 and the ordinary
 finalization approval compile exactly it, so the approval, the release record and
-the published bytes always name the same version. Both take the same path —
-one compiler, one bundle writer, every veto — so a secret in a page refuses the
-ordinary approval exactly as it refuses Gate 3.
+the published bytes always name the same version. Both take the same path — one
+compiler, one bundle writer, one `evaluateReleaseGate` — so every veto the gate
+raises, the compiler's, the evidence runners' and the divergence check, refuses
+the ordinary approval exactly as it refuses Gate 3. Rejecting the proposal
+rewinds to what the prototype gate approved, whether or not Gate 3 refined it.
 
 The finalization stage writes through the same boundary as every other stage:
 its proposals declare the stage and the role the foundation pins to it, the
@@ -184,7 +186,8 @@ build failure, a broken primary link, a critical AA regression, and a release
 that diverges from the approved one. Only what the bundle ships can be published
 without terms, so an asset the release never publishes — a provider placeholder
 — escalates to the captain instead of blocking. A veto is never scored or averaged: one veto
-blocks Gate 3, and the export refuses to write. Only the compiler, the evidence
+blocks Gate 3, and every export path — the studio's two buttons and
+`run:release` — refuses to write. Only the compiler, the evidence
 runners and the gate may raise one — a critic cannot raise or clear a veto, its
 tasks carry no writable path, and its findings have no veto severity.
 
@@ -211,10 +214,11 @@ Playwright em firefox". Publishing over an open escalation takes a written
 reason from the captain, recorded in the run's log as `release.published` and in
 the release record beside the bundle. The manifest inside the bundle is a pure
 function of the compiled bytes and the toolchain — it names no document, no
-version and no publication — so writing the same bytes again is an idempotent
-success that appends a second entry to `<digest>.publications.json`, where the
-approved version, the released version, the document hash and the acceptance
-live.
+version, no publication and no path on the machine that compiled it — so writing
+the same bytes again is an idempotent success that appends a second entry to
+`<digest>.publications.json`, where the approved version, the released version,
+the document hash and the acceptance live. That record is the only durable home
+for them, so a damaged one refuses the next append instead of being replaced.
 
 Lighthouse is a laboratory run. It measures one machine and one network, does
 not observe a visitor, and does not measure INP without interaction; the

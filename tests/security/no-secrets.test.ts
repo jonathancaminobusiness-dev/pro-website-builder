@@ -14,7 +14,7 @@ describe('phase 0 secret boundary', () => {
     const snapshot = await run.initialize('secret-scan').then(() => run.runAll());
     const files: string[] = [];
     async function collect(directory: string): Promise<void> { for (const entry of await readdir(directory, { withFileTypes: true })) { const path = join(directory, entry.name); if (entry.isDirectory()) await collect(path); else files.push(path); } }
-    await collect(snapshot.exportManifest!.directory);
+    await collect(join(root, 'exports', snapshot.exportManifest!.digest));
     const bundle = (await Promise.all(files.map((file) => readFile(file, 'utf8')))).join('\n');
     const dump = new ProjectRepository(database).dump();
     expect(dump).toContain(snapshot.currentVersion.id);

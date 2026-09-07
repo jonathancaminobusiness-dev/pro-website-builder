@@ -59,7 +59,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
       try {
-        const run = new FixtureRun({ repository, exportRoot, provider, siteUrl, siteName });
+        const run = new FixtureRun({ repository, exportRoot, provider, evidenceDir, siteUrl, siteName });
         await run.initialize(id);
         runs.set(id, run);
         return run;
@@ -68,7 +68,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
     loadRun: async (id) => {
       const existing = runs.get(id);
       if (existing) return existing;
-      const run = new FixtureRun({ repository, exportRoot, provider, siteUrl, siteName });
+      const run = new FixtureRun({ repository, exportRoot, provider, evidenceDir, siteUrl, siteName });
       if (!await run.restore(id)) return undefined;
       runs.set(id, run);
       return run;

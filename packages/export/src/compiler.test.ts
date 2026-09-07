@@ -265,12 +265,14 @@ describe('immutable content-addressed bundle', () => {
     try {
       const manifestA = await writeReleaseBundle(first, rootA);
       const manifestB = await writeReleaseBundle(second, rootB);
-      expect(manifestA.directory.endsWith(first.digest)).toBe(true);
-      expect(await readBundleHashes(manifestA)).toEqual(await readBundleHashes(manifestB));
-      expect({ ...manifestA, directory: '' }).toEqual({ ...manifestB, directory: '' });
-      const raw = await readFile(join(manifestA.directory, 'manifest.json'), 'utf8');
+      expect(await readBundleHashes(rootA, manifestA)).toEqual(await readBundleHashes(rootB, manifestB));
+      // Two roots, one manifest: the bundle names nothing about the machine that
+      // compiled it, so the published artifact leaks no host path.
+      expect(manifestA).toEqual(manifestB);
+      const raw = await readFile(join(rootA, first.digest, 'manifest.json'), 'utf8');
       expect(raw).not.toMatch(/createdAt|timestamp/i);
-      await stat(join(manifestA.directory, 'index.html'));
+      expect(raw).not.toContain(rootA);
+      await stat(join(rootA, first.digest, 'index.html'));
     } finally { await rm(rootA, { recursive: true, force: true }); await rm(rootB, { recursive: true, force: true }); }
   });
 
@@ -313,6 +315,11 @@ describe('immutable content-addressed bundle', () => {
       expect(record[1]?.releasedVersionId).toBe('v-refined-again');
       // The record lives beside the bundle, never inside the immutable directory.
       expect(await readdir(join(root, compiled.digest))).not.toContain(`${compiled.digest}.publications.json`);
+
+      // A damaged record refuses the next append instead of being replaced by it.
+      await writeFile(join(root, `${compiled.digest}.publications.json`), '[{"digest":', 'utf8');
+      await expect(appendReleasePublication(root, entry)).rejects.toThrow(/unreadable/);
+      await expect(readReleasePublications(root, compiled.digest)).rejects.toThrow(/unreadable/);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

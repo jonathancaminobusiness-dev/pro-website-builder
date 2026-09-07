@@ -17,7 +17,7 @@ describe('phase 0 fixture run', () => {
     expect(snapshot.status).toBe('succeeded');
     expect(snapshot.approvals).toHaveLength(3);
     expect(snapshot.exportManifest?.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
-    expect((await readdir(snapshot.exportManifest!.directory)).sort()).toEqual(['assets', 'contact', 'headers.json', 'index.html', 'licenses.json', 'manifest.json', 'proof', 'robots.txt', 'sitemap.xml']);
+    expect((await readdir(join(dir, 'exports', snapshot.exportManifest!.digest))).sort()).toEqual(['assets', 'contact', 'headers.json', 'index.html', 'licenses.json', 'manifest.json', 'proof', 'robots.txt', 'sitemap.xml']);
     db.sqlite.close();
   });
 

@@ -29,9 +29,22 @@ function recordPath(rootDir: string, digest: string): string {
   return join(rootDir, `${digest}${RELEASE_RECORD_SUFFIX}`);
 }
 
+/**
+ * The publications recorded for one bundle, or none when the bundle has never
+ * been published. A record that exists but cannot be read is an error: it is the
+ * only durable home for the captain's written acceptance, so a damaged file
+ * refuses the next append rather than being silently replaced by it.
+ */
 export async function readReleasePublications(rootDir: string, digest: string): Promise<ReleasePublication[]> {
-  try { return JSON.parse(await readFile(recordPath(rootDir, digest), 'utf8')) as ReleasePublication[]; }
-  catch { return []; }
+  const path = recordPath(rootDir, digest);
+  let raw: string;
+  try { raw = await readFile(path, 'utf8'); }
+  catch (error) {
+    if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT') return [];
+    throw error;
+  }
+  try { return JSON.parse(raw) as ReleasePublication[]; }
+  catch (error) { throw new Error(`The release record ${path} is unreadable, so the publications of this bundle cannot be preserved: ${error instanceof Error ? error.message : 'invalid JSON'}`); }
 }
 
 export async function appendReleasePublication(rootDir: string, entry: ReleasePublication): Promise<ReleasePublication[]> {

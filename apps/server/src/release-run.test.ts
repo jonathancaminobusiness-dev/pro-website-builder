@@ -53,7 +53,7 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs,
-    createRun: async (id) => { const run = new FixtureRun({ repository, exportRoot, provider: options.provider ?? new FakeModelProvider(), ...SITE }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ repository, exportRoot, evidenceDir, provider: options.provider ?? new FakeModelProvider(), ...SITE }); await run.initialize(id); runs.set(id, run); return run; },
     release: { releaseRoot: join(dir, 'releases'), evidenceDir, ...SITE, modelProvider: 'fake' },
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -182,7 +182,7 @@ describe('Gate 3 over the local API', () => {
     const edited = 'Prova antes do brilho, revisada na finalização.';
     const { origin, runId, exportRoot, run } = await harness({
       provider: pageEditingProvider(edited),
-      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'passed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 0, serious: 0 }, notes: [] }],
     });
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     const snapshot = await run.approve('finalization', 'captain');
@@ -194,6 +194,38 @@ describe('Gate 3 over the local API', () => {
     expect(publication?.releasedVersionId).toBe(prepared.versionId);
     expect(publication?.approvedVersionId).toBe(prepared.report.approvedVersionId);
     expect(await readFile(join(exportRoot, snapshot.exportManifest!.digest, 'proof', 'index.html'), 'utf8')).toContain(edited);
+  });
+
+  it('refuses the ordinary finalization approval with the same veto that blocks Gate 3', async () => {
+    const { origin, runId, exportRoot, run } = await harness({
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
+    });
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(prepared.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
+    const blocked = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest }) });
+    expect(blocked.status).toBe(500);
+
+    // The second button reaches the same gate: approving the finalization row
+    // cannot publish what Gate 3 refuses.
+    await expect(run.approve('finalization', 'captain')).rejects.toThrow(/CRITICAL_AA_REGRESSION/);
+    expect(run.snapshot().status).toBe('needs_review');
+    expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization')).toHaveLength(0);
+    await expect(readdir(exportRoot)).rejects.toThrow();
+  });
+
+  it('rewinds the rejected finalization proposal even after Gate 3 refined it', async () => {
+    const { origin, runId, run, stageVersionId } = await harness({
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
+    });
+    const prototype = run.snapshot().approvals.find((entry) => entry.stage === 'prototype' && entry.decision === 'approved')!;
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(prepared.versionId).not.toBe(stageVersionId);
+    expect(run.snapshot().currentVersion.id).toBe(prepared.versionId);
+
+    // The captain rejects the finalization proposal, so the document goes back to
+    // what the prototype gate approved, not to the proposal they just refused.
+    const rejected = await run.reject('finalization', 'captain');
+    expect(rejected.currentVersion.id).toBe(prototype.versionId);
   });
 
   it('closes Gate 3 again when the captain rejects the finalization proposal', async () => {

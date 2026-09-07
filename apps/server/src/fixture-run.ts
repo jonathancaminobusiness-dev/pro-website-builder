@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { createFixtureIR, type AgentTask, type Approval } from '@pwb/domain';
-import { appendReleasePublication, compileRelease, writeReleaseBundle, type ReleaseManifest } from '@pwb/export';
+import { appendReleasePublication, compileRelease, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type ScheduleResult, type VersionRecord, VersionStore } from '@pwb/orchestrator';
 import type { ReleaseContext } from './release-run.js';
 import type { ModelProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
+import { checkPreviewReleaseParity, evaluateReleaseGate, readEvidence } from '@pwb/stage-finalization';
 import type { ProjectRepository } from './db/repository.js';
 
 type Stage = 'identity' | 'prototype' | 'finalization';
@@ -68,7 +69,7 @@ export class FixtureRun {
   private readonly releaseGate = new PatchGate();
   private finalizationVersion: VersionRecord | undefined;
 
-  constructor(private readonly options: { repository: ProjectRepository; exportRoot: string; provider: ModelProvider; siteUrl?: string; siteName?: string }) {}
+  constructor(private readonly options: { repository: ProjectRepository; exportRoot: string; provider: ModelProvider; evidenceDir?: string; siteUrl?: string; siteName?: string }) {}
 
   async initialize(runId: string): Promise<void> {
     this.runIdentifier = runId;
@@ -159,7 +160,10 @@ export class FixtureRun {
     const rejection: Approval = { id: `${this.runId()}-${stage}-rejection-${this.approvals.length}`, stage, approverRole: 'captain', versionId: this.currentVersion.id, versionHash: this.currentVersion.hash, decision: 'rejected', rationale, createdAt: new Date().toISOString() };
     this.approvals.push(rejection);
     this.status = 'rejected';
-    const parent = this.applier.rewind(this.currentVersion);
+    // Gate 3 may have adopted a refinement on top of what the stage produced, so
+    // the rewind starts from the stage's own version and lands on its base.
+    const rejected = stage === 'finalization' && this.finalizationVersion ? this.finalizationVersion : this.currentVersion;
+    const parent = this.applier.rewind(rejected);
     if (stage === 'finalization') this.finalizationVersion = undefined;
     if (parent) {
       this.currentVersion = parent;
@@ -243,21 +247,38 @@ export class FixtureRun {
     return [...this.approvals].reverse().find((entry) => entry.stage === stage && entry.decision === 'approved');
   }
 
-  /**
-   * The one export path. Approving finalization compiles the document through
-   * the release compiler and writes the content-addressed bundle, so every veto
-   * — a secret in a page, an asset without a licence, a broken link — refuses
-   * the ordinary approval exactly as it refuses Gate 3.
-   */
-  private async writeRelease(source: VersionRecord, rationale: string): Promise<ReleaseManifest> {
-    const compiled = compileRelease(renderDesign(source.ir), source.ir, {
+  private compileFor(version: VersionRecord): CompiledSite {
+    return compileRelease(renderDesign(version.ir), version.ir, {
       siteUrl: this.options.siteUrl ?? 'https://site.invalid',
       siteName: this.options.siteName ?? 'pro-website-builder',
     });
+  }
+
+  /**
+   * The one export path. Approving finalization evaluates the same Gate 3 the
+   * release panel evaluates and refuses on any veto it raises — the compiler's,
+   * the evidence runners' and the gate's own divergence check — so approving the
+   * stage can never publish a release Gate 3 blocks.
+   */
+  private async writeRelease(source: VersionRecord, rationale: string): Promise<ReleaseManifest> {
+    const compiled = this.compileFor(source);
+    const approvedVersion = this.finalizationVersion ?? source;
+    const approvedCompile = approvedVersion.id === source.id ? compiled : this.compileFor(approvedVersion);
+    const report = evaluateReleaseGate({
+      compiled,
+      evidence: this.options.evidenceDir ? await readEvidence(this.options.evidenceDir) : [],
+      critiques: [],
+      parity: checkPreviewReleaseParity(renderDesign(source.ir), compiled, new Map(source.ir.pages.routes.map((page) => [page.route, page.id]))),
+      approved: { versionId: approvedVersion.id, irHash: approvedCompile.irHash, renderedFiles: approvedCompile.files.map((file) => [file.path, file.hash] as [string, string]) },
+      releasedVersionId: source.id,
+      refinementCycles: 0,
+      escalations: [],
+    });
+    if (report.blocked) throw new ReleaseVetoError(report.vetoes);
     const manifest = await writeReleaseBundle(compiled, this.options.exportRoot);
     await appendReleasePublication(this.options.exportRoot, {
       digest: manifest.digest,
-      approvedVersionId: this.finalizationVersion?.id ?? source.id,
+      approvedVersionId: approvedVersion.id,
       releasedVersionId: source.id,
       irHash: compiled.irHash,
       approverRole: 'captain',

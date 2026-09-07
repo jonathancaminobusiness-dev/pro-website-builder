@@ -75,13 +75,20 @@ async function main(): Promise<void> {
     return;
   }
 
+  // The gate's verdict decides, not the compiler's alone: a release blocked by an
+  // evidence or divergence veto never reaches disk looking like an approved one.
   let bundle: string | undefined;
   let refused: string | undefined;
-  try {
-    bundle = (await writeReleaseBundle(result.compiled, releaseRoot)).directory;
-  } catch (error) {
-    if (!(error instanceof ReleaseVetoError)) throw error;
-    refused = error.message;
+  if (result.report.blocked) {
+    refused = new ReleaseVetoError(result.report.vetoes).message;
+  } else {
+    try {
+      const manifest = await writeReleaseBundle(result.compiled, releaseRoot);
+      bundle = join(releaseRoot, manifest.digest);
+    } catch (error) {
+      if (!(error instanceof ReleaseVetoError)) throw error;
+      refused = error.message;
+    }
   }
 
   console.log(JSON.stringify({

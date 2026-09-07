@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
 import { appendReleasePublication, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
@@ -125,7 +126,7 @@ export class ReleaseRun {
       acceptedEscalations: escalations,
     });
     await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole: 'captain', rationale: reason, escalations });
-    this.snapshotValue = { ...current, published: { directory: manifest.directory, digest: manifest.digest } };
+    this.snapshotValue = { ...current, published: { directory: join(this.options.releaseRoot, manifest.digest), digest: manifest.digest } };
     return manifest;
   }
 }
