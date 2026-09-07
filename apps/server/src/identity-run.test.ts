@@ -138,6 +138,29 @@ describe('identity run', () => {
     expect(undone.handoff?.stale).toBe(false);
   });
 
+  it('persists every captain decision as its own row across a reopen and an undo', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({ runId: 'identity-recur', repository, provider: new FakeIdentityProvider() });
+    await run.initialize();
+    const started = await run.start();
+    const before = started.directions.find((direction) => direction.directionId === 'editorial-material')!.swatches.find((swatch) => swatch.path === 'color.accent')!.value;
+    const first = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Primeira decisão.' });
+    if (first.gate.state !== 'closed') throw new Error('unreachable');
+
+    await run.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Segunda decisão.' });
+    // Restoring the accent carries the identity the first decision closed on, so the gate reopens against the second.
+    const undone = await run.changeToken({ tokenPath: 'color.accent', value: before, rationale: 'Volta ao sinal aprovado.' });
+    if (undone.gate.state !== 'reopened') throw new Error('the gate should have reopened');
+    const third = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Terceira decisão.' });
+    if (third.gate.state !== 'closed') throw new Error('unreachable');
+
+    // The ledger keeps one row per decision, whatever version each decision landed on.
+    const persisted = database.sqlite.prepare('SELECT id, rationale FROM approvals WHERE run_id = ? ORDER BY rowid').all('identity-recur') as Array<{ id: string; rationale: string }>;
+    expect(persisted.map((row) => row.rationale)).toEqual(['Primeira decisão.', 'Segunda decisão.', 'Terceira decisão.']);
+    expect(new Set(persisted.map((row) => row.id)).size).toBe(3);
+  });
+
   it('records the written override with the decision it authorised', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({ runId: 'identity-override', repository, provider: new FakeIdentityProvider() });

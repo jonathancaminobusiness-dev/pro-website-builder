@@ -118,9 +118,14 @@ export function evaluateIdentityGate(record: IdentityGateRecord | undefined, app
   return { state: 'reopened', record, impact };
 }
 
-export function approvalOf(record: IdentityGateRecord): Approval {
+/**
+ * One row per decision, keyed on the decision's own place in the ledger the way
+ * a rejection already is. What a decision landed on is a fact about the version,
+ * not what tells two decisions apart.
+ */
+export function approvalOf(record: IdentityGateRecord, decisionIndex: number): Approval {
   return {
-    id: `${record.runId}-identity-approval-${record.versionId}`,
+    id: `${record.runId}-identity-approval-${decisionIndex}`,
     stage: 'identity',
     approverRole: 'captain',
     versionId: record.versionId,

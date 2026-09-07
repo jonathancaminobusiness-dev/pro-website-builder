@@ -1021,6 +1021,38 @@ describe('gate 1', () => {
     expect(changed.versionId).not.toBe(approval.versionId);
   });
 
+  it('keeps a token path changeable after the captain undoes a change on it', async () => {
+    const { stage, store } = harness();
+    await stage.run();
+    const approval = await stage.approve({ directionId: 'modular-technical', rationale: 'Aprovada.', approverRole: 'captain' });
+    const before = flattenTokens(store.get(approval.versionId)!.ir.identity.tokens).get('color.accent')!.$value;
+
+    const changed = await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    expect(changed.gate.state).toBe('reopened');
+    // Restoring the approved value is a new version carrying the approved identity again.
+    const undone = await stage.changeToken({ tokenPath: 'color.accent', value: before, rationale: 'Volta ao sinal aprovado.' });
+    expect(undone.versionId).not.toBe(approval.versionId);
+    expect(identityHash(store.get(undone.versionId)!.ir)).toBe(identityHash(store.get(approval.versionId)!.ir));
+    expect(undone.gate.state).toBe('closed');
+
+    // The same path takes a third change: the undo claimed nothing that outlives it.
+    const again = await stage.changeToken({ tokenPath: 'color.accent', value: '#00a37a', rationale: 'Outro sinal.' });
+    expect(again.gate.state).toBe('reopened');
+    expect(flattenTokens(store.get(again.versionId)!.ir.identity.tokens).get('color.accent')!.$value).toBe('#00a37a');
+  });
+
+  it('keeps a token path changeable after a change that repeats the value it already has', async () => {
+    const { stage, store } = harness();
+    await stage.run();
+    await stage.approve({ directionId: 'modular-technical', rationale: 'Aprovada.', approverRole: 'captain' });
+    const changed = await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    const repeated = await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Clique repetido.' });
+    expect(identityHash(store.get(repeated.versionId)!.ir)).toBe(identityHash(store.get(changed.versionId)!.ir));
+
+    const again = await stage.changeToken({ tokenPath: 'color.accent', value: '#00a37a', rationale: 'Outro sinal.' });
+    expect(flattenTokens(store.get(again.versionId)!.ir.identity.tokens).get('color.accent')!.$value).toBe('#00a37a');
+  });
+
   it('refuses to replace a whole token group with a single token', async () => {
     const { stage, store } = harness();
     await stage.run();

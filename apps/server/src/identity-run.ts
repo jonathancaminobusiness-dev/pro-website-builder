@@ -138,7 +138,7 @@ export class IdentityRun {
 
   async approve(input: { directionId: string; approverRole: string; rationale: string; overrideRationale?: string }): Promise<IdentityRunSnapshot> {
     const approval = await this.stage.approve(input);
-    const record: Approval = approvalOf(approval.record);
+    const record: Approval = approvalOf(approval.record, this.approvals.length);
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
     this.approvals.push(record);
     this.assets = approval.assets;
