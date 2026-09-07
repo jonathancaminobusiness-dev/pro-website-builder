@@ -5,7 +5,7 @@ import { describeContext, type NodeGeometry, type RenderContext, type RenderEvid
 export type QaTier = 0 | 1;
 export type QaSeverity = 'veto' | 'major' | 'minor';
 
-export interface QaFinding { message: string; nodeIds: string[]; context?: RenderContext; }
+export interface QaFinding { message: string; nodeIds: string[]; context?: RenderContext; /** The node prop the check is about, when one is; a repair should target it rather than guess. */ prop?: string; }
 export interface QaCheck extends QaFinding { id: string; tier: QaTier; severity: QaSeverity; title: string; }
 export interface QaInput { ir: DesignIR; evidence: RenderEvidence[]; }
 export interface QaRule { id: string; tier: QaTier; severity: QaSeverity; title: string; detect: (input: QaInput) => QaFinding[]; }
@@ -136,9 +136,10 @@ const rhythm: QaRule = {
     if (step === undefined || step <= 0) return [];
     const offBeat = (length: number | null): boolean => length !== null && length > SUBPIXEL && Math.abs(length / step - Math.round(length / step)) * step > SUBPIXEL;
     return eachNode(evidence).flatMap(({ node, context }) => ([
-      ['gap', node.gapPx], ['padding em bloco', node.paddingBlockPx], ['padding em linha', node.paddingInlinePx], ['margem em bloco', node.marginBlockPx],
-    ] as const).filter(([, length]) => offBeat(length))
-      .map(([label, length]) => ({ message: `O nó ${node.nodeId} usa ${label} de ${length!.toFixed(1)}px, fora do ritmo de ${step}px em ${describeContext(context)}.`, nodeIds: [node.nodeId], context })));
+      ['gap', 'gap', node.gapPx], ['paddingBlock', 'padding em bloco', node.paddingBlockPx],
+      ['paddingInline', 'padding em linha', node.paddingInlinePx], ['margin', 'margem em bloco', node.marginBlockPx],
+    ] as const).filter(([, , length]) => offBeat(length))
+      .map(([prop, label, length]) => ({ message: `O nó ${node.nodeId} usa ${label} de ${length!.toFixed(1)}px, fora do ritmo de ${step}px em ${describeContext(context)}.`, nodeIds: [node.nodeId], context, prop })));
   },
 };
 

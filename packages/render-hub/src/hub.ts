@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
@@ -31,10 +30,10 @@ const MAX_TAB_STOPS = 25;
  * and touches nothing the capture measures.
  */
 const KEEP_NAMES_SHIM = 'globalThis.__name = globalThis.__name || ((value) => value);';
-const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js');
 let axeSourceText: Promise<string> | undefined;
+/** axe-core publishes its own bundle as a string, so the runner never has to resolve a file path. */
 function axeSource(): Promise<string> {
-  axeSourceText ??= readFile(axeSourcePath, 'utf8');
+  axeSourceText ??= import('axe-core').then((module) => (module.default ?? module).source);
   return axeSourceText;
 }
 

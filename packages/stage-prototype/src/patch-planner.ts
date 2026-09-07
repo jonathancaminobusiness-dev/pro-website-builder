@@ -41,51 +41,51 @@ function compile(ir: DesignIR, patch: ProposedPatch, tokens: Set<string>): { ope
   if (patch.operation === 'set_crop') {
     const index = ir.assets.items.findIndex((asset) => asset.id === patch.assetId);
     const asset = ir.assets.items[index];
-    if (!asset) return { reason: `The revision has no asset ${patch.assetId}.` };
-    if (asset.kind !== 'raster') return { reason: `Only a raster asset can be cropped; ${patch.assetId} is a ${asset.kind} asset.` };
+    if (!asset) return { reason: `A revisão não tem o asset ${patch.assetId}.` };
+    if (asset.kind !== 'raster') return { reason: `Só um asset raster pode ser recortado; ${patch.assetId} é do tipo ${asset.kind}.` };
     const path = `/assets/items/${index}/crop`;
     const crop = { focalX: patch.focalX, focalY: patch.focalY, aspect: patch.aspect };
     return { operations: [{ op: 'test', path, ...(asset.crop === undefined ? {} : { value: asset.crop }) }, { op: asset.crop === undefined ? 'add' : 'replace', path, value: crop }] };
   }
 
   const located = locateNode(ir, patch.nodeId);
-  if (!located) return { reason: `The revision has no node ${patch.nodeId}.` };
+  if (!located) return { reason: `A revisão não tem o nó ${patch.nodeId}.` };
   const { routeIndex, nodeIndex, node } = located;
   const nodePath = `/pages/routes/${routeIndex}/nodes/${nodeIndex}`;
 
   if (patch.operation === 'set_token') {
     const reference = patch.token.slice(1, -1);
-    if (!tokens.has(reference)) return { reason: `The identity does not define the token ${patch.token}.` };
+    if (!tokens.has(reference)) return { reason: `A identidade não define o token ${patch.token}.` };
     const path = `${nodePath}/props/${patch.prop}`;
     const current = node.props[patch.prop];
-    if (current === patch.token) return { reason: `Node ${patch.nodeId} already sets ${patch.prop} to ${patch.token}.` };
+    if (current === patch.token) return { reason: `O nó ${patch.nodeId} já define ${patch.prop} como ${patch.token}.` };
     return { operations: [{ op: 'test', path, ...(current === undefined ? {} : { value: current }) }, { op: current === undefined ? 'add' : 'replace', path, value: patch.token }] };
   }
 
   if (patch.operation === 'replace_copy') {
-    if (typeof node.props.text !== 'string') return { reason: `Node ${patch.nodeId} carries no copy to replace.` };
+    if (typeof node.props.text !== 'string') return { reason: `O nó ${patch.nodeId} não carrega texto a substituir.` };
     const forbidden = ir.identity.content.forbiddenTerms.find((term) => patch.text.toLowerCase().includes(term.toLowerCase()));
-    if (forbidden) return { reason: `The proposed copy uses ${forbidden}, which the identity forbids.` };
+    if (forbidden) return { reason: `O texto proposto usa "${forbidden}", que a identidade proíbe.` };
     const path = `${nodePath}/props/text`;
-    if (node.props.text === patch.text) return { reason: `Node ${patch.nodeId} already carries that copy.` };
+    if (node.props.text === patch.text) return { reason: `O nó ${patch.nodeId} já carrega esse texto.` };
     return { operations: [{ op: 'test', path, value: node.props.text }, { op: 'replace', path, value: patch.text }] };
   }
 
   if (patch.operation === 'set_constraint') {
     const containers = new Set(ir.identity.gridGrammar.responsive.map((entry) => entry.container));
-    if (!containers.has(patch.container)) return { reason: `The grid grammar declares no container ${patch.container}.` };
+    if (!containers.has(patch.container)) return { reason: `A gramática de grid não declara o container ${patch.container}.` };
     const responsive = node.responsive.filter((entry) => entry.container !== patch.container);
     const next = [...responsive, { container: patch.container, rule: patch.rule }].sort((a, b) => (a.container < b.container ? -1 : a.container > b.container ? 1 : 0));
     const path = `${nodePath}/responsive`;
-    if (JSON.stringify(next) === JSON.stringify(node.responsive)) return { reason: `Node ${patch.nodeId} already carries that constraint.` };
+    if (JSON.stringify(next) === JSON.stringify(node.responsive)) return { reason: `O nó ${patch.nodeId} já carrega essa restrição.` };
     return { operations: [{ op: 'test', path, value: node.responsive }, { op: 'replace', path, value: next }] };
   }
 
   const current = node.slots[patch.slot];
-  if (!current) return { reason: `Node ${patch.nodeId} has no slot ${patch.slot}.` };
+  if (!current) return { reason: `O nó ${patch.nodeId} não tem o slot ${patch.slot}.` };
   const sorted = (list: string[]): string => [...list].sort().join('|');
-  if (sorted(current) !== sorted(patch.order)) return { reason: `A reorder must keep exactly the children of ${patch.nodeId}.${patch.slot}.` };
-  if (current.join('|') === patch.order.join('|')) return { reason: `Node ${patch.nodeId}.${patch.slot} is already in that order.` };
+  if (sorted(current) !== sorted(patch.order)) return { reason: `Uma reordenação precisa manter exatamente os filhos de ${patch.nodeId}.${patch.slot}.` };
+  if (current.join('|') === patch.order.join('|')) return { reason: `O nó ${patch.nodeId}.${patch.slot} já está nessa ordem.` };
   const path = `${nodePath}/slots/${patch.slot}`;
   return { operations: [{ op: 'test', path, value: current }, { op: 'replace', path, value: patch.order }] };
 }
@@ -107,19 +107,19 @@ export function planPatch(input: PlanInput): PatchPlan {
     severityRank[a.severity] - severityRank[b.severity] || b.confidence - a.confidence || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   for (const finding of ranked) {
-    if (finding.abstain) { rejected.push({ finding, reason: 'The critic abstained and escalated the decision to a human.' }); continue; }
-    if (!finding.patch) { rejected.push({ finding, reason: 'The finding carries no minimal repair to apply.' }); continue; }
-    if (finding.confidence < minConfidence) { rejected.push({ finding, reason: `Confidence ${finding.confidence} is below the ${minConfidence} the planner requires.` }); continue; }
-    if (accepted.length >= maxPatches) { rejected.push({ finding, reason: `The cycle already carries ${maxPatches} causal repairs.` }); continue; }
+    if (finding.abstain) { rejected.push({ finding, reason: 'O crítico se absteve e escalou a decisão para o humano.' }); continue; }
+    if (!finding.patch) { rejected.push({ finding, reason: 'O achado não traz um reparo mínimo a aplicar.' }); continue; }
+    if (finding.confidence < minConfidence) { rejected.push({ finding, reason: `A confiança ${finding.confidence} está abaixo do mínimo de ${minConfidence} exigido pelo planejador.` }); continue; }
+    if (accepted.length >= maxPatches) { rejected.push({ finding, reason: `Este ciclo já carrega ${maxPatches} reparos causais.` }); continue; }
 
     const compiled = compile(input.ir, finding.patch, tokens);
     if ('reason' in compiled) { rejected.push({ finding, reason: compiled.reason }); continue; }
 
     const paths = [...new Set(compiled.operations.map((operation) => operation.path))];
     const outside = paths.find((path) => !withinAllowed(path, input.allowedPaths));
-    if (outside) { rejected.push({ finding, reason: `The repair would write ${outside}, outside the paths this task may touch.` }); continue; }
+    if (outside) { rejected.push({ finding, reason: `O reparo escreveria em ${outside}, fora dos caminhos que esta tarefa pode tocar.` }); continue; }
     const conflict = paths.find((path) => claimed.has(path));
-    if (conflict) { rejected.push({ finding, reason: `Another repair in this cycle already writes ${conflict}.` }); continue; }
+    if (conflict) { rejected.push({ finding, reason: `Outro reparo deste ciclo já escreve em ${conflict}.` }); continue; }
 
     for (const path of paths) claimed.add(path);
     accepted.push({ finding, operations: compiled.operations, paths });

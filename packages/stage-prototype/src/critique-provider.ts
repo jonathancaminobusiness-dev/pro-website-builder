@@ -2,7 +2,7 @@ import type { QaCheck } from '@pwb/qa-deterministic';
 import { ClaudeSession, ClaudeSessionError, CRITIC_DENIED_TOOLS, type ClaudeSessionOptions } from './claude-session.js';
 import type { CritiqueTask } from './critics.js';
 import { definitionFor, renderCritiquePrompt } from './critics.js';
-import { critiqueReportSchema, critiqueSchemaJson, type CritiqueReport, type EvidenceRef, type Finding } from './critique.js';
+import { critiqueReportSchema, critiqueSchemaJson, patchablePropSchema, type CritiqueReport, type EvidenceRef, type Finding } from './critique.js';
 
 export interface CritiqueProvider {
   critique(task: CritiqueTask, signal?: AbortSignal): Promise<CritiqueReport>;
@@ -41,7 +41,7 @@ export class FakeCritiqueProvider implements CritiqueProvider {
     // The same defect seen at several widths is one finding, exactly as a reader would report it.
     const seen = new Set<string>();
     const findings = task.qaChecks.flatMap((check, index) => {
-      const key = `${check.id}:${check.nodeIds.join(',')}`;
+      const key = `${check.id}:${check.nodeIds.join(',')}:${check.prop ?? ''}`;
       if (seen.has(key)) return [];
       seen.add(key);
       return this.findingFor(task, check, index) ?? [];
@@ -78,11 +78,13 @@ export class FakeCritiqueProvider implements CritiqueProvider {
     const base = { id, dimension: task.dimension, evidence: evidenceOf(task, check), checks: [check.id], abstain: false };
 
     if (task.dimension === 'coherence' && check.id === 'QA1-RHYTHM' && nodeId) {
+      const prop = patchablePropSchema.safeParse(check.prop ?? 'gap');
+      if (!prop.success) return undefined;
       return {
         ...base, severity: 'major' as const, confidence: 0.8,
-        observation: `O nó ${nodeId} usa um espaçamento fora do ritmo declarado.`,
+        observation: `O nó ${nodeId} usa ${prop.data} fora do ritmo declarado.`,
         why: 'A gramática de grid é parte do contrato aprovado; um espaçamento fora do ritmo lê como acidente.',
-        patch: { operation: 'set_token' as const, nodeId, prop: 'gap' as const, token: task.identity.gridGrammar.rhythmToken },
+        patch: { operation: 'set_token' as const, nodeId, prop: prop.data, token: task.identity.gridGrammar.rhythmToken },
       };
     }
     if (task.dimension === 'responsiveness' && check.id === 'QA1-ALIGNMENT' && nodeId) {

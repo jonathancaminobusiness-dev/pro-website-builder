@@ -1,0 +1,97 @@
+.gate2-shell { min-height: 100vh; padding: 28px clamp(18px, 4vw, 64px); background: radial-gradient(circle at 10% 0%, #f4efe6 0, #e5ded2 55%, #d8cdbf 100%); }
+.gate2-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; max-width: 1400px; margin: 0 auto 34px; }
+.gate2-top h1 { margin: 6px 0 0; max-width: 40ch; font-family: Georgia, serif; font-size: clamp(1.5rem, 2.6vw, 2.4rem); font-weight: 500; line-height: 1.04; letter-spacing: -.05em; }
+.gate2-badges { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.gate2-back { color: #58676c; font-size: .78rem; text-decoration: none; border-bottom: 1px solid #b9ac9f; }
+.gate2-back:hover { color: #a84f37; border-color: #d86445; }
+.status-vetoed { color: #8c3a2c; border-color: #c98d7c; background: #f8dfd3; }
+.status-needs_review { color: #a84f37; border-color: #dca58e; }
+
+.gate2-intro { max-width: 760px; margin: 0 auto; border: 1px solid rgba(24,37,45,.12); border-radius: 22px; padding: clamp(28px, 5vw, 56px); background: rgba(250,247,241,.72); box-shadow: 0 18px 44px rgba(68,52,36,.08); }
+.gate2-intro p { max-width: 60ch; margin: 0 0 24px; color: #58676c; line-height: 1.65; }
+
+.gate2-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); align-items: start; gap: 18px; max-width: 1400px; margin: 0 auto; }
+.gate2-grid > section { min-width: 0; border: 1px solid rgba(24,37,45,.12); border-radius: 22px; padding: 24px; background: rgba(250,247,241,.72); box-shadow: 0 18px 44px rgba(68,52,36,.08); }
+.gate2-issues { grid-column: 1 / -1; }
+
+.gate2-controls { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px; }
+.gate2-selects { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.gate2-selects label { display: inline-flex; align-items: center; gap: 8px; color: #58676c; font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; }
+.gate2-selects select { border: 1px solid #b9ac9f; border-radius: 999px; padding: 7px 10px; color: #18252d; background: #f8f5ef; font: inherit; font-size: .78rem; text-transform: none; letter-spacing: 0; }
+.gate2-modes { display: inline-flex; gap: 4px; border: 1px solid #b9ac9f; border-radius: 999px; padding: 3px; background: #f8f5ef; }
+.gate2-modes button { border: 0; border-radius: 999px; padding: 6px 12px; color: #6f7c81; background: transparent; font-size: .74rem; }
+.gate2-modes button.selected { color: #f8f1e7; background: #18252d; }
+.gate2-modes button:disabled { opacity: .35; cursor: not-allowed; }
+.gate2-versions { margin: 14px 0 12px; color: #6f7c81; font-size: .74rem; }
+.gate2-versions code { color: #a84f37; font-size: .72rem; }
+
+.compare { display: grid; gap: 16px; justify-content: start; border: 1px solid #c7bcb0; border-radius: 14px; padding: 12px; background: #efe9df; overflow: hidden; }
+.compare[data-columns="2"] { grid-template-columns: repeat(2, max-content); }
+.compare-slot { position: relative; overflow: hidden; border: 1px solid #c7bcb0; border-radius: 10px; background: #fff; }
+.compare-slot iframe { display: block; border: 0; transform-origin: top left; }
+.compare-label { position: absolute; top: 6px; left: 6px; border-radius: 999px; padding: 2px 9px; color: #f8f1e7; background: rgba(24,37,45,.78); font-size: .66rem; font-weight: 700; letter-spacing: .08em; }
+.compare-overlay, .compare-difference { grid-template-columns: max-content; }
+.compare-overlay .compare-slot, .compare-difference .compare-slot { grid-area: 1 / 1; }
+.compare-overlay .compare-slot.top { opacity: .5; }
+.compare-difference { background: #fff; }
+.compare-difference .compare-slot.top { mix-blend-mode: difference; }
+.compare-overlay .compare-slot.top .compare-label, .compare-difference .compare-slot.top .compare-label { left: auto; right: 6px; }
+
+.gate2-block + .gate2-block { margin-top: 26px; padding-top: 22px; border-top: 1px solid #ddd4c9; }
+.gate2-block h2 { margin: 0 0 6px; font-size: 1rem; letter-spacing: -.03em; }
+.gate2-note { margin: 0 0 12px; color: #7b878c; font-size: .78rem; line-height: 1.5; }
+.gate2-checks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; max-height: 210px; overflow-y: auto; }
+.gate2-checks li { display: grid; gap: 4px; border-left: 3px solid #b9ac9f; padding: 6px 0 6px 10px; color: #4d5a5f; font-size: .78rem; line-height: 1.45; }
+.gate2-checks li.veto { border-color: #c0392b; }
+.gate2-checks li.major { border-color: #d86445; }
+.gate2-checks li.clean { border-color: #8fae97; color: #5d7566; }
+.gate2-checks code, .gate2-issue code { color: #a84f37; font-size: .72rem; }
+.tag { color: #7b878c; font-size: .66rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+
+.gate2-critic { margin-top: 14px; border: 1px solid #ddd4c9; border-radius: 12px; padding: 12px 14px; background: #f8f5ef; }
+.gate2-critic header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.gate2-critic p { margin: 0; color: #58676c; font-size: .8rem; line-height: 1.55; }
+.verdict { border-radius: 999px; padding: 3px 10px; font-size: .68rem; font-weight: 700; }
+.verdict-pass { color: #35624a; background: #ddeae0; }
+.verdict-revise { color: #8c4a2c; background: #f6e0d4; }
+.verdict-uncertain { color: #4c4a72; background: #e2e0f0; }
+.gate2-rubric { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.gate2-rubric li { display: flex; justify-content: space-between; gap: 12px; color: #58676c; font-size: .78rem; }
+.gate2-rubric li.below { color: #8c3a2c; font-weight: 650; }
+
+.gate2-issue-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 14px; }
+.gate2-issue { display: grid; gap: 8px; border: 1px solid #ddd4c9; border-left-width: 4px; border-radius: 14px; padding: 16px; background: #f8f5ef; }
+.gate2-issue.severity-blocker { border-left-color: #c0392b; }
+.gate2-issue.severity-major { border-left-color: #d86445; }
+.gate2-issue.severity-minor { border-left-color: #c3b49f; }
+.gate2-issue.severity-info { border-left-color: #a9bcc2; }
+.gate2-issue header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.gate2-issue .observation { margin: 0; font-weight: 620; line-height: 1.4; }
+.gate2-issue .why { margin: 0; color: #58676c; font-size: .82rem; line-height: 1.55; }
+.severity { border-radius: 999px; padding: 2px 9px; font-size: .66rem; font-weight: 700; }
+.severity-blocker { color: #7d2018; background: #f6d9d4; }
+.severity-major { color: #8c4a2c; background: #f6e0d4; }
+.severity-minor { color: #6b6152; background: #ece5d8; }
+.severity-info { color: #45606a; background: #dee8ea; }
+.confidence { margin-left: auto; color: #8a949a; font-size: .7rem; }
+.gate2-issue dl { display: grid; gap: 4px; margin: 0; }
+.gate2-issue dl > div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; }
+.gate2-issue dt { color: #8a949a; font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; }
+.gate2-issue dd { margin: 0; color: #4d5a5f; font-size: .78rem; overflow-wrap: anywhere; }
+.gate2-decide { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.gate2-decide input, .gate2-final input { flex: 1 1 160px; min-width: 0; border: 1px solid #b9ac9f; border-radius: 999px; padding: 9px 14px; color: #18252d; background: #fffdf8; font: inherit; font-size: .8rem; }
+.gate2-decide .primary, .gate2-decide .secondary { padding: 9px 14px; font-size: .78rem; }
+.gate2-decided { margin: 4px 0 0; border-radius: 10px; padding: 8px 12px; color: #35624a; background: #e6efe7; font-size: .78rem; }
+.gate2-final { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 22px; padding-top: 20px; border-top: 1px solid #ddd4c9; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+@media (max-width: 1080px) {
+  .gate2-grid { grid-template-columns: 1fr; }
+  .gate2-issues { grid-column: auto; }
+  .compare[data-columns="2"] { grid-template-columns: 1fr; }
+}
+.gate2-seed { display: grid; gap: 8px; margin: 0 0 24px; border: 1px solid #ddd4c9; border-radius: 14px; padding: 14px 16px; }
+.gate2-seed legend { padding: 0 6px; color: #a84f37; font-size: .66rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.gate2-seed label { display: flex; align-items: center; gap: 9px; color: #4d5a5f; font-size: .84rem; }
+.gate2-checks { scrollbar-width: thin; }
+.gate2-checks li:last-child { padding-bottom: 2px; }

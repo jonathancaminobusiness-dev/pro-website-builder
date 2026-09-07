@@ -4,7 +4,7 @@ import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from 
 import { renderDesign } from '@pwb/renderer';
 import {
   DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
-  PrototypeStage, PrototypeStageError, criticRegistry,
+  PrototypeStage, PrototypeStageError, createOffRhythmControlIR, criticRegistry,
   type ComposerProvider, type CritiqueProvider, type CritiqueReport, type CritiqueTask, type ProposedPatch,
   type PrototypeStageOutcome, type RouteManifest, type SectionComposition, type SectionPlan,
 } from './index.js';
@@ -206,7 +206,7 @@ describe('prototype stage', () => {
 
     expect(outcome.cycles).toHaveLength(1);
     expect(outcome.stopReason).toBe('no_actionable_patch');
-    expect(outcome.rejectedRepairs.map((entry) => entry.reason).join(' ')).toContain('no node not-a-node');
+    expect(outcome.rejectedRepairs.map((entry) => entry.reason).join(' ')).toContain('não tem o nó not-a-node');
     expect(outcome.versionId).toBe(outcome.compositionVersionId);
   });
 
@@ -228,5 +228,33 @@ describe('prototype stage', () => {
     for (const versionId of [outcome.architectVersionId, outcome.compositionVersionId, outcome.versionId]) {
       expect(setup.store.get(versionId)!.ir.identity).toEqual(before);
     }
+  });
+});
+
+describe('control seed', () => {
+  it('reports a known defect, so a clean run is not the only thing the loop was ever shown', async () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const base = applier.createRoot(createOffRhythmControlIR());
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const stage = new PrototypeStage({
+      store, applier, scheduler: new Scheduler({ maxActiveClaude: 3 }),
+      architect: new FakeInformationArchitect(), composer: new FakeSectionComposer(),
+      critique: new FakeCritiqueProvider(), evidence: new DerivedEvidenceSource(),
+      brief: 'Par de controle com ritmo impossível.',
+      onEvent: (type, payload) => { events.push({ type, payload }); },
+    });
+    const outcome = await stage.run({ runId: 'run-control', baseVersionId: base.id });
+
+    expect(outcome.qa.vetoes).toEqual([]);
+    expect(outcome.reports.flatMap((report) => report.projection.findings).length).toBeGreaterThan(0);
+    const coherence = outcome.reports.find((report) => report.dimension === 'coherence')!;
+    expect(coherence.projection.verdict).toBe('revise');
+    expect(coherence.projection.findings.every((finding) => finding.patch?.operation === 'set_token')).toBe(true);
+    expect(new Set(coherence.projection.findings.map((finding) => finding.patch && 'prop' in finding.patch ? finding.patch.prop : ''))).not.toEqual(new Set(['gap']));
+    expect(outcome.cycles[0]!.appliedFindingIds.length).toBeGreaterThan(0);
+    expect(outcome.cycles.length).toBeLessThanOrEqual(3);
+    expect(['max_cycles', 'repeated_issue', 'improvement_below_noise', 'clean', 'no_actionable_patch']).toContain(outcome.stopReason);
+    expect(events.map((event) => event.type)).toContain('prototype.cycle.decided');
   });
 });

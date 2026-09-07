@@ -1,7 +1,7 @@
 import { agentTaskSchema, hashJson, type AgentTask, type DesignIR, type IdentitySpec, type Patch } from '@pwb/domain';
 import { lintDesign, type LintReport } from '@pwb/linter';
 import { Applier, PatchGate, Scheduler, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
-import { runQa, runTier0, type QaReport } from '@pwb/qa-deterministic';
+import { runQa, type QaReport } from '@pwb/qa-deterministic';
 import type { ArchitectProvider } from './information-architect.js';
 import { ARCHITECT_ALLOWED_PATHS, ARCHITECT_PROMPT_VERSION, manifestPatch } from './information-architect.js';
 import type { ComposerProvider } from './section-composer.js';
@@ -88,7 +88,7 @@ export class PrototypeStage {
     const cycles: CycleRecord[] = [];
     const rejectedRepairs: RejectedRepairRecord[] = [];
     let reports: CritiqueReport[] = [];
-    let qa = await this.gateTier0(current, input.signal);
+    let qa = await this.gateReport(current, input.signal);
     let decision = { proceed: qa.vetoes.length === 0, reason: 'tier0_veto' as StopReason, detail: 'O QA determinístico vetou a revisão antes de qualquer modelo.' };
 
     while (decision.proceed) {
@@ -123,7 +123,7 @@ export class PrototypeStage {
       decision = { proceed: false, reason: settled.reason, detail: settled.detail };
     }
 
-    const finalQa = qa.vetoes.length > 0 ? qa : await this.gateTier0(current, input.signal);
+    const finalQa = qa.vetoes.length > 0 ? qa : await this.gateReport(current, input.signal);
     const outcome: PrototypeStageOutcome = {
       runId: input.runId,
       manifest,
@@ -235,10 +235,15 @@ export class PrototypeStage {
     };
   }
 
-  private async gateTier0(version: VersionRecord, signal?: AbortSignal): Promise<QaReport> {
+  /**
+   * The deterministic gate over the full capture matrix. Only Tier 0 rules can veto, so this still
+   * stops the stage before a single model call; the Tier 1 observations ride along because they come
+   * from the same evidence and the human gate needs to see them.
+   */
+  private async gateReport(version: VersionRecord, signal?: AbortSignal): Promise<QaReport> {
     const bundle = await this.options.evidence.collect({ ir: version.ir, versionId: version.id, tier: 0, ...(signal ? { signal } : {}) });
-    const report = runTier0({ ir: version.ir, evidence: bundle.evidence });
-    await this.record('prototype.qa.tier0', { versionId: version.id, passed: report.passed, vetoes: report.vetoes.map((check) => check.id) });
+    const report = runQa({ ir: version.ir, evidence: bundle.evidence });
+    await this.record('prototype.qa.gate', { versionId: version.id, passed: report.passed, vetoes: report.vetoes.map((check) => check.id), observations: report.checks.length - report.vetoes.length });
     return report;
   }
 

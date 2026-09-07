@@ -24,7 +24,7 @@ export function runQa(input: QaInput, options: QaOptions = {}): QaReport {
   const checks = rules.flatMap((rule) => rule.detect(input).map((finding) => ({ ...finding, id: rule.id, tier: rule.tier, severity: rule.severity, title: rule.title })))
     .sort((a, b) => a.tier - b.tier || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) || (a.message < b.message ? -1 : a.message > b.message ? 1 : 0));
   const vetoes = checks.filter((check) => check.severity === 'veto');
-  return { checks, vetoes, tiersRun: [...tiers].sort(), passed: vetoes.length === 0, issueHash: hashJson(checks.map((check) => [check.id, check.nodeIds, check.message])) };
+  return { checks, vetoes, tiersRun: [...tiers].sort(), passed: vetoes.length === 0, issueHash: hashJson(checks.map((check) => [check.id, check.nodeIds, check.prop ?? '', check.message])) };
 }
 
 /** Tier 0 alone: the veto that must pass before a single model call is spent. */
