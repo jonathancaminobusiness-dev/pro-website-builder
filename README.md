@@ -48,7 +48,7 @@ Run the deterministic fixture without starting the UI:
 corepack pnpm run:fixture
 ```
 
-The command writes a local SQLite database under `.treehouse/` and a content-addressed export under `exports/`. The database carries a schema version in `PRAGMA user_version`; opening a file written by an older version drops the `tasks`, `runs` and legacy `assets` tables and recreates the two it still uses, because this pre-release tool keeps no history worth backfilling. `projects`, `versions`, `patches`, `approvals` and `events` are left untouched, so rows from an upgraded file can name a run the `runs` table no longer has. Set `PWB_DB_PATH` and `PWB_EXPORT_ROOT` to use explicit locations, `PWB_MODEL_PROVIDER` to choose the model provider, and `PWB_STAGE_DEADLINE_MS` to give every stage the same deadline instead of the per-stage defaults. Add `--render` to also drive the approved document through the Playwright `RenderHub`: `createRenderMatrix` enumerates every route at the three representative widths — 390, 768 and 1440 CSS pixels — in every `stateFixtures` state and declared colour scheme, `--full-matrix` widens that to all six `RENDER_VIEWPORTS`, and each case is captured as a screenshot plus DOM and accessibility snapshot behind the hash cache under `PWB_RENDER_CACHE`. Observed on 2026-09-07, with the default `fake` provider and scratch paths so the recorded `claude-code` run above stayed intact — `PWB_DB_PATH=.treehouse/render-matrix.sqlite PWB_EXPORT_ROOT=.treehouse/render-matrix-exports PWB_RENDER_CACHE=.treehouse/render-matrix-cache corepack pnpm run:fixture --render` — the run printed `"render": {"cases": 18, "passed": 18, "cached": 0, "failed": []}` for the fixture's three routes, and repeating the same command against the warm cache printed `"cached": 18`. That run also pinned `PWB_PREVIEW_PORT=4319`, which the CLI no longer reads: it binds an ephemeral preview port so parallel checkouts never contend. When `--render` is passed, any failed render case makes the command exit `1` after printing the JSON, so a caller sees a failed matrix without comparing `passed` against `cases` itself.
+The command writes a local SQLite database under `.treehouse/` and, once Gate 3 clears, a content-addressed release under `releases/`. The database carries a schema version in `PRAGMA user_version`; opening a file written by an older version drops the `tasks`, `runs` and legacy `assets` tables and recreates the two it still uses, because this pre-release tool keeps no history worth backfilling. `projects`, `versions`, `patches`, `approvals` and `events` are left untouched, so rows from an upgraded file can name a run the `runs` table no longer has. Set `PWB_DB_PATH`, `PWB_RELEASE_ROOT` and `PWB_EVIDENCE_DIR` to use explicit locations, `PWB_MODEL_PROVIDER` to choose the model provider, and `PWB_STAGE_DEADLINE_MS` to give every stage the same deadline instead of the per-stage defaults. Add `--render` to also drive the approved document through the Playwright `RenderHub`: `createRenderMatrix` enumerates every route at the three representative widths — 390, 768 and 1440 CSS pixels — in every `stateFixtures` state and declared colour scheme, `--full-matrix` widens that to all six `RENDER_VIEWPORTS`, and each case is captured as a screenshot plus DOM and accessibility snapshot behind the hash cache under `PWB_RENDER_CACHE`. Observed on 2026-09-07, with the default `fake` provider and scratch paths so the recorded `claude-code` run above stayed intact — `PWB_DB_PATH=.treehouse/render-matrix.sqlite PWB_EXPORT_ROOT=.treehouse/render-matrix-exports PWB_RENDER_CACHE=.treehouse/render-matrix-cache corepack pnpm run:fixture --render` — the run printed `"render": {"cases": 18, "passed": 18, "cached": 0, "failed": []}` for the fixture's three routes, and repeating the same command against the warm cache printed `"cached": 18`. That run also pinned `PWB_PREVIEW_PORT=4319`, which the CLI no longer reads: it binds an ephemeral preview port so parallel checkouts never contend. When `--render` is passed, any failed render case makes the command exit `1` after printing the JSON, so a caller sees a failed matrix without comparing `passed` against `cases` itself.
 
 Start the local API and preview, then the Studio in another terminal:
 
@@ -153,17 +153,19 @@ canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT` and
 the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and every
 runner reads it back from there. With no run to read, the fixture stands in.
 
-**One document, gates in order.** Gate 3 refuses to prepare or publish until the
-captain has approved identity and prototype on that run and the finalization
-stage has produced the version they are looking at — rejecting that proposal
-closes Gate 3 again until the stage runs anew. That version, plus the review
-record the refiner writes onto it, is the run's release: Gate 3 and the ordinary
-finalization approval compile exactly it, so the approval, the release record and
-the published bytes always name the same version. Both take the same path — one
-compiler, one bundle writer, one `evaluateReleaseGate` — so every veto the gate
-raises, the compiler's, the evidence runners' and the divergence check, refuses
-the ordinary approval exactly as it refuses Gate 3. Rejecting the proposal
-rewinds to what the prototype gate approved, whether or not Gate 3 refined it.
+**One document, one publish, gates in order.** Gate 3 refuses to prepare or
+publish until the captain has approved identity and prototype on that run and the
+finalization stage has produced the version they are looking at — rejecting that
+proposal closes Gate 3 again until the stage runs anew, and rewinds to what the
+prototype gate approved whether or not Gate 3 refined it. That version, plus the
+review record the refiner writes onto it, is the run's release.
+
+Publishing the bundle *is* the finalization approval: there is no second action
+that could close the gate, so nothing can write a release with a veto standing or
+with the gate's open points unaccepted. The approve route refuses `finalization`
+and the studio's finalization row points at the Gate 3 panel. One code path owns
+the vetoes, the written acceptance, the `release.published` event, the release
+record and the single bundle root.
 
 The finalization stage writes through the same boundary as every other stage:
 its proposals declare the stage and the role the foundation pins to it, the
@@ -186,8 +188,8 @@ build failure, a broken primary link, a critical AA regression, and a release
 that diverges from the approved one. Only what the bundle ships can be published
 without terms, so an asset the release never publishes — a provider placeholder
 — escalates to the captain instead of blocking. A veto is never scored or averaged: one veto
-blocks Gate 3, and every export path — the studio's two buttons and
-`run:release` — refuses to write. Only the compiler, the evidence
+blocks Gate 3, and both writers — the studio's publish button and
+`run:release` — refuse to write. Only the compiler, the evidence
 runners and the gate may raise one — a critic cannot raise or clear a veto, its
 tasks carry no writable path, and its findings have no veto severity.
 

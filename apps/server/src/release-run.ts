@@ -12,8 +12,8 @@ import {
 export interface ReleaseRunOptions {
   releaseRoot: string;
   evidenceDir: string;
-  siteUrl: string;
-  siteName: string;
+  siteUrl?: string;
+  siteName?: string;
   modelProvider?: string;
 }
 
@@ -29,6 +29,8 @@ export interface ReleaseContext {
   applier: Applier;
   adopt(version: VersionRecord): Promise<void>;
   record(type: string, payload: Record<string, unknown>): Promise<void>;
+  /** Publishing the bundle is what closes the finalization gate; there is no second approval. */
+  approveFinalization(rationale: string, manifest: ReleaseManifest): Promise<void>;
 }
 
 export interface ReleaseSnapshot {
@@ -59,6 +61,10 @@ function providers(name: string): { critic: ReleaseCriticProvider; refiner: Rele
  * That acceptance, and the versions the bytes came from, are recorded in the
  * run's log and in the release record beside the bundle — never inside it — so
  * publishing the same bytes again succeeds instead of colliding.
+ *
+ * This is the only way a release reaches disk: publishing the bundle is what
+ * approves the finalization gate, so no second action can write a release with
+ * a veto standing or with the gate's open points unaccepted.
  */
 export class ReleaseRun {
   private snapshotValue: ReleaseSnapshot | undefined;
@@ -73,7 +79,7 @@ export class ReleaseRun {
       criticProvider: chosen.critic,
       refiner: new PatchRefiner(chosen.refiner),
       summarizer: chosen.summarizer,
-      compilerOptions: { siteUrl: this.options.siteUrl, siteName: this.options.siteName },
+      compilerOptions: { siteUrl: this.options.siteUrl ?? 'https://site.invalid', siteName: this.options.siteName ?? 'pro-website-builder' },
     });
     // The evidence runners compile the document the gate compiles, so they can
     // stamp their artifacts with the release they actually measured.
@@ -126,6 +132,7 @@ export class ReleaseRun {
       acceptedEscalations: escalations,
     });
     await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole: 'captain', rationale: reason, escalations });
+    await this.context.approveFinalization(reason, manifest);
     this.snapshotValue = { ...current, published: { directory: join(this.options.releaseRoot, manifest.digest), digest: manifest.digest } };
     return manifest;
   }

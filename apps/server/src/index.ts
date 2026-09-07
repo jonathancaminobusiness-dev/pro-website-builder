@@ -52,6 +52,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   const releaseRoot = options.releaseRoot ?? process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
   const evidenceDir = options.evidenceDir ?? process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
   await mkdir(releaseRoot, { recursive: true });
+  const release = { releaseRoot, evidenceDir, siteUrl, siteName, modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake' };
   const api = createApiServer({
     runs,
     prototypes: registry,
@@ -59,7 +60,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
       try {
-        const run = new FixtureRun({ repository, exportRoot, provider, evidenceDir, siteUrl, siteName });
+        const run = new FixtureRun({ repository, provider, release });
         await run.initialize(id);
         runs.set(id, run);
         return run;
@@ -68,17 +69,10 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
     loadRun: async (id) => {
       const existing = runs.get(id);
       if (existing) return existing;
-      const run = new FixtureRun({ repository, exportRoot, provider, evidenceDir, siteUrl, siteName });
+      const run = new FixtureRun({ repository, provider, release });
       if (!await run.restore(id)) return undefined;
       runs.set(id, run);
       return run;
-    },
-    release: {
-      releaseRoot,
-      evidenceDir,
-      siteUrl,
-      siteName,
-      modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
     },
   });
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);

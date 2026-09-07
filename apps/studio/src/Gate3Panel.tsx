@@ -43,9 +43,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * its lack of authority stated, and publishing sends the digest the captain is
  * looking at, so a release that moved cannot be published by mistake.
  *
- * A gap the gate could not decide — a missing engine, an unresolved placeholder
- * — does not block, but publishing over it takes a written reason, kept in the
- * run's log and in the release record beside the bundle.
+ * Publishing is what approves the finalization gate: there is no second button
+ * that could close it without the gate's verdict. A gap the gate could not
+ * decide — a missing engine, an unresolved placeholder — does not block, but
+ * publishing over it takes a written reason, kept in the run's log and in the
+ * release record beside the bundle.
  */
 export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null; apiOrigin: string }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<ReleaseSnapshot | null>(null);
@@ -152,7 +154,7 @@ export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null;
     <div className="actions">
       <button className="secondary" onClick={prepare} disabled={!runId || busy}>{busy ? 'Executando…' : report ? 'Recompilar e reavaliar' : 'Preparar release'}</button>
       <button className="primary" onClick={publish} disabled={!report || report.blocked || busy || snapshot?.published !== undefined || (report.escalations.length > 0 && rationale.trim() === '')}>
-        {snapshot?.published ? 'Bundle publicado' : 'Publicar bundle (capitão)'}
+        {snapshot?.published ? 'Bundle publicado' : 'Publicar bundle e aprovar o gate (capitão)'}
       </button>
     </div>
     {snapshot?.published && <p className="gate3-summary">Bundle imutável escrito em <code>{snapshot.published.directory}</code>.</p>}

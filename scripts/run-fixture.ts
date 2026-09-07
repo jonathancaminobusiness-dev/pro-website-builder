@@ -11,7 +11,8 @@ interface RenderMatrixSummary { cases: number; passed: number; cached: number; f
 
 const root = process.cwd();
 const databasePath = process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'cli-fixture.sqlite');
-const exportRoot = process.env.PWB_EXPORT_ROOT ?? join(root, 'exports');
+const releaseRoot = process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
+const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
 const renderCacheDir = process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
 
 async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSummary> {
@@ -42,14 +43,14 @@ async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSumm
 
 async function main(): Promise<void> {
   await mkdir(join(databasePath, '..'), { recursive: true });
-  await mkdir(exportRoot, { recursive: true });
+  await mkdir(releaseRoot, { recursive: true });
   const database = openDatabase(databasePath);
   try {
-    const run = new FixtureRun({ repository: new ProjectRepository(database), exportRoot, provider: createModelProvider(process.env.PWB_MODEL_PROVIDER) });
+    const run = new FixtureRun({ repository: new ProjectRepository(database), provider: createModelProvider(process.env.PWB_MODEL_PROVIDER), release: { releaseRoot, evidenceDir } });
     await run.initialize('cli-fixture');
     const snapshot = await run.runAll();
     const render = process.argv.includes('--render') ? await renderMatrix(snapshot) : undefined;
-    console.log(JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id, exportDirectory: snapshot.exportManifest ? join(exportRoot, snapshot.exportManifest.digest) : undefined, routes: snapshot.exportManifest?.routes.map((route) => route.route), ...(render ? { render } : {}) }, null, 2));
+    console.log(JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id, releaseDirectory: snapshot.exportManifest ? join(releaseRoot, snapshot.exportManifest.digest) : undefined, routes: snapshot.exportManifest?.routes.map((route) => route.route), ...(render ? { render } : {}) }, null, 2));
     if (snapshot.status !== 'succeeded' || (render && render.failed.length > 0)) process.exitCode = 1;
   } finally { database.sqlite.close(); }
 }
