@@ -77,7 +77,7 @@ describe('domain contracts', () => {
         const control = ir.pages.routes[0]!.nodes[1]! as { kind: string; semantic: string; props: Record<string, unknown> };
         control.kind = 'component';
         control.semantic = 'link';
-        control.props.href = 'https://example.com/';
+        control.props.href = '/precos';
       }),
       pageGraph: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title'] }; }),
       uniquePages: () => refused((ir) => { ir.pages.routes[1]!.route = '/contact'; }),

@@ -56,6 +56,7 @@ export const routeManifestSchema = z.object({
   const seenRoutes = new Set<string>();
   const seenNodeIds = new Set<string>();
   const seenSectionIds = new Set<string>();
+  const destinations: Array<{ sectionId: string; href: string }> = [];
   for (const route of manifest.routes) {
     if (seenRoutes.has(route.route)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `The manifest repeats the route ${route.route}.` });
     seenRoutes.add(route.route);
@@ -66,6 +67,9 @@ export const routeManifestSchema = z.object({
       // A section id addresses one window: it names the composer task and resolves the paths that task may write.
       if (seenSectionIds.has(section.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `The manifest repeats the section id ${section.id}; a section id has to name exactly one window across every route.` });
       seenSectionIds.add(section.id);
+      // The composer emits this href as a real anchor, so the architect — not the composer — owns
+      // the promise that it names a route this journey declares.
+      if (section.callToAction) destinations.push({ sectionId: section.id, href: section.callToAction.href });
       if (section.nodeRange.start !== expected) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Section ${section.id} starts at slot ${section.nodeRange.start}; ${route.route} expects ${expected} so the windows stay contiguous and disjoint.` });
       expected += section.nodeRange.count;
       for (const nodeId of section.nodeIds) {
@@ -74,6 +78,9 @@ export const routeManifestSchema = z.object({
         seenNodeIds.add(nodeId);
       }
     }
+  }
+  for (const destination of destinations) {
+    if (!seenRoutes.has(destination.href)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Section ${destination.sectionId} sends the visitor to ${destination.href}, which is not one of the routes this manifest declares.` });
   }
   if (!manifest.states.some((state) => state.id === 'default')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['states'], message: 'The manifest must declare a default state.' });
   for (const state of manifest.states) {

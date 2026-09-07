@@ -59,6 +59,17 @@ describe('prototype contracts', () => {
     expect(sectionAllowedPaths(collision, 'home-hero')).toEqual(sectionAllowedPaths(plan, 'home-hero'));
   });
 
+  it('refuses a call to action that sends the visitor to a route the manifest never declares', async () => {
+    const plan = await manifest();
+    const stray = structuredClone(plan);
+    stray.routes[0]!.sections[0]!.callToAction = { label: 'Ver preços', href: '/precos' };
+    expect(() => routeManifestSchema.parse(stray)).toThrow(/sends the visitor to \/precos/);
+
+    const forward = structuredClone(plan);
+    forward.routes[2]!.sections[0]!.callToAction = { label: 'Rever a prova', href: '/proof' };
+    expect(routeManifestSchema.parse(forward).routes[2]!.sections[0]!.callToAction?.href).toBe('/proof');
+  });
+
   it('refuses a state that names a node no section declares, and requires a default state', async () => {
     const plan = await manifest();
     const ghost = structuredClone(plan);

@@ -31,7 +31,7 @@ test.describe('render hub evidence', () => {
     const version = store.get(outcome.versionId)!;
 
     // Port 0 so parallel checkouts never contend for a fixed developer port.
-    const preview = createPreviewServer((versionId) => { const record = store.get(versionId); return record ? renderDesign(record.ir) : undefined; }, 0);
+    const preview = createPreviewServer((versionId) => { const record = store.get(versionId); return record ? renderDesign(record.ir, { routePrefix: `/preview/${versionId}` }) : undefined; }, 0);
     await preview.start();
     const { port } = preview.server.address() as AddressInfo;
     const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-e2e-evidence-'));

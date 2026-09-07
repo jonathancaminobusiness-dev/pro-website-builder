@@ -30,11 +30,12 @@ export class RenderHubEvidenceSource implements EvidenceSource {
 
   async collect(request: EvidenceRequest): Promise<EvidenceBundle> {
     const cases = createRenderMatrix(request.ir, matrixOptions(request, this.options.viewports ?? REPRESENTATIVE_VIEWPORTS));
+    const previewPrefix = this.options.previewPrefix(request.versionId);
     const captures = await this.options.hub.capture({
       ir: request.ir,
-      rendered: renderDesign(request.ir),
+      rendered: renderDesign(request.ir, { routePrefix: previewPrefix }),
       baseUrl: this.options.baseUrl,
-      previewPrefix: this.options.previewPrefix(request.versionId),
+      previewPrefix,
       cases,
       ...(request.signal ? { signal: request.signal } : {}),
     });

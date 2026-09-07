@@ -203,7 +203,7 @@ export class PrototypeRunRegistry {
     for (const record of this.runs.values()) {
       const version = record.store.get(versionId);
       if (!version) continue;
-      const document = renderDesign(version.ir);
+      const document = renderDesign(version.ir, { routePrefix: `/preview/${versionId}` });
       this.rendered.set(versionId, document);
       return document;
     }

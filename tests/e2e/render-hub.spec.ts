@@ -64,9 +64,10 @@ test('walks the keyboard to a composed link and vetoes the same page once its fo
   const home = ir.pages.routes[0]!;
   home.nodes.push({ id: 'home-cta', kind: 'component', semantic: 'link', props: { text: 'Ver a prova', href: '/proof', color: '{color.ink}', font: '{type.body}' }, slots: {}, responsive: [] });
   home.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'home-cta'] };
-  const rendered = renderDesign(ir);
+  const rendered = renderDesign(ir, { routePrefix: `/preview/${ir.meta.versionId}` });
   // The same document with the ring overridden away: what a prototype that forgot focus measures as.
-  const ringless = { ...rendered, routes: rendered.routes.map((route) => ({ ...route, html: route.html.replace('</head>', '<style>:where(a, button):focus-visible { outline: none; box-shadow: none; }</style></head>') })) };
+  const withoutRing = renderDesign(ir, { routePrefix: '/preview/ringless' });
+  const ringless = { ...withoutRing, routes: withoutRing.routes.map((route) => ({ ...route, html: route.html.replace('</head>', '<style>:where(a, button):focus-visible { outline: none; box-shadow: none; }</style></head>') })) };
 
   const preview = createPreviewServer((versionId) => versionId === 'ringless' ? ringless : versionId === ir.meta.versionId ? rendered : undefined, 0);
   await preview.start();

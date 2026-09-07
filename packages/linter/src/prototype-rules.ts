@@ -1,4 +1,4 @@
-import { flattenTokens, resolveTokens, slotChildIds, type DesignIR, type Page, type PageNode } from '@pwb/domain';
+import { flattenTokens, interactiveSemantics, resolveTokens, slotChildIds, type DesignIR, type Page, type PageNode } from '@pwb/domain';
 import { lengthToPx } from '@pwb/qa-deterministic';
 import type { LintIssue, LintRule } from './rules.js';
 
@@ -156,9 +156,8 @@ function accessibilityContract(ir: DesignIR): LintIssue[] {
       previous = level;
     }
     for (const node of page.nodes) {
-      if (node.kind !== 'component') continue;
+      if (!interactiveSemantics.has(node.semantic)) continue;
       const label = typeof node.props.text === 'string' ? node.props.text.trim() : '';
-      if (label === '') { issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/props/text`, message: `O controle ${node.id} não tem nome acessível.` }); continue; }
       if (genericLabels.has(label.toLowerCase())) issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/props/text`, message: `O controle ${node.id} usa o rótulo genérico "${label}"; diga para onde ele leva.` });
     }
   }

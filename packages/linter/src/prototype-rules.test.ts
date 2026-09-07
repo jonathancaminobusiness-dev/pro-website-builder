@@ -108,16 +108,16 @@ describe('A11Y-090 and COPY-110', () => {
     expect(findings(skipping, 'A11Y-090')[0]).toContain('salta de h1 para h3');
   });
 
-  it('names an unnamed control and a generic label', () => {
+  it('names a generic control label and leaves a specific one alone', () => {
     const ir = createFixtureIR();
     ir.pages.routes[0]!.nodes.push(
-      node('cta-blank', 'component', 'link', { color: '{color.ink}', text: '  ', href: '/proof' }),
       node('cta-generic', 'component', 'link', { color: '{color.ink}', text: 'Saiba mais', href: '/proof' }),
+      node('cta-specific', 'component', 'link', { color: '{color.ink}', text: 'Ver a prova', href: '/proof' }),
     );
-    ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'cta-blank', 'cta-generic'] };
+    ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'cta-generic', 'cta-specific'] };
     const messages = findings(ir, 'A11Y-090').join(' | ');
-    expect(messages).toContain('cta-blank não tem nome acessível');
     expect(messages).toContain('rótulo genérico "Saiba mais"');
+    expect(messages).not.toContain('cta-specific');
   });
 
   it('names placeholder copy, empty copy and the vocabulary the identity forbids', () => {

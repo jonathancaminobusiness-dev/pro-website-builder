@@ -48,7 +48,7 @@ export const pageNodeSchema = z.object({
   if (node.assetId !== undefined && node.kind !== 'media') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['assetId'], message: `${documentRules.mediaAsset} Node ${node.id} is a ${node.kind}.` });
   if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['slots'], message: `${documentRules.phrasingLeaf} Node ${node.id} renders as ${node.semantic}.` });
   const interactive = interactiveSemantics.has(node.semantic);
-  if (interactive !== (node.kind === 'component')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `${documentRules.interactiveControl} Node ${node.id} is a ${node.kind} declaring ${node.semantic}.` });
+  if (interactive && node.kind !== 'component') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['kind'], message: `${documentRules.interactiveControl} Node ${node.id} is a ${node.kind} declaring ${node.semantic}.` });
   if (interactive && (node.props.text ?? '').trim() === '') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['props', 'text'], message: `${documentRules.interactiveControl} Node ${node.id} carries no label.` });
   if (node.semantic === 'link') {
     const href = routeSchema.safeParse(node.props.href);
@@ -104,6 +104,11 @@ export const pagesSchema = z.object({ routes: z.array(pageSchema) }).superRefine
       if (seen.has(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `${documentRules.uniquePages} Pages must not share the ${key} ${page[key]}.` });
       seen.add(value);
     }
+  }
+  const routes = new Set(pages.routes.map((page) => page.route.toLowerCase()));
+  for (const page of pages.routes) for (const node of page.nodes) {
+    if (node.semantic !== 'link' || routes.has(String(node.props.href).toLowerCase())) continue;
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `${documentRules.interactiveControl} Node ${node.id} links to ${String(node.props.href)}, which is not a route this document declares.` });
   }
 });
 export const assetsSchema = z.object({ items: z.array(assetSchema) });
