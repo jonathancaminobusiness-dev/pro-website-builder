@@ -124,7 +124,10 @@ describe('domain contracts', () => {
     (aliased.identity.tokens as { color: Record<string, unknown> }).color.link = { $value: '{color.accent}', $type: 'color' };
     aliased.pages.routes[0]!.nodes[1]!.props.color = '{color.link}';
     expect(designIRSchema.parse(aliased).pages.routes[0]!.nodes[1]!.props.color).toBe('{color.link}');
-    expect(resolveTokens(aliased.identity.tokens).values['color.link']).toBe('#d86445');
+    // The alias resolves to whatever the token it points at holds, so this stays
+    // true when the fixture palette changes.
+    const accent = resolveTokens(aliased.identity.tokens).values['color.accent'];
+    expect(resolveTokens(aliased.identity.tokens).values['color.link']).toBe(accent);
   });
 
   it('refuses an asset that records no license, at the gate that writes it', () => {
