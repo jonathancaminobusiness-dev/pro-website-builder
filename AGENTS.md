@@ -12,6 +12,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Parallel workers stay disjoint by contract, not by locking: each section composer owns a contiguous window of node slots and the `PatchGate` refuses any overlap before the merged patch reaches the applier.
 - The preview origin serves `script-src 'none'`. Anything that has to run in a previewed page goes through `page.evaluate`, never `addScriptTag`; `packages/render-hub/src/hub.ts` shows both that and the `__name` shim a transpiler forces on serialized browser functions.
 - Deterministic checks that a browser measures live in `packages/qa-deterministic`; checks the typed document can decide live in the linter. Keep new rules on the side that can actually answer them.
+- The node prop and semantic vocabularies are closed on purpose. Widening either means teaching the renderer to read the new field in the same change, the way `responsive` is read as a container query — a field nothing reads is the reason the earlier one was removed.
 
 ## Maintaining this file
 

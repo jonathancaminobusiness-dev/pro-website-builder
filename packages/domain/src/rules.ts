@@ -8,4 +8,5 @@ export const documentRules = {
   tokenReferences: 'Every token alias and every visual prop reference must name a token path the identity defines.',
   visualPropTokens: 'Every visual prop a node declares must be written as a token reference such as {color.ink}; a raw literal value is never renderable.',
   mediaAsset: 'Only a media node may declare assetId, it must name an asset the document lists, and a ready asset a node references must carry non-empty alt text and a data: URI the preview and export policies can display.',
+  responsiveWidths: 'A node declares at most one responsive rule per container width, and both the width and every prop it sets resolve through tokens.',
 } as const;

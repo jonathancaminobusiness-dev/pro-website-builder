@@ -91,18 +91,18 @@ export class ClaudeInformationArchitect implements ArchitectProvider {
   }
 }
 
-function placeholderNode(id: string, semantic: string, identity: IdentitySpec): PageNode {
-  return { id, kind: 'surface', semantic, props: { background: `{${identity.tokenRoles.surface}}`, color: `{${identity.tokenRoles.text}}`, padding: identity.gridGrammar.rhythmToken, text: 'Aguardando composição.' }, slots: {}, responsive: [] };
+function placeholderNode(id: string, semantic: 'section' | 'p', identity: IdentitySpec): PageNode {
+  return { id, kind: semantic === 'section' ? 'surface' : 'type', semantic, props: { background: `{${identity.tokenRoles.surface}}`, color: `{${identity.tokenRoles.text}}`, padding: identity.gridGrammar.rhythmToken, text: 'Aguardando composição.' }, slots: {}, responsive: [] };
 }
 
 /** Builds the shell and the empty windows the composers will fill, in the exact order the manifest declares. */
 export function compileManifestPages(manifest: RouteManifest, identity: IdentitySpec): Page[] {
   return manifest.routes.map((route) => {
     const shell: PageNode = {
-      id: route.rootNodeId, kind: 'stack', semantic: 'main',
+      id: route.rootNodeId, kind: 'stack', semantic: 'div',
       props: { background: `{${identity.tokenRoles.surface}}`, color: `{${identity.tokenRoles.text}}`, gap: `{${identity.tokenRoles.sectionSpacing}}`, padding: `{${identity.tokenRoles.baseSpacing}}` },
       slots: { sections: route.sections.map((section) => section.nodeIds[0]!) },
-      responsive: identity.gridGrammar.responsive,
+      responsive: [{ minWidth: identity.gridGrammar.maxWidthToken, props: { paddingInline: identity.gridGrammar.gutterToken } }],
     };
     const windows = route.sections.flatMap((section) => section.nodeIds.map((nodeId, offset) => {
       const node = placeholderNode(nodeId, offset === 0 ? 'section' : 'p', identity);

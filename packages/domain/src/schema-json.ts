@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { agentResultSchema, patchOperationSchema, patchSchema, stageSchema, taskRoleSchema } from './agent.js';
-import { assetsSchema, pagesSchema, reviewRecordSchema } from './ir.js';
+import { assetsSchema, pagesSchema, reviewRecordSchema, stateFixturesSchema } from './ir.js';
 import { identitySpecSchema } from './identity.js';
 
 type Stage = z.infer<typeof stageSchema>;
@@ -17,7 +17,8 @@ export function withoutUnionTypes(node: unknown): unknown {
   return { ...rest, anyOf: (type as string[]).map((item) => ({ type: item })) };
 }
 
-function inlinedJsonSchema(schema: z.ZodTypeAny): unknown {
+/** Emits a self-contained JSON Schema: the CLI validator rejects `$ref` roots and bare type unions. */
+export function inlinedJsonSchema(schema: z.ZodTypeAny): unknown {
   return withoutUnionTypes(zodToJsonSchema(schema, { $refStrategy: 'none' }));
 }
 
@@ -25,6 +26,7 @@ const pathValueSchemas = {
   '/identity': identitySpecSchema,
   '/pages': pagesSchema,
   '/assets': assetsSchema,
+  '/stateFixtures': stateFixturesSchema,
   '/reviewRecord': reviewRecordSchema,
 } as const;
 
@@ -32,7 +34,7 @@ export const stageRoles: Record<Stage, Role> = { identity: 'director', prototype
 
 export const stageWritablePaths: Record<Stage, Array<keyof typeof pathValueSchemas>> = {
   identity: ['/identity', '/reviewRecord'],
-  prototype: ['/pages', '/assets', '/reviewRecord'],
+  prototype: ['/pages', '/assets', '/stateFixtures', '/reviewRecord'],
   finalization: ['/pages', '/assets', '/reviewRecord'],
 };
 

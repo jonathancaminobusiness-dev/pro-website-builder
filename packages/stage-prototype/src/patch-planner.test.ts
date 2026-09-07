@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type DesignIR } from '@pwb/domain';
 import { Applier, PatchGate, VersionStore } from '@pwb/orchestrator';
-import { planPatch, PrototypeRefiner, type Finding, type ProposedPatch } from './index.js';
+import { planPatch, PROTOTYPE_SCOPE, PrototypeRefiner, type Finding, type ProposedPatch } from './index.js';
 
 const evidence = { route: '/', viewport: 390, state: 'default', colorScheme: 'light' as const, reducedMotion: false, nodeIds: ['home-title'] };
 
@@ -58,7 +58,7 @@ describe('patch planner', () => {
     expect(reasons(plan([finding({ operation: 'set_token', nodeId: 'home-title', prop: 'gap', token: '{space.nope}' })]))).toContain('não define o token');
     expect(reasons(plan([finding({ operation: 'set_token', nodeId: 'ghost', prop: 'gap', token: '{space.md}' })]))).toContain('não tem o nó ghost');
     expect(reasons(plan([finding({ operation: 'replace_copy', nodeId: 'home-title', text: 'Uma promessa revolucionário.' })]))).toContain('que a identidade proíbe');
-    expect(reasons(plan([finding({ operation: 'set_constraint', nodeId: 'home-title', container: 'wide', rule: 'x' })]))).toContain('não declara o container wide');
+    expect(reasons(plan([finding({ operation: 'set_constraint', nodeId: 'home-title', minWidth: '{space.absent}', prop: 'paddingInline', token: '{space.md}' })]))).toContain('não define o token {space.absent}');
     expect(reasons(plan([finding({ operation: 'reorder_node', nodeId: 'home-root', slot: 'children', order: ['home-title', 'ghost'] })]))).toContain('manter exatamente os filhos');
     expect(reasons(plan([finding({ operation: 'set_token', nodeId: 'home-title', prop: 'gap', token: '{space.md}' })], createFixtureIR(), ['/reviewRecord']))).toContain('fora dos caminhos que esta tarefa pode tocar');
   });
@@ -117,7 +117,7 @@ describe('prototype refiner', () => {
         findings: [finding({ operation: 'set_token', nodeId: 'home-title', prop: 'gap', token: '{space.md}' })],
       },
     }];
-    const outcome = new PrototypeRefiner(applier).refine({ ir: base.ir, currentVersionId: base.id, reports, allowedPaths: ['/pages'], idempotencyKey: 'refine-1' });
+    const outcome = new PrototypeRefiner(applier).refine({ ir: base.ir, currentVersionId: base.id, reports, scope: { ...PROTOTYPE_SCOPE, allowedPaths: ['/pages'] }, idempotencyKey: 'refine-1' });
     expect(outcome.refusal).toBeUndefined();
     expect(outcome.version!.parentId).toBe(base.id);
     expect(outcome.version!.ir.pages.routes[0]!.nodes[1]!.props.gap).toBe('{space.md}');
@@ -138,8 +138,8 @@ describe('prototype refiner', () => {
         findings: [finding({ operation: 'set_token', nodeId: 'home-title', prop: 'gap', token: '{space.md}' })],
       },
     }];
-    const outcome = new PrototypeRefiner(applier).refine({ ir: base.ir, currentVersionId: base.id, reports, allowedPaths: ['/pages'], idempotencyKey: 'refine-1' });
-    const repeated = new PrototypeRefiner(applier).refine({ ir: base.ir, currentVersionId: base.id, reports, allowedPaths: ['/pages'], idempotencyKey: 'refine-1' });
+    const outcome = new PrototypeRefiner(applier).refine({ ir: base.ir, currentVersionId: base.id, reports, scope: { ...PROTOTYPE_SCOPE, allowedPaths: ['/pages'] }, idempotencyKey: 'refine-1' });
+    const repeated = new PrototypeRefiner(applier).refine({ ir: base.ir, currentVersionId: base.id, reports, scope: { ...PROTOTYPE_SCOPE, allowedPaths: ['/pages'] }, idempotencyKey: 'refine-1' });
     expect(outcome.version).toBeDefined();
     expect(repeated.version).toBeUndefined();
     expect(repeated.refusal).toContain('was already accepted');

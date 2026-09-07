@@ -109,8 +109,13 @@ describe('prototype stage', () => {
 
     const rendered = renderDesign(ir);
     expect(rendered.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
-    expect(rendered.routes[0]!.html).toContain('<a href="/proof"');
+    // This renderer emits no anchors, so the journey has to survive in the copy the composer wrote.
+    expect(rendered.routes[0]!.html).toContain('/proof');
+    expect(rendered.routes[0]!.html).toMatch(/<h1 data-node-id="home-hero-title"/);
     expect(rendered.routes[0]!.html).not.toMatch(/style="[^"]*#[0-9a-f]{3,8}/i);
+    // Every responsive rule the composer declared is read back out as a container query.
+    expect(rendered.css).toContain('@container (min-width: 6rem)');
+    expect(rendered.css).toContain('[data-node-id="home-hero-root"] { padding-inline: var(--space-md); }');
   });
 
   it('declares the loading, empty, error, focus and reduced-motion states the capture matrix needs', async () => {

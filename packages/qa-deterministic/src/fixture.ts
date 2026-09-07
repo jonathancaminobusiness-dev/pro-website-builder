@@ -46,7 +46,7 @@ export function createCleanEvidence(ir: DesignIR, context: RenderContext, screen
       .map((node) => ({ nodeId: node.id, foreground: '#000000', background: '#ffffff', fontSizePx: 16, bold: false })),
     focus: [],
     axeViolations: [],
-    consoleErrors: [], networkErrors: [], stable: true,
+    consoleErrors: [], networkErrors: [], stable: true, status: 200,
     screenshotPath,
     domHash: hashJson([page.id, context]),
   };

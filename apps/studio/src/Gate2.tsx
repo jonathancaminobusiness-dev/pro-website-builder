@@ -4,7 +4,7 @@ import './gate2.css';
 type Verdict = 'pass' | 'revise' | 'uncertain';
 type IssueDecision = 'accepted' | 'rejected' | 'deferred';
 
-interface ProposedPatch { operation: string; nodeId?: string; assetId?: string; prop?: string; token?: string; text?: string; container?: string; rule?: string; order?: string[]; }
+interface ProposedPatch { operation: string; nodeId?: string; assetId?: string; prop?: string; token?: string; text?: string; minWidth?: string; order?: string[]; }
 
 interface Issue {
   id: string; dimension: string; severity: string; observation: string; why: string; confidence: number;
@@ -64,7 +64,7 @@ function describePatch(patch: ProposedPatch | undefined): string {
   if (!patch) return 'sem reparo proposto';
   if (patch.operation === 'set_token') return `set_token · ${patch.nodeId}.${patch.prop} → ${patch.token}`;
   if (patch.operation === 'replace_copy') return `replace_copy · ${patch.nodeId} → "${patch.text}"`;
-  if (patch.operation === 'set_constraint') return `set_constraint · ${patch.nodeId} @${patch.container} → ${patch.rule}`;
+  if (patch.operation === 'set_constraint') return `set_constraint · ${patch.nodeId} a partir de ${patch.minWidth}: ${patch.prop} → ${patch.token}`;
   if (patch.operation === 'set_crop') return `set_crop · ${patch.assetId}`;
   if (patch.operation === 'reorder_node') return `reorder_node · ${patch.nodeId} → ${(patch.order ?? []).join(' › ')}`;
   return patch.operation;

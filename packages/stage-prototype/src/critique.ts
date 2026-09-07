@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
-import { hashJson, withoutUnionTypes } from '@pwb/domain';
+import { hashJson, inlinedJsonSchema } from '@pwb/domain';
 
 export const critiqueDimensionSchema = z.enum(['narrative', 'responsiveness', 'a11y-interaction', 'coherence']);
 export const findingSeveritySchema = z.enum(['blocker', 'major', 'minor', 'info']);
@@ -32,7 +31,7 @@ export const evidenceRefSchema = z.object({
 /** The closed allowlist of repairs. A critic never writes HTML and never proposes anything else. */
 export const proposedPatchSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('set_token'), nodeId: z.string().min(1), prop: patchablePropSchema, token: tokenReferenceSchema }).strict(),
-  z.object({ operation: z.literal('set_constraint'), nodeId: z.string().min(1), container: z.string().min(1), rule: z.string().min(1) }).strict(),
+  z.object({ operation: z.literal('set_constraint'), nodeId: z.string().min(1), minWidth: tokenReferenceSchema, prop: patchablePropSchema, token: tokenReferenceSchema }).strict(),
   z.object({ operation: z.literal('set_crop'), assetId: z.string().min(1), focalX: z.number().min(0).max(1), focalY: z.number().min(0).max(1), aspect: z.string().regex(/^\d+:\d+$/) }).strict(),
   z.object({ operation: z.literal('replace_copy'), nodeId: z.string().min(1), text: z.string().min(1).max(400) }).strict(),
   z.object({ operation: z.literal('reorder_node'), nodeId: z.string().min(1), slot: z.string().min(1), order: z.array(z.string().min(1)).min(2) }).strict(),
@@ -106,7 +105,7 @@ export function issueHash(finding: Finding): string {
   const patch = finding.patch;
   return hashJson([
     finding.dimension, finding.severity, [...finding.evidence.nodeIds].sort(),
-    patch ? [patch.operation, 'nodeId' in patch ? patch.nodeId : patch.assetId, 'prop' in patch ? patch.prop : ''] : ['none'],
+    patch ? [patch.operation, 'nodeId' in patch ? patch.nodeId : patch.assetId, 'prop' in patch ? patch.prop : '', 'minWidth' in patch ? patch.minWidth : ''] : ['none'],
   ]);
 }
 
@@ -117,6 +116,6 @@ export function rubricAverage(reports: CritiqueReport[]): number {
 }
 
 export const critiqueSchemaJson = {
-  CritiqueReport: withoutUnionTypes(zodToJsonSchema(critiqueReportSchema)),
-  Finding: withoutUnionTypes(zodToJsonSchema(findingSchema)),
+  CritiqueReport: inlinedJsonSchema(critiqueReportSchema),
+  Finding: inlinedJsonSchema(findingSchema),
 };

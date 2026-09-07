@@ -45,6 +45,12 @@ const runtimeClean: QaRule = {
   ]),
 };
 
+const served: QaRule = {
+  id: 'QA0-SERVED', tier: 0, severity: 'veto', title: 'Rota entregue',
+  detect: ({ evidence }) => evidence.filter((entry) => entry.status !== null && (entry.status < 200 || entry.status >= 300))
+    .map((entry) => ({ message: `A rota respondeu ${entry.status} em ${describeContext(entry.context)}; não há o que avaliar.`, nodeIds: [], context: entry.context })),
+};
+
 const documentOverflow: QaRule = {
   id: 'QA0-OVERFLOW', tier: 0, severity: 'veto', title: 'Sem rolagem horizontal',
   detect: ({ evidence }) => evidence.filter((entry) => entry.documentMetrics.scrollWidth > entry.documentMetrics.clientWidth + SUBPIXEL)
@@ -170,7 +176,7 @@ const truncationWithAlternative: QaRule = {
 };
 
 export const qaRuleRegistry: QaRule[] = [
-  stability, runtimeClean, documentOverflow, clipping, geometry, truncationWithoutAlternative, orphanTokens, contrast, focusVisible,
+  stability, served, runtimeClean, documentOverflow, clipping, geometry, truncationWithoutAlternative, orphanTokens, contrast, focusVisible,
   axeRule('QA0-AXE', 0, 'veto', new Set(['critical', 'serious']), 'axe sem violação crítica'),
   rhythm, alignment, truncationWithAlternative,
   axeRule('QA1-AXE', 1, 'minor', new Set(['moderate', 'minor']), 'axe sem violação moderada'),

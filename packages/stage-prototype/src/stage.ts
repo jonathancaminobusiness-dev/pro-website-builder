@@ -1,6 +1,6 @@
-import { agentTaskSchema, hashJson, type AgentTask, type DesignIR, type IdentitySpec, type Patch } from '@pwb/domain';
+import { agentTaskSchema, hashJson, stageRoles, stageWritablePaths, type AgentTask, type DesignIR, type IdentitySpec, type Patch } from '@pwb/domain';
 import { lintDesign, type LintReport } from '@pwb/linter';
-import { Applier, PatchGate, Scheduler, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
+import { Applier, PatchGate, Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
 import { runQa, type QaReport } from '@pwb/qa-deterministic';
 import type { ArchitectProvider } from './information-architect.js';
 import { ARCHITECT_ALLOWED_PATHS, ARCHITECT_PROMPT_VERSION, manifestPatch } from './information-architect.js';
@@ -16,7 +16,9 @@ import { DEFAULT_LOOP_BUDGET, decideNextCycle, summariseCycle, type CycleRecord,
 import { PrototypeRefiner } from './refiner.js';
 
 /** The paths the whole prototype stage may touch. The approved identity is never among them. */
-export const PROTOTYPE_ALLOWED_PATHS = ['/pages', '/assets', '/stateFixtures', '/reviewRecord'];
+export const PROTOTYPE_ALLOWED_PATHS = [...stageWritablePaths.prototype];
+/** Every write this stage makes is scoped to the prototype stage and its one role. */
+export const PROTOTYPE_SCOPE: TaskScope = { stage: 'prototype', role: stageRoles.prototype, allowedPaths: PROTOTYPE_ALLOWED_PATHS };
 
 export interface PrototypeStageOptions {
   store: VersionStore;
@@ -78,7 +80,7 @@ export class PrototypeStage {
     const identity = baseVersion.ir.identity;
 
     const manifest = await this.planInformation(input, identity);
-    const architectVersion = this.applyPatch(manifestPatch(manifest, identity, this.architectTask(input, identity)), ARCHITECT_ALLOWED_PATHS, baseVersion.id, 'information-architect');
+    const architectVersion = this.applyPatch(manifestPatch(manifest, identity, this.architectTask(input, identity)), { ...PROTOTYPE_SCOPE, allowedPaths: ARCHITECT_ALLOWED_PATHS }, baseVersion.id, 'information-architect');
     await this.record('prototype.manifest.applied', { runId: input.runId, versionId: architectVersion.id, routes: manifest.routes.map((route) => route.route) });
 
     const compositionVersion = await this.composeSections(input, manifest, architectVersion, identity);
@@ -101,7 +103,7 @@ export class PrototypeStage {
       }
       reports = await this.critique(input, current.ir, identity, qa, bundle.captures, cycle);
       const refinement = this.refiner.refine({
-        ir: current.ir, currentVersionId: current.id, reports, allowedPaths: PROTOTYPE_ALLOWED_PATHS,
+        ir: current.ir, currentVersionId: current.id, reports, scope: PROTOTYPE_SCOPE,
         idempotencyKey: hashJson(['refiner', input.runId, current.id, cycle, reports]),
       });
       for (const rejection of refinement.plan.rejected) rejectedRepairs.push({ findingId: rejection.finding.id, reason: rejection.reason });
@@ -175,7 +177,7 @@ export class PrototypeStage {
     for (const [index, entry] of result.results.entries()) {
       const patch = entry.value!;
       const section = sections[index]!;
-      gate.commit(base.id, gate.validate(patch, { currentVersionId: base.id, allowedPaths: sectionAllowedPaths(manifest, section.id) }));
+      gate.commit(base.id, gate.validate(patch, { currentVersionId: base.id, stage: 'prototype', role: stageRoles.prototype, allowedPaths: sectionAllowedPaths(manifest, section.id) }));
       patches.push(patch);
     }
     const merged: Patch = {
@@ -188,7 +190,7 @@ export class PrototypeStage {
       role: 'composer',
       idempotencyKey: hashJson(['sections', input.runId, base.id, patches.map((patch) => patch.idempotencyKey)]),
     };
-    return this.applyPatch(merged, ['/pages/routes'], base.id, 'section-composer');
+    return this.applyPatch(merged, { ...PROTOTYPE_SCOPE, allowedPaths: ['/pages/routes'] }, base.id, 'section-composer');
   }
 
   private async critique(input: { runId: string; signal?: AbortSignal }, ir: DesignIR, identity: IdentitySpec, qa: QaReport, captures: CritiqueTask['captures'], cycle: number): Promise<CritiqueReport[]> {
@@ -196,7 +198,7 @@ export class PrototypeStage {
     const routeSlices = ir.pages.routes.map((page) => ({ route: page.route, title: page.title, nodes: page.nodes }));
     const tasks = criticRegistry.map((definition) => agentTaskSchema.parse({
       id: `${input.runId}-critic-${definition.dimension}-c${cycle}`,
-      attempt: 1, stage: 'prototype', role: 'composer', state: 'queued', lane: 'claude',
+      attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'claude',
       baseVersionId: ir.meta.versionId, inputDigest: qa.issueHash, promptVersion: PROMPT_VERSION, modelAlias: 'claude-local',
       deadlineMs: 3 * 60_000,
       allowedPaths: [],
@@ -247,10 +249,10 @@ export class PrototypeStage {
     return report;
   }
 
-  private applyPatch(patch: Patch, allowedPaths: string[], currentVersionId: string, step: string): VersionRecord {
+  private applyPatch(patch: Patch, scope: TaskScope, currentVersionId: string, step: string): VersionRecord {
     try {
-      this.options.applier.dryRun(patch, allowedPaths, currentVersionId);
-      return this.options.applier.apply(patch, allowedPaths, currentVersionId);
+      this.options.applier.dryRun(patch, scope, currentVersionId);
+      return this.options.applier.apply(patch, scope, currentVersionId);
     } catch (error) {
       throw new PrototypeStageError(step, error instanceof Error ? error.message : 'O aplicador recusou o patch.');
     }
@@ -258,7 +260,7 @@ export class PrototypeStage {
 
   private architectTask(input: { runId: string; baseVersionId: string }, identity: IdentitySpec): AgentTask {
     return agentTaskSchema.parse({
-      id: `${input.runId}-architect`, attempt: 1, stage: 'prototype', role: 'composer', state: 'queued', lane: 'claude',
+      id: `${input.runId}-architect`, attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'claude',
       baseVersionId: input.baseVersionId, inputDigest: hashJson([this.options.brief, input.baseVersionId]),
       promptVersion: ARCHITECT_PROMPT_VERSION, modelAlias: 'claude-local', deadlineMs: 5 * 60_000,
       allowedPaths: ARCHITECT_ALLOWED_PATHS, brief: this.options.brief, documentSlice: { '/identity': identity },
@@ -267,7 +269,7 @@ export class PrototypeStage {
 
   private composerTask(input: { runId: string }, manifest: RouteManifest, section: SectionPlan, baseVersionId: string, identity: IdentitySpec): AgentTask {
     return agentTaskSchema.parse({
-      id: `${input.runId}-compose-${section.id}`, attempt: 1, stage: 'prototype', role: 'composer', state: 'queued', lane: 'claude',
+      id: `${input.runId}-compose-${section.id}`, attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'claude',
       baseVersionId, inputDigest: hashJson([section, manifest.journey]), promptVersion: COMPOSER_PROMPT_VERSION,
       modelAlias: 'claude-local', deadlineMs: 5 * 60_000, allowedPaths: sectionAllowedPaths(manifest, section.id),
       brief: this.options.brief, documentSlice: { '/identity': identity },

@@ -1,5 +1,5 @@
 import type { DesignIR } from '@pwb/domain';
-import type { Applier, VersionRecord } from '@pwb/orchestrator';
+import type { Applier, TaskScope, VersionRecord } from '@pwb/orchestrator';
 import type { CritiqueReport } from './critique.js';
 import { planPatch, type PatchPlan } from './patch-planner.js';
 
@@ -10,7 +10,8 @@ export interface RefineInput {
   ir: DesignIR;
   currentVersionId: string;
   reports: CritiqueReport[];
-  allowedPaths: string[];
+  /** The stage, role and paths this refinement may write; the gate checks all three. */
+  scope: TaskScope;
   idempotencyKey: string;
 }
 
@@ -34,15 +35,15 @@ export class PrototypeRefiner {
     const plan = planPatch({
       ir: input.ir,
       findings,
-      allowedPaths: input.allowedPaths,
+      allowedPaths: input.scope.allowedPaths,
       baseVersionId: input.currentVersionId,
       idempotencyKey: input.idempotencyKey,
       maxPatches: this.maxPatches,
     });
     if (!plan.patch) return { plan };
     try {
-      this.applier.dryRun(plan.patch, input.allowedPaths, input.currentVersionId);
-      return { plan, version: this.applier.apply(plan.patch, input.allowedPaths, input.currentVersionId) };
+      this.applier.dryRun(plan.patch, input.scope, input.currentVersionId);
+      return { plan, version: this.applier.apply(plan.patch, input.scope, input.currentVersionId) };
     } catch (error) {
       return { plan, refusal: error instanceof Error ? error.message : 'O aplicador recusou o patch proposto.' };
     }

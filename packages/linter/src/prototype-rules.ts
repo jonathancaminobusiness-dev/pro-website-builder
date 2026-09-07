@@ -11,7 +11,7 @@ import type { LintIssue, LintRule } from './rules.js';
 const headingLevels: Record<string, number> = { h1: 1, h2: 2, h3: 3 };
 const placeholderPatterns = [/lorem ipsum/i, /\bplaceholder\b/i, /\bTODO\b/, /aguardando composi[çc][ãa]o/i, /texto aqui/i, /sample text/i];
 const STRUCTURAL_SIGNAL_NODES = 4;
-const genericLinkText = new Set(['clique aqui', 'saiba mais', 'leia mais', 'veja mais', 'aqui', 'click here', 'read more', 'learn more']);
+const genericLabels = new Set(['clique aqui', 'saiba mais', 'leia mais', 'veja mais', 'aqui', 'click here', 'read more', 'learn more']);
 
 function* eachNode(ir: DesignIR): Generator<{ page: Page; node: PageNode; path: string }> {
   for (const page of ir.pages.routes) for (const node of page.nodes) yield { page, node, path: `/pages/routes/${page.id}/nodes/${node.id}` };
@@ -159,8 +159,7 @@ function accessibilityContract(ir: DesignIR): LintIssue[] {
       if (node.kind !== 'component') continue;
       const label = typeof node.props.text === 'string' ? node.props.text.trim() : '';
       if (label === '') { issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/props/text`, message: `O controle ${node.id} não tem nome acessível.` }); continue; }
-      if (genericLinkText.has(label.toLowerCase())) issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/props/text`, message: `O controle ${node.id} usa o rótulo genérico "${label}"; diga para onde ele leva.` });
-      if (node.semantic === 'link' && node.props.href === undefined) issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/props/href`, message: `O link ${node.id} não aponta para lugar nenhum.` });
+      if (genericLabels.has(label.toLowerCase())) issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/props/text`, message: `O controle ${node.id} usa o rótulo genérico "${label}"; diga para onde ele leva.` });
     }
   }
   return issues;

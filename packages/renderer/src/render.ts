@@ -69,6 +69,29 @@ function renderPage(page: Page, values: Record<string, string | number | boolean
   return `<main data-page-id="${escapeHtml(page.id)}" data-route="${escapeHtml(page.route)}">${body}</main>`;
 }
 
+/**
+ * Reads the responsive rules of every node into container queries. The width is resolved from its token
+ * at build time because a container query condition cannot hold a custom property, so a breakpoint is
+ * still authored as a token even though the emitted CSS carries a literal.
+ */
+function renderResponsive(ir: DesignIR, values: Record<string, string | number | boolean>): string {
+  const blocks: string[] = [];
+  for (const page of ir.pages.routes) for (const node of page.nodes) {
+    for (const rule of [...node.responsive].sort((a, b) => (a.minWidth < b.minWidth ? -1 : a.minWidth > b.minWidth ? 1 : 0))) {
+      const resolved = /^\{([^}]+)\}$/.exec(rule.minWidth);
+      const literal = resolved ? values[resolved[1]!] : undefined;
+      if (literal === undefined) throw new Error(`Responsive width is not token-backed: ${node.id}.responsive ${rule.minWidth}`);
+      const declarations = Object.entries(rule.props)
+        .filter((entry): entry is [string, string | number | boolean] => visualPropKeys.has(entry[0]) && entry[1] !== undefined)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, value]) => `${propertyName(key)}: ${cssValue(value, values, node, `responsive.${key}`)};`);
+      if (declarations.length === 0) continue;
+      blocks.push(`  @container (min-width: ${String(literal)}) {\n    [data-node-id="${escapeHtml(node.id)}"] { ${declarations.join(' ')} }\n  }`);
+    }
+  }
+  return blocks.length === 0 ? '' : `\n${blocks.join('\n')}`;
+}
+
 function renderDarkScheme(ir: DesignIR, values: Record<string, string | number | boolean>): string {
   const overrides = Object.entries(ir.identity.schemes?.dark ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   if (overrides.length === 0) return '';
@@ -88,7 +111,7 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
   const bodyTypeface = roleVar(ir.identity, 'bodyTypeface', values);
   const baseSpacing = roleVar(ir.identity, 'baseSpacing', values);
   const sectionSpacing = roleVar(ir.identity, 'sectionSpacing', values);
-  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }\n}`;
+  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderResponsive(ir, values)}\n}`;
 }
 
 export function renderDesign(ir: DesignIR): RenderedDocument {

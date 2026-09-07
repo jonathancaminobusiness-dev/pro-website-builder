@@ -22,6 +22,15 @@ export const routeSchema = z.string()
 export const semanticSchema = z.enum(['h1', 'h2', 'h3', 'p', 'section', 'figure', 'div']);
 export const phrasingSemantics = new Set<string>(['h1', 'h2', 'h3', 'p']);
 
+/**
+ * A responsive rule the renderer actually reads: at a container width of `minWidth` or more, the node
+ * takes these props. Both sides stay inside the token system, so a breakpoint is as auditable as a colour.
+ */
+export const responsiveRuleSchema = z.object({
+  minWidth: z.string(),
+  props: visualPropsSchema,
+}).strict();
+
 export const pageNodeSchema = z.object({
   id: z.string(),
   kind: nodeKindSchema,
@@ -29,7 +38,10 @@ export const pageNodeSchema = z.object({
   props: nodePropsSchema,
   slots: z.record(z.array(z.string())).default({}),
   assetId: z.string().optional(),
+  responsive: z.array(responsiveRuleSchema).default([]),
 }).superRefine((node, ctx) => {
+  const widths = node.responsive.map((rule) => rule.minWidth);
+  if (new Set(widths).size !== widths.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['responsive'], message: `${documentRules.responsiveWidths} Node ${node.id} declares one width twice.` });
   if ((node.kind === 'media') !== (node.semantic === 'figure')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `${documentRules.mediaFigure} Node ${node.id} is a ${node.kind} declaring ${node.semantic}.` });
   if (node.assetId !== undefined && node.kind !== 'media') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['assetId'], message: `${documentRules.mediaAsset} Node ${node.id} is a ${node.kind}.` });
   if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['slots'], message: `${documentRules.phrasingLeaf} Node ${node.id} renders as ${node.semantic}.` });
@@ -84,6 +96,7 @@ export const pagesSchema = z.object({ routes: z.array(pageSchema) }).superRefine
   }
 });
 export const assetsSchema = z.object({ items: z.array(assetSchema) });
+export const stateFixturesSchema = z.record(z.object({ description: z.string(), values: z.record(visualValueSchema) }));
 export const reviewRecordSchema = z.object({ findings: z.array(z.string()), approvals: z.array(z.string()) });
 
 export const designIRSchema = z.object({
@@ -91,7 +104,7 @@ export const designIRSchema = z.object({
   identity: identitySpecSchema,
   pages: pagesSchema,
   assets: assetsSchema,
-  stateFixtures: z.record(z.object({ description: z.string(), values: z.record(visualValueSchema) })),
+  stateFixtures: stateFixturesSchema,
   reviewRecord: reviewRecordSchema,
 }).superRefine((ir, ctx) => {
   let defined: Record<string, string | number | boolean>;
@@ -116,6 +129,7 @@ export const designIRSchema = z.object({
 
 export type Asset = z.infer<typeof assetSchema>;
 export type AssetCrop = z.infer<typeof assetCropSchema>;
+export type ResponsiveRule = z.infer<typeof responsiveRuleSchema>;
 export type PageNode = z.infer<typeof pageNodeSchema>;
 export type Page = z.infer<typeof pageSchema>;
 export type DesignIR = z.infer<typeof designIRSchema>;

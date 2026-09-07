@@ -80,6 +80,7 @@ describe('domain contracts', () => {
       tokenReferences: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.props.color = '{color.accent-2}'; }),
       visualPropTokens: () => refused((ir) => { ir.pages.routes[0]!.nodes[1]!.props.color = '#d86445'; }),
       mediaAsset: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.assetId = 'missing-asset'; }),
+      responsiveWidths: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{space.xl}', props: { padding: '{space.md}' } }, { minWidth: '{space.xl}', props: { padding: '{space.lg}' } }]; }),
     };
     for (const [rule, collect] of Object.entries(violations) as Array<[keyof typeof documentRules, () => string[]]>) {
       const messages = collect();

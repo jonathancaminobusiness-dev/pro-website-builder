@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type DesignIR, type PageNode } from '@pwb/domain';
 import { lintDesign, prototypeRuleRegistry, ruleRegistry } from './index.js';
 
-function node(id: string, kind: PageNode['kind'], semantic: string, props: PageNode['props'] = {}, slots: Record<string, string[]> = {}): PageNode {
+function node(id: string, kind: PageNode['kind'], semantic: PageNode['semantic'], props: PageNode['props'] = {}, slots: Record<string, string[]> = {}): PageNode {
   return { id, kind, semantic, props, slots, responsive: [] };
 }
 
@@ -13,7 +13,7 @@ function findings(ir: DesignIR, id: string): string[] {
 describe('prototype rule registry', () => {
   it('registers the seven prototype rules through the shared registry', () => {
     expect(prototypeRuleRegistry.map((rule) => rule.id)).toEqual(['STR-020', 'GRID-040', 'TYPE-050', 'COH-070', 'MOTION-080', 'A11Y-090', 'COPY-110']);
-    expect(ruleRegistry.map((rule) => rule.id)).toEqual(['TOK-001', 'TOK-002', 'TOK-003', 'TOK-004', 'DEF-010', 'STR-020', 'GRID-040', 'TYPE-050', 'COH-070', 'MOTION-080', 'A11Y-090', 'COPY-110']);
+    expect(ruleRegistry.map((rule) => rule.id)).toEqual(['TOK-001', 'TOK-002', 'TOK-003', 'TOK-004', 'DEF-010', 'DOC-020', 'STR-020', 'GRID-040', 'TYPE-050', 'COH-070', 'MOTION-080', 'A11Y-090', 'COPY-110']);
     expect(prototypeRuleRegistry.filter((rule) => rule.severity === 'error').map((rule) => rule.id)).toEqual(['A11Y-090', 'COPY-110']);
     expect(prototypeRuleRegistry.every((rule) => rule.stage === 'prototype')).toBe(true);
   });
@@ -26,9 +26,9 @@ describe('prototype rule registry', () => {
 describe('STR-020 structural defaults', () => {
   it('names a hero over three interchangeable blocks', () => {
     const ir = createFixtureIR();
-    const cards = ['card-a', 'card-b', 'card-c'].map((id) => node(id, 'surface', 'article', { padding: '{space.md}', text: `Bloco ${id}` }));
+    const cards = ['card-a', 'card-b', 'card-c'].map((id) => node(id, 'surface', 'section', { padding: '{space.md}', text: `Bloco ${id}` }));
     ir.pages.routes[0]!.nodes = [
-      node('home-root', 'stack', 'main', { background: '{color.paper}', color: '{color.ink}' }, { children: ['home-title', ...cards.map((card) => card.id)] }),
+      node('home-root', 'stack', 'div', { background: '{color.paper}', color: '{color.ink}' }, { children: ['home-title', ...cards.map((card) => card.id)] }),
       node('home-title', 'type', 'h1', { text: 'Toda escolha tem motivo.', font: '{type.display}' }),
       ...cards,
     ];
@@ -39,7 +39,7 @@ describe('STR-020 structural defaults', () => {
     const ir = createFixtureIR();
     expect(findings(ir, 'STR-020')).toEqual([]);
     const shape = (prefix: string): PageNode[] => [
-      node(`${prefix}-root`, 'stack', 'main', { background: '{color.paper}', color: '{color.ink}' }, { children: [`${prefix}-title`, `${prefix}-body`, `${prefix}-note`] }),
+      node(`${prefix}-root`, 'stack', 'div', { background: '{color.paper}', color: '{color.ink}' }, { children: [`${prefix}-title`, `${prefix}-body`, `${prefix}-note`] }),
       node(`${prefix}-title`, 'type', 'h1', { text: 'Título', font: '{type.display}' }),
       node(`${prefix}-body`, 'type', 'p', { text: 'Corpo', font: '{type.body}' }),
       node(`${prefix}-note`, 'type', 'p', { text: 'Nota', font: '{type.body}' }),
@@ -108,18 +108,16 @@ describe('A11Y-090 and COPY-110', () => {
     expect(findings(skipping, 'A11Y-090')[0]).toContain('salta de h1 para h3');
   });
 
-  it('names an unnamed control, a generic label and a link that goes nowhere', () => {
+  it('names an unnamed control and a generic label', () => {
     const ir = createFixtureIR();
     ir.pages.routes[0]!.nodes.push(
-      node('cta-blank', 'component', 'button', { color: '{color.ink}', text: '  ' }),
-      node('cta-generic', 'component', 'link', { color: '{color.ink}', text: 'Saiba mais', href: '/proof' }),
-      node('cta-nowhere', 'component', 'link', { color: '{color.ink}', text: 'Ver a prova' }),
+      node('cta-blank', 'component', 'div', { color: '{color.ink}', text: '  ' }),
+      node('cta-generic', 'component', 'div', { color: '{color.ink}', text: 'Saiba mais' }),
     );
-    ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'cta-blank', 'cta-generic', 'cta-nowhere'] };
+    ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'cta-blank', 'cta-generic'] };
     const messages = findings(ir, 'A11Y-090').join(' | ');
     expect(messages).toContain('cta-blank não tem nome acessível');
     expect(messages).toContain('rótulo genérico "Saiba mais"');
-    expect(messages).toContain('cta-nowhere não aponta para lugar nenhum');
   });
 
   it('names placeholder copy, empty copy and the vocabulary the identity forbids', () => {

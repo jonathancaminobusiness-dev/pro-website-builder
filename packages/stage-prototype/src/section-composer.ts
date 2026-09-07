@@ -14,7 +14,7 @@ export function renderComposerPrompt(task: AgentTask, section: SectionPlan, mani
     `Section contract:\n${JSON.stringify(section)}`,
     `Approved identity contract, frozen and read-only:\n${JSON.stringify({ direction: identity.direction, tokenRoles: identity.tokenRoles, gridGrammar: identity.gridGrammar, iconography: identity.iconography, content: identity.content, do: identity.do, dont: identity.dont, forbiddenDefaults: identity.forbiddenDefaults })}`,
     `Available token references: ${Object.keys(resolveTokens(identity.tokens).values).map((path) => `{${path}}`).join(', ')}`,
-    `Return a SectionComposition holding exactly ${section.nodeIds.length} nodes, with these ids in this order: ${section.nodeIds.join(', ')}. The first id is the section root; every other id must be reachable from it through the slots you declare. A node may only carry these visual props: ${[...visualPropKeys].join(', ')}, plus text and href. Every visual prop must be a token reference such as {color.ink}; a raw value is refused. A link may only point at one of ${manifest.routes.map((route) => route.route).join(', ')} or at an in-page anchor.`,
+    `Return a SectionComposition holding exactly ${section.nodeIds.length} nodes, with these ids in this order: ${section.nodeIds.join(', ')}. The first id is the section root; every other id must be reachable from it through the slots you declare. A node may only carry these visual props: ${[...visualPropKeys].join(', ')}, plus text. Every visual prop must be a token reference such as {color.ink}; a raw value is refused. A node whose semantic is h1, h2, h3 or p carries its own text and declares no children. The journey runs ${manifest.routes.map((route) => route.route).join(' then ')}; name the next route in the copy, because this renderer emits no anchors.`,
     `Write the copy in ${identity.meta.locale}, in the identity voice, and never use ${identity.content.forbiddenTerms.join(', ')}.`,
   ].join('\n\n');
 }
@@ -31,24 +31,26 @@ export class FakeSectionComposer implements ComposerProvider {
     const root: PageNode = {
       id: rootId, kind: 'stack', semantic: 'section',
       props: { background: surface, color: ink, gap: rhythm, paddingBlock: `{${identity.tokenRoles.sectionSpacing}}` },
-      slots: { children: childIds }, responsive: identity.gridGrammar.responsive,
+      slots: { children: childIds },
+      // One real breakpoint: past the declared max width the section takes the section gutter inline.
+      responsive: [{ minWidth: identity.gridGrammar.maxWidthToken, props: { paddingInline: identity.gridGrammar.gutterToken } }],
     };
     const copy = section.role === 'support'
       ? ['Carregando o conteúdo desta rota.', 'Ainda não há conteúdo para mostrar.', 'Não foi possível carregar esta rota. Tente novamente.']
       : [section.headline, section.body, section.callToAction?.label ?? section.intent];
+    // Every route needs exactly one h1, and it belongs to the section that opens the route. A state
+    // that replaces the whole route needs its own, because the route's h1 is hidden while it shows.
+    const opensRoute = section.nodeRange.start === ROUTE_SHELL_SLOT + 1;
     const children: PageNode[] = childIds.map((id, index) => {
-      const text = copy[index] ?? section.body;
-      if (section.callToAction && index === childIds.length - 1 && section.role !== 'support') {
-        return { id, kind: 'component', semantic: 'link', props: { color: ink, font: `{${identity.tokenRoles.bodyTypeface}}`, paddingBlock: `{${identity.tokenRoles.baseSpacing}}`, text: section.callToAction.label, href: section.callToAction.href }, slots: {}, responsive: [] };
-      }
-      // Every route needs exactly one h1, and it belongs to the section that opens the route.
-      const opensRoute = section.nodeRange.start === ROUTE_SHELL_SLOT + 1;
-      // A state that replaces the whole route needs its own heading, because the route's own h1 is
-      // hidden while that state is showing.
       const heading = section.role === 'support' || index === 0;
-      const level = section.role === 'support' ? 'h1' : opensRoute ? 'h1' : 'h2';
+      const level: 'h1' | 'h2' = section.role === 'support' || opensRoute ? 'h1' : 'h2';
+      // This renderer emits no anchors, so the journey is carried by the copy rather than by a link.
+      const closesJourney = section.callToAction !== undefined && index === childIds.length - 1 && section.role !== 'support';
+      const text: string = closesJourney && section.callToAction
+        ? `${section.callToAction.label}: ${section.callToAction.href}`
+        : copy[index] ?? section.body;
       return {
-        id, kind: 'type', semantic: heading ? level : 'p',
+        id, kind: 'type' as const, semantic: heading ? level : ('p' as const),
         props: { color: ink, font: `{${identity.tokenRoles.bodyTypeface}}`, text },
         slots: {}, responsive: [],
       };
@@ -108,7 +110,6 @@ export function validateComposition(composition: SectionComposition, section: Se
 
   let tokens: Set<string>;
   try { tokens = new Set(Object.keys(resolveTokens(identity.tokens).values)); } catch { tokens = new Set(); }
-  const targets = new Set<string>(manifest.routes.map((route) => route.route));
   for (const node of composition.nodes) {
     for (const [key, value] of Object.entries(node.props)) {
       if (!visualPropKeys.has(key) || value === undefined) continue;
@@ -116,8 +117,6 @@ export function validateComposition(composition: SectionComposition, section: Se
       if (!reference) { problems.push(`Node ${node.id} sets ${key} outside the token system.`); continue; }
       if (!tokens.has(reference[1]!)) problems.push(`Node ${node.id} points ${key} at the undefined token ${String(value)}.`);
     }
-    const href = node.props.href;
-    if (typeof href === 'string' && !href.startsWith('#') && !targets.has(href)) problems.push(`Node ${node.id} links to ${href}, which the manifest does not declare.`);
     const text = node.props.text;
     if (typeof text === 'string') {
       const forbidden = identity.content.forbiddenTerms.find((term) => text.toLowerCase().includes(term.toLowerCase()));

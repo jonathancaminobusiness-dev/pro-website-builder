@@ -9,7 +9,7 @@ import { applyRenderState, collectRenderEvidence, readFocusSample, type Collecte
 import { conditionFor, type StateCondition } from './matrix.js';
 
 export interface RenderCaseResult { renderCase: RenderCase; screenshotPath: string; dom: string; accessibility: string; qa: QaResult; cached: boolean; }
-export interface EvidenceCapture { renderCase: RenderCase; evidence: RenderEvidence; dom: string; accessibility: string; cached: boolean; }
+export interface EvidenceCapture { renderCase: RenderCase; evidence: RenderEvidence; dom: string; accessibility: string; status: number | null; cached: boolean; }
 
 export interface CaptureRequest {
   ir: DesignIR;
@@ -76,7 +76,7 @@ export class RenderHub {
       const { evidence } = capture;
       const result: RenderCaseResult = {
         renderCase, screenshotPath: evidence.screenshotPath, dom: capture.dom, accessibility: capture.accessibility,
-        qa: evaluateQa({ scrollWidth: evidence.documentMetrics.scrollWidth, clientWidth: evidence.documentMetrics.clientWidth, consoleErrors: evidence.consoleErrors, networkErrors: evidence.networkErrors }),
+        qa: evaluateQa({ scrollWidth: evidence.documentMetrics.scrollWidth, clientWidth: evidence.documentMetrics.clientWidth, status: capture.status, consoleErrors: evidence.consoleErrors, networkErrors: evidence.networkErrors }),
         cached: false,
       };
       await this.writeCache(`${key}.json`, result);
@@ -99,7 +99,8 @@ export class RenderHub {
     try {
       signal?.throwIfAborted();
       await page.addInitScript(KEEP_NAMES_SHIM);
-      await page.goto(url, { waitUntil: 'networkidle' });
+      const response = await page.goto(url, { waitUntil: 'networkidle' });
+      const status = response?.status() ?? null;
       await page.waitForFunction(() => document.fonts?.status === 'loaded');
       await page.evaluate(applyRenderState, { hiddenNodeIds: condition.hiddenNodeIds, state: condition.state });
       if (condition.focusNodeId) await this.focusNode(page, condition.focusNodeId);
@@ -120,10 +121,11 @@ export class RenderHub {
         consoleErrors,
         networkErrors,
         stable: layoutHash(first) === layoutHash(second),
+        status,
         screenshotPath,
         domHash: hashJson(second.dom),
       };
-      return { renderCase, evidence, dom: second.dom, accessibility, cached: false };
+      return { renderCase, evidence, dom: second.dom, accessibility, status, cached: false };
     } finally {
       await page.close();
     }

@@ -1,4 +1,4 @@
-import { resolveTokens, type DesignIR, type Page, type PageNode, type Patch } from '@pwb/domain';
+import { canonicalize, resolveTokens, type DesignIR, type Page, type PageNode, type Patch } from '@pwb/domain';
 import type { Finding, ProposedPatch } from './critique.js';
 
 type PatchOperation = Patch['operations'][number];
@@ -72,12 +72,15 @@ function compile(ir: DesignIR, patch: ProposedPatch, tokens: Set<string>): { ope
   }
 
   if (patch.operation === 'set_constraint') {
-    const containers = new Set(ir.identity.gridGrammar.responsive.map((entry) => entry.container));
-    if (!containers.has(patch.container)) return { reason: `A gramática de grid não declara o container ${patch.container}.` };
-    const responsive = node.responsive.filter((entry) => entry.container !== patch.container);
-    const next = [...responsive, { container: patch.container, rule: patch.rule }].sort((a, b) => (a.container < b.container ? -1 : a.container > b.container ? 1 : 0));
+    for (const reference of [patch.minWidth, patch.token]) {
+      if (!tokens.has(reference.slice(1, -1))) return { reason: `A identidade não define o token ${reference}.` };
+    }
+    const existing = node.responsive.find((entry) => entry.minWidth === patch.minWidth);
+    const merged = { minWidth: patch.minWidth, props: { ...existing?.props, [patch.prop]: patch.token } };
+    const next = [...node.responsive.filter((entry) => entry.minWidth !== patch.minWidth), merged]
+      .sort((a, b) => (a.minWidth < b.minWidth ? -1 : a.minWidth > b.minWidth ? 1 : 0));
     const path = `${nodePath}/responsive`;
-    if (JSON.stringify(next) === JSON.stringify(node.responsive)) return { reason: `O nó ${patch.nodeId} já carrega essa restrição.` };
+    if (JSON.stringify(canonicalize(next)) === JSON.stringify(canonicalize(node.responsive))) return { reason: `O nó ${patch.nodeId} já carrega essa restrição.` };
     return { operations: [{ op: 'test', path, value: node.responsive }, { op: 'replace', path, value: next }] };
   }
 

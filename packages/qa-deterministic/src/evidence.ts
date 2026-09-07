@@ -56,6 +56,7 @@ export const renderEvidenceSchema = z.object({
   consoleErrors: z.array(z.string()),
   networkErrors: z.array(z.string()),
   stable: z.boolean(),
+  status: z.number().int().nullable(),
   screenshotPath: z.string(),
   domHash: z.string(),
 }).strict();

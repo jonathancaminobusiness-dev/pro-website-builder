@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
-import { nodeHrefSchema, pageNodeSchema, routeSchema, withoutUnionTypes } from '@pwb/domain';
+import { inlinedJsonSchema, pageNodeSchema, routeSchema } from '@pwb/domain';
 
 export const sectionRoleSchema = z.enum(['hero', 'narrative', 'proof', 'action', 'support']);
 
@@ -20,7 +19,8 @@ export const sectionPlanSchema = z.object({
   intent: z.string().min(1),
   headline: z.string().min(1),
   body: z.string().min(1),
-  callToAction: z.object({ label: z.string().min(1), href: nodeHrefSchema }).optional(),
+  /** Where the section sends the visitor next. The renderer emits no anchors yet, so the composer names the route in the copy. */
+  callToAction: z.object({ label: z.string().min(1), href: routeSchema }).optional(),
   nodeIds: z.array(z.string().min(1)).min(1),
   nodeRange: z.object({ start: z.number().int().min(0), count: z.number().int().positive() }).strict(),
 }).strict().superRefine((section, ctx) => {
@@ -113,6 +113,6 @@ export function locateSection(manifest: RouteManifest, sectionId: string): { rou
 }
 
 export const stagePrototypeContractSchemaJson = {
-  RouteManifest: withoutUnionTypes(zodToJsonSchema(routeManifestSchema)),
-  SectionComposition: withoutUnionTypes(zodToJsonSchema(sectionCompositionSchema)),
+  RouteManifest: inlinedJsonSchema(routeManifestSchema),
+  SectionComposition: inlinedJsonSchema(sectionCompositionSchema),
 };
