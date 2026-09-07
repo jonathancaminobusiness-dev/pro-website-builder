@@ -29,7 +29,7 @@ const pathValueSchemas = {
 export const stageWritablePaths: Record<Stage, Array<keyof typeof pathValueSchemas>> = {
   identity: ['/identity', '/reviewRecord'],
   prototype: ['/pages', '/assets', '/reviewRecord'],
-  finalization: ['/assets', '/reviewRecord'],
+  finalization: ['/pages', '/assets', '/reviewRecord'],
 };
 
 export const documentPathSchemas: Record<string, unknown> = Object.fromEntries(

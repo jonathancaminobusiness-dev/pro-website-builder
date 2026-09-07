@@ -60,6 +60,14 @@ describe('domain contracts', () => {
     expect(() => designIRSchema.parse(interior)).toThrow(/segments/i);
   });
 
+  it('rejects node text the renderer cannot write into the page', () => {
+    const numeric = createFixtureIR();
+    (numeric.pages.routes[0]!.nodes[1]!.props as Record<string, unknown>).text = 2026;
+    expect(() => designIRSchema.parse(numeric)).toThrow(/expected string/i);
+    const written = designIRSchema.parse(createFixtureIR());
+    expect(written.pages.routes[0]!.nodes[1]!.props.text).toBe('Toda escolha tem motivo.');
+  });
+
   it('rejects a node prop the renderer has no vocabulary for', () => {
     const unknown = createFixtureIR();
     (unknown.pages.routes[0]!.nodes[0]!.props as Record<string, string>).letterSpacing = '{space.sm}';

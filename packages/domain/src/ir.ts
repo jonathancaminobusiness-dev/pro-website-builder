@@ -10,7 +10,7 @@ export const visualPropsSchema = z.object({
   width: visualValueSchema, height: visualValueSchema, margin: visualValueSchema, maxWidth: visualValueSchema,
 }).partial();
 export const visualPropKeys = new Set<string>(Object.keys(visualPropsSchema.shape));
-export const nodePropsSchema = visualPropsSchema.extend({ text: visualValueSchema.optional() }).strict();
+export const nodePropsSchema = visualPropsSchema.extend({ text: z.string().optional() }).strict();
 
 export const routeSchema = z.string()
   .regex(/^\/$|^(?:\/[A-Za-z0-9\-._~]+)+$/, 'Route must start with / and use non-empty unreserved path segments without a trailing slash.')

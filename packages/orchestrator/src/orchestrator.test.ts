@@ -19,6 +19,27 @@ describe('orchestrator', () => {
     expect(plan.edges).toEqual([['task-identity', 'task-prototype'], ['task-prototype', 'task-finalization']]);
   });
 
+  it('gives each stage its own write boundary and refuses a later stage that touches the identity', () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const plan = new RunPlanner(store).plan('run-paths', root.id, 'brief');
+    expect(plan.tasks.map((item) => [item.stage, item.allowedPaths])).toEqual([
+      ['identity', ['/identity', '/reviewRecord']],
+      ['prototype', ['/pages', '/assets', '/reviewRecord']],
+      ['finalization', ['/pages', '/assets', '/reviewRecord']],
+    ]);
+    for (const task of plan.tasks) expect(Object.keys(task.documentSlice).sort()).toEqual(['/assets', '/identity', '/pages', '/reviewRecord']);
+    const gate = new PatchGate();
+    const touchIdentity = (stage: 'prototype' | 'finalization') => ({ operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'draft' }], baseVersionId: root.id, touchedPaths: ['/identity/meta/status'], rationale: 'freeze breaker', confidence: 1, stage, role: stage === 'prototype' ? 'composer' as const : 'compiler' as const, idempotencyKey: `identity-${stage}` });
+    for (const stage of ['prototype', 'finalization'] as const) {
+      const task = plan.tasks.find((item) => item.stage === stage)!;
+      expect(() => gate.validate(touchIdentity(stage), { currentVersionId: root.id, allowedPaths: task.allowedPaths })).toThrow(/not allowed/i);
+    }
+    const compiler = plan.tasks.find((item) => item.stage === 'finalization')!;
+    const page = { operations: [{ op: 'replace' as const, path: '/pages/routes/0/title', value: 'Oficina' }], baseVersionId: root.id, touchedPaths: ['/pages/routes/0/title'], rationale: 'finish the page', confidence: 1, stage: 'finalization' as const, role: 'compiler' as const, idempotencyKey: 'finalize-page' };
+    expect(gate.validate(page, { currentVersionId: root.id, allowedPaths: compiler.allowedPaths }).ok).toBe(true);
+  });
+
   it('hands every task an immutable slice of the base version and digests it', () => {
     const ir = createFixtureIR();
     const store = new VersionStore();

@@ -46,7 +46,7 @@ function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<
   const styles = styleEntries.map(([key, value]) => `${propertyName(key)}:${cssValue(value, values, node, key)}`).join(';');
   const styleAttribute = styles ? ` style="${escapeHtml(styles)}"` : '';
   const common = ` data-node-id="${escapeHtml(node.id)}" data-node-kind="${escapeHtml(node.kind)}"${styleAttribute}`;
-  const text = typeof node.props.text === 'string' ? escapeHtml(node.props.text) : '';
+  const text = node.props.text ? escapeHtml(node.props.text) : '';
   const children = slotChildIds(node).map((childId) => {
     const child = byId.get(childId);
     if (!child) throw new Error(`Node ${node.id} references unknown node ${childId}.`);
