@@ -19,16 +19,19 @@ function origin(): string { return fromEnvironment('PWB_RELEASE_ORIGIN'); }
 /**
  * What the running measurement still owes.
  *
- * Gate 3 reads artifacts and nothing else, so a run the per-test timeout aborts
- * has to leave one saying so: the artifacts already written would otherwise read
- * as full coverage of routes and widths no browser ever finished measuring. A
- * body that never started leaves nothing, because an engine that could not
- * launch on this host is a missing engine the captain accepts in writing, not a
- * failed measurement.
+ * Gate 3 reads artifacts and nothing else, so each scope leaves one artifact
+ * under a stable id, written whether it finished or not: the per-route artifacts
+ * alone would read as full coverage of routes and widths no browser ever
+ * finished measuring, and a record only an aborted run writes would outlive the
+ * run it describes and veto every clean one after it. A body that never started
+ * leaves nothing, because an engine that could not launch on this host is a
+ * missing engine the captain accepts in writing, not a failed measurement.
  */
-const progress: { started: boolean; completed: boolean; scope: string; pending: string[] } = { started: false, completed: false, scope: 'render', pending: [] };
+const progress: { started: boolean; completed: boolean; scope: string; planned: number; pending: string[] } = { started: false, completed: false, scope: 'render', planned: 0, pending: [] };
 
-function begin(scope: string): void { progress.started = true; progress.completed = false; progress.scope = scope; progress.pending = []; }
+function begin(scope: string): void { progress.started = true; progress.completed = false; progress.scope = scope; progress.planned = 0; progress.pending = []; }
+
+function plan(entries: string[]): void { progress.planned = entries.length; progress.pending = entries; }
 
 interface Harness { digest: string; irHash: string; routes: Array<{ route: string; title: string; releasePath: string; previewPath: string }> }
 
@@ -50,22 +53,26 @@ function watch(page: Page): { consoleErrors: string[]; requestFailures: string[]
 
 test.describe('release evidence', () => {
   test.afterEach(async ({}, testInfo) => {
-    if (!progress.started || progress.completed) return;
+    if (!progress.started) return;
+    progress.started = false;
     const engine = testInfo.project.name as EvidenceArtifact['engine'];
+    const covered = progress.completed && progress.pending.length === 0;
     const reason = (testInfo.error?.message ?? 'a execução foi interrompida antes de medir tudo').replaceAll(/\u001b\[\d+m/g, '');
     await writeEvidenceArtifact(EVIDENCE_DIR, {
-      id: `playwright-${engine}-${progress.scope}-incomplete`,
+      id: `playwright-${engine}-${progress.scope}-coverage`,
       runner: 'playwright', engine,
       releaseDigest: fromEnvironment('PWB_RELEASE_DIGEST'), irHash: fromEnvironment('PWB_RELEASE_IR_HASH'),
-      route: '/', state: `${progress.scope}-incomplete`,
-      status: 'failed',
+      route: '/', state: `${progress.scope}-coverage`,
+      status: covered ? 'passed' : 'failed',
       path: 'tests/release/release-evidence.spec.ts',
       hash: artifactHash(progress.pending),
-      metrics: { pending: progress.pending.length },
-      notes: [
-        `A medição ${progress.scope} não chegou ao fim no ${engine} (${testInfo.status ?? 'interrompida'}): ${reason}`,
-        ...(progress.pending.length > 0 ? [`Sem medição: ${progress.pending.join(', ')}`] : []),
-      ],
+      metrics: { planned: progress.planned, pending: progress.pending.length },
+      notes: covered
+        ? [`A medição ${progress.scope} cobriu as ${progress.planned} combinação(ões) que este release pede no ${engine}.`]
+        : [
+          `A medição ${progress.scope} não chegou ao fim no ${engine} (${testInfo.status ?? 'interrompida'}): ${reason}`,
+          ...(progress.pending.length > 0 ? [`Sem medição: ${progress.pending.join(', ')}`] : []),
+        ],
     });
   });
 
@@ -73,7 +80,7 @@ test.describe('release evidence', () => {
     begin('render');
     const { routes, digest, irHash } = await harness(page);
     const engine = testInfo.project.name as EvidenceArtifact['engine'];
-    progress.pending = routes.flatMap((route) => WIDTHS.map((width) => `${route.route} @${width}px`));
+    plan(routes.flatMap((route) => WIDTHS.map((width) => `${route.route} @${width}px`)));
     for (const route of routes) {
       for (const width of WIDTHS) {
         const observed = watch(page);
@@ -121,7 +128,7 @@ test.describe('release evidence', () => {
     const { routes, digest, irHash } = await harness(page);
     const engine = testInfo.project.name as EvidenceArtifact['engine'];
     const states = [{ name: 'default', width: 1440, reducedMotion: 'no-preference' as const }, { name: 'reduced-motion', width: 1440, reducedMotion: 'reduce' as const }, { name: 'narrow', width: 360, reducedMotion: 'no-preference' as const }];
-    progress.pending = routes.flatMap((route) => states.map((state) => `${route.route} (${state.name})`));
+    plan(routes.flatMap((route) => states.map((state) => `${route.route} (${state.name})`)));
     for (const route of routes) {
       for (const state of states) {
         await page.emulateMedia({ reducedMotion: state.reducedMotion });

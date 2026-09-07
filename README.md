@@ -294,7 +294,9 @@ release in every engine. Both release runners write their typed artifacts from
 their teardown, so a run the per-test timeout aborts still leaves one — naming
 the routes and widths it never measured — and a divergence a browser sees
 reaches Gate 3 as a failed measurement, a `BUILD_FAILED` veto, instead of only
-turning a test red. An engine that never launches still leaves no artifact at
+turning a test red. Each of those artifacts keeps the same id whether the run
+passed or failed, so a clean re-run replaces the verdict of the aborted one
+rather than leaving it standing. An engine that never launches still leaves no artifact at
 all, so it stays the missing engine the captain accepts in writing.
 
 **Gate 3.** The studio panel shows the digest, the standing vetoes, the rubric
