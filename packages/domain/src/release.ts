@@ -44,7 +44,9 @@ export const releaseSuggestionSchema = z.object({
 
 export const releaseFindingSchema = z.object({
   id: z.string().min(1),
-  severity: z.enum(['veto', 'error', 'warning', 'uncertain']),
+  // A critic has no veto power, so no finding can carry one: vetoes come only
+  // from the compiler, the evidence runners and the gate.
+  severity: z.enum(['error', 'warning', 'uncertain']),
   route: z.string(),
   nodeId: z.string().optional(),
   evidenceRef: z.string().min(1),

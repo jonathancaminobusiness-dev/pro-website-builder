@@ -1,0 +1,347 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createFixtureIR, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding } from '@pwb/domain';
+import { compileRelease } from '@pwb/export';
+import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
+import { renderDesign } from '@pwb/renderer';
+import {
+  aggregateVetoes, checkPreviewReleaseParity, ClaudeReleaseCriticProvider, criticTasks, DeterministicReleaseSummarizer,
+  evaluateReleaseGate, evidenceCoverage, evidenceVetoes, FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage,
+  PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, VETO_CATALOG, writeEvidenceArtifact,
+} from './index.js';
+
+const COMPILER_OPTIONS = { siteUrl: 'https://oficina.example', siteName: 'Oficina' };
+
+function compiledFixture(mutate?: (ir: DesignIR) => void) {
+  const ir = createFixtureIR();
+  mutate?.(ir);
+  return { ir, compiled: compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS) };
+}
+
+function artifact(overrides: Partial<EvidenceArtifact> & Pick<EvidenceArtifact, 'id' | 'runner' | 'engine'>): EvidenceArtifact {
+  return { route: '/', state: 'default', status: 'passed', path: `${overrides.id}.json`, hash: 'hash', vetoes: [], metrics: {}, notes: [], ...overrides };
+}
+
+function pageIds(ir: DesignIR): Map<string, string> {
+  return new Map(ir.pages.routes.map((page) => [page.route, page.id]));
+}
+
+describe('release veto catalogue', () => {
+  it('names every veto the plan fixes, once each', () => {
+    expect(VETO_CATALOG.map((definition) => definition.id).sort()).toEqual([
+      'ASSET_WITHOUT_LICENSE', 'BROKEN_PRIMARY_LINK', 'BUILD_FAILED', 'CRITICAL_AA_REGRESSION',
+      'RELEASE_DIVERGES_FROM_APPROVED', 'SECRET_IN_BUNDLE', 'UNSANITIZED_HTML', 'XSS_OR_JAVASCRIPT_URL',
+    ]);
+  });
+
+  it('refuses a veto raised by something that is not allowed to raise it', () => {
+    expect(() => aggregateVetoes([{ id: 'SECRET_IN_BUNDLE', detector: 'evidence', where: 'x', detail: 'y' }])).toThrow(/may only be raised by compiler/);
+  });
+
+  it('merges duplicates and orders the report the same way every time', () => {
+    const one = { id: 'BUILD_FAILED' as const, detector: 'compiler' as const, where: '/b', detail: 'd' };
+    const two = { id: 'SECRET_IN_BUNDLE' as const, detector: 'compiler' as const, where: '/a', detail: 'd' };
+    expect(aggregateVetoes([one, two], [one]).map((veto) => veto.id)).toEqual(['SECRET_IN_BUNDLE', 'BUILD_FAILED']);
+  });
+});
+
+describe('independent evidence', () => {
+  it('derives an accessibility regression from raw axe counts even when the runner declared none', () => {
+    const vetoes = evidenceVetoes([artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', metrics: { critical: 1, serious: 0 } })]);
+    expect(vetoes.map((veto) => veto.id)).toEqual(['CRITICAL_AA_REGRESSION']);
+    expect(vetoes[0]!.detector).toBe('evidence');
+  });
+
+  it('treats a failed browser or unit run as a build failure', () => {
+    expect(evidenceVetoes([artifact({ id: 'pw-webkit', runner: 'playwright', engine: 'webkit', status: 'failed', notes: ['overflow at 360px'] })])[0])
+      .toMatchObject({ id: 'BUILD_FAILED', detector: 'evidence', detail: 'overflow at 360px' });
+  });
+
+  it('keeps a clean run clean', () => {
+    expect(evidenceVetoes([artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', metrics: { critical: 0, serious: 0, moderate: 3 } })])).toEqual([]);
+  });
+
+  it('names every runner and engine that produced no evidence', () => {
+    const coverage = evidenceCoverage([artifact({ id: 'a', runner: 'axe', engine: 'chromium' })]);
+    expect(coverage.missing.join(' ')).toMatch(/vitest/);
+    expect(coverage.missing.join(' ')).toMatch(/firefox/);
+    expect(coverage.missing.join(' ')).toMatch(/webkit/);
+    expect(coverage.missing.join(' ')).toMatch(/lighthouse/);
+  });
+
+  it('round-trips artifacts through the directory the gate reads', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pwb-evidence-'));
+    try {
+      await writeEvidenceArtifact(root, artifact({ id: 'axe/home:1440', runner: 'axe', engine: 'firefox' }));
+      const [loaded] = await readEvidence(root);
+      expect(loaded?.id).toBe('axe/home:1440');
+      expect(await readEvidence(join(root, 'absent'))).toEqual([]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('preview and release parity', () => {
+  it('matches the preview the captain reviewed, route by route', () => {
+    const { ir, compiled } = compiledFixture();
+    const report = checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir));
+    expect(report.matched).toBe(true);
+    expect(report.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
+  });
+
+  it('catches a release whose stylesheet no longer resolves what the preview showed', () => {
+    const { ir, compiled } = compiledFixture();
+    const stylesheet = compiled.files.find((file) => file.path === compiled.stylesheetPath)!;
+    stylesheet.contents = (stylesheet.contents as string).replace('[data-page-id="page-home"] [data-node-id="home-title"]{', '[data-page-id="page-home"] [data-node-id="home-title"]{opacity:0;');
+    const report = checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir));
+    expect(report.matched).toBe(false);
+    expect(report.routes.find((route) => route.route === '/')?.differences.join(' ')).toMatch(/home-title/);
+  });
+
+  it('catches a release whose text drifted from the preview', () => {
+    const { ir, compiled } = compiledFixture();
+    const home = compiled.files.find((file) => file.path === 'index.html')!;
+    home.contents = (home.contents as string).replace('Toda escolha tem motivo.', 'Outra coisa.');
+    expect(checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)).matched).toBe(false);
+  });
+});
+
+describe('five read-only release critics', () => {
+  function context() {
+    const { ir, compiled } = compiledFixture();
+    return { ir, compiled, tasks: criticTasks({ runId: 'run-1', baseVersionId: 'v0', ir, compiled, evidence: [artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium' })], attempt: 1, promptVersion: 'phase3-v1', modelAlias: 'claude-local' }) };
+  }
+
+  it('builds one separate task per dimension', () => {
+    const { tasks } = context();
+    expect(tasks).toHaveLength(5);
+    expect(tasks.map((entry) => entry.definition.dimension).sort()).toEqual(['accessibility', 'asset-performance', 'provenance-security', 'semantics-seo', 'visual-regression']);
+    expect(new Set(tasks.map((entry) => entry.task.id)).size).toBe(5);
+  });
+
+  it('gives no critic a writable path, so the patch gate would refuse anything it tried to touch', () => {
+    const { tasks } = context();
+    const gate = new PatchGate();
+    for (const { task } of tasks) {
+      expect(task.allowedPaths).toEqual([]);
+      expect(() => gate.validate({
+        operations: [{ op: 'replace', path: '/reviewRecord/findings', value: [] }],
+        baseVersionId: 'v0', touchedPaths: ['/reviewRecord/findings'], rationale: 'critic overreach', confidence: 1,
+        stage: 'finalization', role: 'release-critic', idempotencyKey: 'k',
+      }, { currentVersionId: 'v0', allowedPaths: task.allowedPaths })).toThrow(/not allowed/);
+    }
+  });
+
+  it('shows each critic only the evidence its dimension may reason from', () => {
+    const { tasks } = context();
+    const accessibility = tasks.find((entry) => entry.definition.dimension === 'accessibility')!;
+    const seo = tasks.find((entry) => entry.definition.dimension === 'semantics-seo')!;
+    expect((accessibility.task.documentSlice['/evidence'] as EvidenceArtifact[]).map((entry) => entry.id)).toEqual(['axe-home']);
+    expect(seo.task.documentSlice['/evidence']).toEqual([]);
+    expect(accessibility.task.documentSlice['/identity']).toBeDefined();
+  });
+
+  it('re-stamps the identity of a critique so a session cannot report as another critic', async () => {
+    const { tasks } = context();
+    const definition = RELEASE_CRITICS.find((critic) => critic.dimension === 'accessibility')!;
+    const lying: ReleaseCritique = { taskId: 'someone-else', dimension: 'asset-performance', verdict: 'pass', rubricScore: 4, summary: 'ok', findings: [] };
+    const provider = new ClaudeReleaseCriticProvider({ run: async () => lying });
+    const critique = await provider.critique(tasks[0]!.task, definition);
+    expect(critique.taskId).toBe(tasks[0]!.task.id);
+    expect(critique.dimension).toBe('accessibility');
+  });
+
+  it('reports what the evidence shows and stays silent about what it does not', async () => {
+    const { tasks } = context();
+    const provider = new FakeReleaseCriticProvider();
+    const accessibility = tasks.find((entry) => entry.definition.dimension === 'accessibility')!;
+    expect((await provider.critique(accessibility.task, accessibility.definition)).findings).toEqual([]);
+    const performance = tasks.find((entry) => entry.definition.dimension === 'asset-performance')!;
+    const critique = await provider.critique(performance.task, performance.definition);
+    expect(critique.findings.map((finding) => finding.severity)).toContain('uncertain');
+    expect(critique.verdict).toBe('uncertain');
+  });
+});
+
+describe('patch refiner', () => {
+  const refiner = new PatchRefiner(new FakeReleaseRefiner());
+  const finding = (id: string, severity: ReleaseFinding['severity'] = 'error'): ReleaseFinding => ({ id, severity, route: '/', evidenceRef: 'e', cause: 'c', suggestion: { kind: 'token', path: '/pages', note: 'n' } });
+
+  it('stops as soon as no error finding is left', () => {
+    expect(refiner.decide(0, [finding('a', 'warning')], [])).toMatchObject({ action: 'stop' });
+  });
+
+  it('refines while there is something to fix and cycles remain', () => {
+    expect(refiner.decide(0, [finding('a')], [])).toEqual({ action: 'refine', findingIds: ['a'] });
+    expect(refiner.decide(1, [finding('b')], ['a'])).toEqual({ action: 'refine', findingIds: ['b'] });
+  });
+
+  it('never runs a third cycle', () => {
+    const decision = refiner.decide(2, [finding('a')], ['b']);
+    expect(decision).toMatchObject({ action: 'stop' });
+    expect(decision.action === 'stop' && decision.reason).toMatch(/limite de 2 ciclos/);
+  });
+
+  it('escalates instead of trying the same finding a second time', () => {
+    const decision = refiner.decide(1, [finding('a')], ['a']);
+    expect(decision).toMatchObject({ action: 'stop' });
+    expect(decision.action === 'stop' && decision.escalations.join(' ')).toMatch(/repetiu em duas rodadas/);
+  });
+
+  it('produces a schema-valid patch confined to the review record', async () => {
+    const task = { baseVersionId: 'v0', inputDigest: 'digest', documentSlice: { '/reviewRecord': { findings: ['old'], approvals: [] } } } as unknown as AgentTask;
+    const patch = await new FakeReleaseRefiner().refine(task, [finding('a')]);
+    expect(patch?.touchedPaths).toEqual(['/reviewRecord/findings']);
+    expect(patch?.role).toBe('patch-refiner');
+    expect(patch?.operations[0]?.value).toEqual(['a: c', 'old']);
+  });
+});
+
+describe('release summarizer has no gate authority', () => {
+  const veto = { id: 'SECRET_IN_BUNDLE' as const, detector: 'compiler' as const, where: 'index.html', detail: 'a key' };
+
+  it('rewrites a summary that under-reports the vetoes', () => {
+    const sealed = sealSummary({ headline: 'tudo certo', highlights: [], openQuestions: [], vetoCount: 0, gateAuthority: 'none' }, [veto]);
+    expect(sealed.vetoCount).toBe(1);
+    expect(sealed.openQuestions.join(' ')).toMatch(/Segredo no bundle/);
+  });
+
+  it('leads with the block when one stands', async () => {
+    const summary = await new DeterministicReleaseSummarizer().summarize({ bundleDigest: 'abcdef0123456789', vetoes: [veto], critiques: [], escalations: [] });
+    expect(summary.headline).toMatch(/bloqueado por 1 veto/);
+    expect(summary.gateAuthority).toBe('none');
+  });
+});
+
+describe('Gate 3', () => {
+  function gateInput(overrides: Partial<Parameters<typeof evaluateReleaseGate>[0]> = {}) {
+    const { ir, compiled } = compiledFixture();
+    const critiques: ReleaseCritique[] = RELEASE_CRITICS.map((critic) => ({ taskId: critic.taskId, dimension: critic.dimension, verdict: 'pass', rubricScore: 4, summary: 'ok', findings: [] }));
+    return {
+      compiled, critiques, evidence: [] as EvidenceArtifact[],
+      parity: checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)),
+      approved: { versionId: 'v-approved', irHash: compiled.irHash },
+      refinementCycles: 0, escalations: [] as string[], ...overrides,
+    };
+  }
+
+  it('clears a release with no veto and leaves the decision to the captain', () => {
+    const report = evaluateReleaseGate(gateInput());
+    expect(report.blocked).toBe(false);
+    expect(report.vetoes).toEqual([]);
+    expect(report.approverRole).toBe('captain');
+    expect(report.rubric).toHaveLength(5);
+  });
+
+  it('blocks on a veto the compiler found', () => {
+    const { ir } = compiledFixture();
+    ir.assets.items[0]!.provenance.license = '';
+    const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
+    const report = evaluateReleaseGate(gateInput({ compiled, approved: { versionId: 'v', irHash: compiled.irHash }, parity: checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)) }));
+    expect(report.blocked).toBe(true);
+    expect(report.vetoes.map((entry) => entry.id)).toContain('ASSET_WITHOUT_LICENSE');
+  });
+
+  it('blocks when the bundle was compiled from a document the captain did not approve', () => {
+    const report = evaluateReleaseGate(gateInput({ approved: { versionId: 'v-approved', irHash: 'a-different-hash' } }));
+    expect(report.vetoes.map((entry) => entry.id)).toContain('RELEASE_DIVERGES_FROM_APPROVED');
+    expect(report.blocked).toBe(true);
+  });
+
+  it('blocks when the release stops matching the preview', () => {
+    const input = gateInput();
+    input.parity = { matched: false, routes: [{ route: '/', matched: false, differences: ['o nó home-title mudou'] }] };
+    expect(evaluateReleaseGate(input).vetoes.map((entry) => entry.id)).toContain('RELEASE_DIVERGES_FROM_APPROVED');
+  });
+
+  it('lets no critic and no summary introduce or hide a veto', () => {
+    const shouting: ReleaseCritique[] = RELEASE_CRITICS.map((critic) => ({ taskId: critic.taskId, dimension: critic.dimension, verdict: 'revise', rubricScore: 0, summary: 'tudo errado', findings: [{ id: 'x', severity: 'error', route: '/', evidenceRef: 'e', cause: 'c', suggestion: { kind: 'token', path: '/pages', note: 'n' } }] }));
+    expect(evaluateReleaseGate(gateInput({ critiques: shouting })).vetoes).toEqual([]);
+
+    const { ir } = compiledFixture();
+    ir.assets.items[0]!.provenance.license = '';
+    const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
+    const lying = { headline: 'tudo certo', highlights: [], openQuestions: [], vetoCount: 0, gateAuthority: 'none' as const };
+    const report = evaluateReleaseGate(gateInput({ compiled, approved: { versionId: 'v', irHash: compiled.irHash }, parity: { matched: true, routes: [] }, summary: lying }));
+    expect(report.blocked).toBe(true);
+    expect(report.summary?.vetoCount).toBe(0);
+    expect(report.vetoes.length).toBeGreaterThan(0);
+  });
+
+  it('escalates a rubric below the minimum without turning it into a veto', () => {
+    const weak: ReleaseCritique[] = RELEASE_CRITICS.map((critic) => ({ taskId: critic.taskId, dimension: critic.dimension, verdict: 'revise', rubricScore: 2, summary: 'fraco', findings: [] }));
+    const report = evaluateReleaseGate(gateInput({ critiques: weak }));
+    expect(report.blocked).toBe(false);
+    expect(report.escalations.join(' ')).toMatch(/abaixo do mínimo 3/);
+  });
+
+  it('says out loud when a critic never reported', () => {
+    const report = evaluateReleaseGate(gateInput({ critiques: [] }));
+    expect(report.escalations.filter((line) => line.includes('não entregou parecer'))).toHaveLength(5);
+  });
+});
+
+describe('the finalization stage end to end with the deterministic providers', () => {
+  function stageFor(evidence: EvidenceArtifact[], scheduler?: Scheduler, criticProvider = new FakeReleaseCriticProvider()) {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const version = applier.createRoot(createFixtureIR());
+    const stage = new FinalizationStage({
+      criticProvider,
+      refiner: new PatchRefiner(new FakeReleaseRefiner()),
+      compilerOptions: COMPILER_OPTIONS,
+      ...(scheduler ? { scheduler } : {}),
+    });
+    return { stage, applier, version, evidence };
+  }
+
+  it('compiles, critiques, and stops at an unblocked gate when nothing is wrong', async () => {
+    const { stage, applier, version, evidence } = stageFor([
+      artifact({ id: 'vitest', runner: 'vitest', engine: 'node' }),
+      artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium' }),
+      artifact({ id: 'pw-firefox', runner: 'playwright', engine: 'firefox' }),
+      artifact({ id: 'pw-webkit', runner: 'playwright', engine: 'webkit' }),
+      artifact({ id: 'lh-mobile', runner: 'lighthouse', engine: 'chromium', metrics: { performance: 0.98 } }),
+    ]);
+    const result = await stage.run({ runId: 'run-clean', version, evidence, applier });
+    expect(result.report.blocked).toBe(false);
+    expect(result.cycles).toBe(0);
+    expect(result.critiques).toHaveLength(5);
+    expect(result.report.parity.matched).toBe(true);
+    expect(result.report.summary?.gateAuthority).toBe('none');
+    expect(result.report.escalations).toEqual([]);
+  });
+
+  it('refines once, refuses a third attempt at the same finding, and blocks on the evidence veto', async () => {
+    const events: string[] = [];
+    const { stage, applier, version, evidence } = stageFor([artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', status: 'failed', metrics: { critical: 2, serious: 1 } })]);
+    const result = await stage.run({ runId: 'run-blocked', version, evidence, applier, onEvent: (type) => { events.push(type); } });
+    expect(result.cycles).toBe(1);
+    expect(result.version.id).not.toBe(version.id);
+    expect(result.version.ir.reviewRecord.findings.join(' ')).toMatch(/accessibility:axe-home/);
+    expect(result.report.blocked).toBe(true);
+    expect(result.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
+    expect(result.report.escalations.join(' ')).toMatch(/repetiu em duas rodadas/);
+    expect(events).toContain('release.refined');
+    expect(events).toContain('release.gate.ready');
+  });
+
+  it('keeps the critics inside the scheduler lane limit', async () => {
+    let active = 0;
+    let peak = 0;
+    const slow = new FakeReleaseCriticProvider();
+    const counting = {
+      critique: async (task: AgentTask, definition: Parameters<FakeReleaseCriticProvider['critique']>[1]) => {
+        active += 1; peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return slow.critique(task, definition);
+      },
+    };
+    const { stage, applier, version, evidence } = stageFor([], new Scheduler({ maxActiveClaude: 3 }), counting);
+    await stage.run({ runId: 'run-lanes', version, evidence, applier });
+    expect(peak).toBeLessThanOrEqual(3);
+    expect(peak).toBeGreaterThan(1);
+  });
+});

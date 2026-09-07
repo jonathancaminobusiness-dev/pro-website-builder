@@ -1,0 +1,16 @@
+{
+  "name": "@pwb/stage-finalization",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./dist/index.js" },
+  "types": "./dist/index.d.ts",
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@pwb/domain": "workspace:*",
+    "@pwb/export": "workspace:*",
+    "@pwb/linter": "workspace:*",
+    "@pwb/orchestrator": "workspace:*",
+    "@pwb/providers": "workspace:*",
+    "@pwb/renderer": "workspace:*"
+  }
+}
