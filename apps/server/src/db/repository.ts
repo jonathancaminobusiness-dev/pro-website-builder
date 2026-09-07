@@ -7,21 +7,20 @@ export interface LocalDatabase { sqlite: Database.Database; orm: BetterSQLite3Da
 const migration = `PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, parent_id TEXT, hash TEXT NOT NULL, ir TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tasks (id TEXT NOT NULL, run_id TEXT NOT NULL, attempt INTEGER NOT NULL, stage TEXT NOT NULL, role TEXT NOT NULL, state TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (run_id, id, attempt));
 CREATE TABLE IF NOT EXISTS patches (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, project_id TEXT NOT NULL, stage TEXT NOT NULL, approver_role TEXT NOT NULL, version_id TEXT NOT NULL, version_hash TEXT NOT NULL, decision TEXT NOT NULL, rationale TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, provenance TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);`;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export function openDatabase(filename: string): LocalDatabase {
   const sqlite = new Database(filename);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   const [version] = sqlite.pragma('user_version') as Array<{ user_version: number }>;
-  if ((version?.user_version ?? 0) < SCHEMA_VERSION) sqlite.exec('DROP TABLE IF EXISTS tasks;');
+  if ((version?.user_version ?? 0) < SCHEMA_VERSION) sqlite.exec('DROP TABLE IF EXISTS tasks; DROP TABLE IF EXISTS runs; DROP TABLE IF EXISTS assets;');
   sqlite.exec(migration);
   sqlite.pragma(`user_version = ${SCHEMA_VERSION}`);
   return { sqlite, orm: drizzle(sqlite, { schema }) };
@@ -31,7 +30,7 @@ interface ProjectInput { id: string; name: string; }
 interface VersionInput { id: string; projectId: string; parentId?: string; hash: string; ir: DesignIR; }
 interface ApprovalInput { id: string; runId: string; projectId: string; stage: 'identity' | 'prototype' | 'finalization'; approverRole: 'captain'; versionId: string; versionHash: string; decision: 'approved' | 'rejected'; rationale: string; }
 interface EventInput { id: string; runId: string; type: string; payload: Record<string, unknown>; }
-interface RunInput { id: string; projectId: string; state: string; }
+interface RunInput { id: string; projectId: string; }
 
 export class ProjectRepository {
   private writer = Promise.resolve();

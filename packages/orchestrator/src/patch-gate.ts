@@ -29,4 +29,6 @@ export class PatchGate {
   commit(baseVersionId: string, decision: GateDecision): void {
     this.accepted.set(baseVersionId, [...(this.accepted.get(baseVersionId) ?? []), { key: decision.idempotencyKey, paths: decision.paths }]);
   }
+
+  release(baseVersionId: string): void { this.accepted.delete(baseVersionId); }
 }

@@ -5,10 +5,8 @@ export interface VersionRecord { id: string; hash: string; parentId?: string; ir
 
 export class VersionStore {
   private readonly versions = new Map<string, VersionRecord>();
-  private headId: string | undefined;
-  save(version: VersionRecord): void { if (this.versions.has(version.id)) throw new Error(`Version ${version.id} already exists.`); this.versions.set(version.id, structuredClone(version)); this.headId = version.id; }
+  save(version: VersionRecord): void { if (this.versions.has(version.id)) throw new Error(`Version ${version.id} already exists.`); this.versions.set(version.id, structuredClone(version)); }
   get(id: string): VersionRecord | undefined { const version = this.versions.get(id); return version ? structuredClone(version) : undefined; }
-  head(): VersionRecord | undefined { return this.headId ? this.get(this.headId) : undefined; }
 }
 
 function segments(path: string): string[] { return path.split('/').slice(1).map((segment) => segment.replaceAll('~1', '/').replaceAll('~0', '~')); }
@@ -23,20 +21,23 @@ function equal(a: unknown, b: unknown): boolean { return JSON.stringify(canonica
 function applyOperations(base: DesignIR, patch: Patch): { next: DesignIR; inverse: Patch; diff: string[] } {
   const next = structuredClone(base);
   const inverseOps: Patch['operations'] = [];
+  const written: string[] = [];
   for (const operation of patch.operations) {
     const previous = structuredClone(getAt(next, operation.path));
     if (operation.op === 'test') { if (!equal(previous, operation.value)) throw new Error(`Patch test failed at ${operation.path}.`); continue; }
-    if (operation.op === 'remove') { removeAt(next, operation.path); inverseOps.unshift({ op: 'add', path: operation.path, value: previous }); }
+    if (operation.op === 'remove') { removeAt(next, operation.path); inverseOps.unshift({ op: 'add', path: operation.path, value: previous }); written.push(operation.path); }
     else if (operation.op === 'add') {
       const target = addAt(next, operation.path, operation.value);
-      if (target.array) inverseOps.unshift({ op: 'remove', path: siblingPath(operation.path, target.last) });
+      const resolved = target.array ? siblingPath(operation.path, target.last) : operation.path;
+      if (target.array) inverseOps.unshift({ op: 'remove', path: resolved });
       else if (previous === undefined) inverseOps.unshift({ op: 'remove', path: operation.path });
       else inverseOps.unshift({ op: 'replace', path: operation.path, value: previous });
+      written.push(resolved);
     }
-    else { setAt(next, operation.path, operation.value); inverseOps.unshift({ op: 'replace', path: operation.path, value: previous }); }
+    else { setAt(next, operation.path, operation.value); inverseOps.unshift({ op: 'replace', path: operation.path, value: previous }); written.push(operation.path); }
   }
   const validated = designIRSchema.parse(next);
-  return { next: validated, inverse: { ...patch, operations: inverseOps }, diff: patch.touchedPaths };
+  return { next: validated, inverse: { ...patch, operations: inverseOps }, diff: [...new Set(written)] };
 }
 
 export interface DryRun { versionId: string; next: DesignIR; inverse: Patch; diff: string[]; }
@@ -44,7 +45,24 @@ export interface DryRun { versionId: string; next: DesignIR; inverse: Patch; dif
 export class Applier {
   constructor(private readonly store: VersionStore, private readonly gate: PatchGate) {}
   createRoot(ir: DesignIR): VersionRecord { const parsed = designIRSchema.parse(ir); const version: VersionRecord = { id: parsed.meta.versionId, hash: hashJson(parsed), ir: parsed, inverse: { op: 'proposal', operations: [], baseVersionId: parsed.meta.versionId, touchedPaths: [], rationale: 'Root version', confidence: 1, stage: 'identity', role: 'director' } }; this.store.save(version); return version; }
-  private head(): VersionRecord { const head = this.store.head(); if (!head) throw new Error('The version store has no root version yet.'); return head; }
-  dryRun(patch: Patch, allowedPaths: string[]): DryRun { const head = this.head(); this.gate.validate(patch, { currentVersionId: head.id, allowedPaths }); const result = applyOperations(head.ir, patch); return { versionId: head.id, ...result }; }
-  apply(patch: Patch, allowedPaths: string[]): VersionRecord { const head = this.head(); const decision = this.gate.validate(patch, { currentVersionId: head.id, allowedPaths }); const result = applyOperations(head.ir, patch); const versionId = `v-${hashJson(result.next).slice(0, 12)}`; const ir = { ...result.next, meta: { ...result.next.meta, versionId } }; const next: VersionRecord = { id: versionId, hash: hashJson(ir), parentId: head.id, ir, inverse: result.inverse }; this.store.save(next); this.gate.commit(head.id, decision); return next; }
+  private base(versionId: string): VersionRecord { const base = this.store.get(versionId); if (!base) throw new Error(`Version ${versionId} is not in the store.`); return base; }
+  dryRun(patch: Patch, allowedPaths: string[], currentVersionId: string): DryRun { const base = this.base(currentVersionId); this.gate.validate(patch, { currentVersionId: base.id, allowedPaths }); const result = applyOperations(base.ir, patch); return { versionId: base.id, ...result }; }
+  apply(patch: Patch, allowedPaths: string[], currentVersionId: string): VersionRecord {
+    const base = this.base(currentVersionId);
+    const decision = this.gate.validate(patch, { currentVersionId: base.id, allowedPaths });
+    const result = applyOperations(base.ir, patch);
+    const versionId = `v-${hashJson(result.next).slice(0, 12)}`;
+    const existing = this.store.get(versionId);
+    if (existing) { this.gate.commit(base.id, decision); return existing; }
+    const ir = { ...result.next, meta: { ...result.next.meta, versionId } };
+    const next: VersionRecord = { id: versionId, hash: hashJson(ir), parentId: base.id, ir, inverse: result.inverse };
+    this.store.save(next);
+    this.gate.commit(base.id, decision);
+    return next;
+  }
+  rewind(version: VersionRecord): VersionRecord | undefined {
+    if (!version.parentId) return undefined;
+    this.gate.release(version.parentId);
+    return this.store.get(version.parentId);
+  }
 }

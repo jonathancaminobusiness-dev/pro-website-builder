@@ -29,15 +29,19 @@ describe('sqlite persistence', () => {
     const file = join(dir, 'legacy.sqlite');
     const legacy = new Database(file);
     legacy.exec('CREATE TABLE tasks (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, stage TEXT NOT NULL, role TEXT NOT NULL, state TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL);');
+    legacy.exec('CREATE TABLE runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);');
+    legacy.exec('CREATE TABLE assets (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, provenance TEXT NOT NULL);');
     legacy.prepare('INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)').run('task-identity', 'run-old', 'identity', 'director', 'queued', 'v0', '{}');
     legacy.close();
     const db = openDatabase(file);
     const repo = new ProjectRepository(db);
     const task = { id: 'task-identity', attempt: 2, stage: 'identity' as const, role: 'director' as const, state: 'queued' as const, lane: 'claude' as const, baseVersionId: 'v1', inputDigest: 'digest', promptVersion: '1', modelAlias: 'fake', deadlineMs: 1000, allowedPaths: ['/reviewRecord'], documentSlice: { '/identity': createFixtureIR().identity }, brief: 'fixture' };
+    await repo.createRun({ id: 'run-new', projectId: 'project-1' });
     await repo.saveTask(task, 'run-new');
     const tasks = (JSON.parse(repo.dump()) as { tasks: Array<{ id: string; run_id: string; attempt: number }> }).tasks;
     expect(tasks.map((row) => [row.id, row.run_id, row.attempt])).toEqual([['task-identity', 'run-new', 2]]);
-    expect((db.sqlite.pragma('user_version') as Array<{ user_version: number }>)[0]?.user_version).toBe(1);
+    expect((db.sqlite.pragma('user_version') as Array<{ user_version: number }>)[0]?.user_version).toBe(2);
+    expect(Object.keys(JSON.parse(repo.dump()) as Record<string, unknown>)).not.toContain('assets');
     db.sqlite.close();
   });
 

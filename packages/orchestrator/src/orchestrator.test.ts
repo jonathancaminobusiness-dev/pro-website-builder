@@ -32,7 +32,7 @@ describe('orchestrator', () => {
     expect(prototypeTask.documentSlice['/pages']).toEqual(ir.pages);
     (identityTask.documentSlice['/pages'] as DesignIR['pages']).routes.length = 0;
     expect(store.get(root.id)!.ir.pages.routes).toHaveLength(3);
-    const next = applier.apply({ op: 'proposal', operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['changed'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'change the document', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'slice-digest' }, ALLOWED);
+    const next = applier.apply({ op: 'proposal', operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['changed'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'change the document', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'slice-digest' }, ALLOWED, root.id);
     const replanned = new RunPlanner(store).plan('run-slice', next.id, 'brief');
     expect(replanned.tasks[0]!.documentSlice['/reviewRecord']).toEqual({ findings: ['changed'], approvals: [] });
     expect(replanned.tasks[0]!.inputDigest).not.toBe(identityTask.inputDigest);
@@ -79,20 +79,20 @@ describe('orchestrator', () => {
     const applier = new Applier(store, gate);
     const root = applier.createRoot(createFixtureIR());
     const broken = { op: 'proposal' as const, operations: [{ op: 'test' as const, path: '/reviewRecord/findings', value: ['never matches'] }, { op: 'replace' as const, path: '/reviewRecord/findings', value: ['one'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'retry-me' };
-    expect(() => applier.apply(broken, ALLOWED)).toThrow(/test failed/i);
+    expect(() => applier.apply(broken, ALLOWED, root.id)).toThrow(/test failed/i);
     const corrected = { ...broken, operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['one'] }] };
-    expect(applier.apply(corrected, ALLOWED).ir.reviewRecord.findings).toEqual(['one']);
+    expect(applier.apply(corrected, ALLOWED, root.id).ir.reviewRecord.findings).toEqual(['one']);
   });
 
-  it('compares a patch base against the store head, not against itself', () => {
+  it("compares a patch base against the run's current version, not against itself", () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
-    const first = applier.apply({ op: 'proposal', operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['first'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'first', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'first' }, ALLOWED);
+    const first = applier.apply({ op: 'proposal', operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['first'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'first', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'first' }, ALLOWED, root.id);
     const stale = { op: 'proposal' as const, operations: [{ op: 'replace' as const, path: '/reviewRecord/approvals', value: ['stale'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/approvals'], rationale: 'stale', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'stale' };
-    expect(() => applier.apply(stale, ALLOWED)).toThrow(/stale patch base/i);
-    expect(store.head()?.id).toBe(first.id);
-    expect(store.head()?.ir.reviewRecord.findings).toEqual(['first']);
+    expect(() => applier.apply(stale, ALLOWED, first.id)).toThrow(/stale patch base/i);
+    expect(store.get(first.id)?.ir.reviewRecord.findings).toEqual(['first']);
+    expect(store.get(root.id)?.ir.reviewRecord.findings).toEqual([]);
   });
 
   it('accepts a test operation whose value differs only in key order', () => {
@@ -103,7 +103,7 @@ describe('orchestrator', () => {
     const { source, author, license, date, hash } = ir.identity.provenance;
     const reordered = { hash, date, license, author, source };
     const patch = { op: 'proposal' as const, operations: [{ op: 'test' as const, path: '/identity/provenance', value: reordered }, { op: 'replace' as const, path: '/reviewRecord/findings', value: ['ok'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'key-order' };
-    expect(applier.apply(patch, ALLOWED).ir.reviewRecord.findings).toEqual(['ok']);
+    expect(applier.apply(patch, ALLOWED, root.id).ir.reviewRecord.findings).toEqual(['ok']);
   });
 
   it('refuses a patch that writes outside the allowed paths of its task', () => {
@@ -111,8 +111,8 @@ describe('orchestrator', () => {
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
     const patch = { op: 'proposal' as const, operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'draft' }], baseVersionId: root.id, touchedPaths: ['/identity/meta/status'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'scoped' };
-    expect(() => applier.apply(patch, ['/reviewRecord'])).toThrow(/not allowed/i);
-    expect(applier.apply(patch, ['/identity']).ir.identity.meta.status).toBe('draft');
+    expect(() => applier.apply(patch, ['/reviewRecord'], root.id)).toThrow(/not allowed/i);
+    expect(applier.apply(patch, ['/identity'], root.id).ir.identity.meta.status).toBe('draft');
   });
 
   it('inserts array elements on add instead of overwriting them', () => {
@@ -120,9 +120,28 @@ describe('orchestrator', () => {
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
     const patch = { op: 'proposal' as const, operations: [{ op: 'add' as const, path: '/reviewRecord/findings/0', value: 'first' }, { op: 'add' as const, path: '/reviewRecord/findings/-', value: 'last' }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'array-add' };
-    const next = applier.apply(patch, ALLOWED);
+    const next = applier.apply(patch, ALLOWED, root.id);
     expect(next.ir.reviewRecord.findings).toEqual(['first', 'last']);
     expect(next.inverse.operations.map((operation) => operation.path)).toEqual(['/reviewRecord/findings/1', '/reviewRecord/findings/0']);
+  });
+
+  it('reports the paths the operations actually wrote, not the ones the agent declared', () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const root = applier.createRoot(createFixtureIR());
+    const patch = { op: 'proposal' as const, operations: [{ op: 'test' as const, path: '/reviewRecord/findings', value: [] }, { op: 'replace' as const, path: '/identity/meta/status', value: 'draft' as const }, { op: 'add' as const, path: '/reviewRecord/findings/-', value: 'noted' }], baseVersionId: root.id, touchedPaths: ['/reviewRecord'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'diff-paths' };
+    expect(applier.dryRun(patch, ALLOWED, root.id).diff).toEqual(['/identity/meta/status', '/reviewRecord/findings/0']);
+  });
+
+  it('reopens a rejected base so the next attempt can propose against it again', () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const root = applier.createRoot(createFixtureIR());
+    const patch = { op: 'proposal' as const, operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['first try'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'first try', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'first-try' };
+    const rejected = applier.apply(patch, ALLOWED, root.id);
+    expect(() => applier.apply(patch, ALLOWED, root.id)).toThrow(/idempotent|overlap/i);
+    expect(applier.rewind(rejected)?.id).toBe(root.id);
+    expect(applier.apply(patch, ALLOWED, root.id).id).toBe(rejected.id);
   });
 
   it('keeps raster jobs on their own semaphore while Claude tasks run in parallel', async () => {
@@ -235,10 +254,10 @@ describe('orchestrator', () => {
     const root = applier.createRoot(createFixtureIR());
     const provider = new FakeModelProvider();
     const proposal = (await provider.propose(task('agent-1', root.id))).proposal!;
-    const dry = applier.dryRun(proposal, ALLOWED);
+    const dry = applier.dryRun(proposal, ALLOWED, root.id);
     expect(dry.versionId).toBe(root.id);
     expect(store.get(root.id)?.ir.reviewRecord.findings).toEqual([]);
-    const next = applier.apply(proposal, ALLOWED);
+    const next = applier.apply(proposal, ALLOWED, root.id);
     expect(next.parentId).toBe(root.id);
     expect(next.id).not.toBe(root.id);
     expect(next.hash).toBe(hashJson(next.ir));

@@ -50,8 +50,7 @@ describe('phase 0 fixture run', () => {
     const tasks = (JSON.parse(repository.dump()) as { tasks: Array<{ id: string; stage: string; base_version_id: string }> }).tasks;
     const identityTasks = tasks.filter((task) => task.stage === 'identity');
     expect(identityTasks).toHaveLength(2);
-    expect(new Set(identityTasks.map((task) => task.base_version_id)).size).toBe(2);
-    expect(identityTasks.map((task) => task.base_version_id)).toContain(rejected.currentVersion.id);
+    expect(identityTasks.map((task) => task.base_version_id)).toEqual([rejected.currentVersion.id, rejected.currentVersion.id]);
     expect((await run.runAll()).status).toBe('succeeded');
     db.sqlite.close();
   });
@@ -74,6 +73,55 @@ describe('phase 0 fixture run', () => {
     expect(attempted).toEqual(['identity#1', 'identity#2', 'prototype#1']);
     const events = (await repository.listEvents('run-order')).map((event) => event.type);
     expect(events.indexOf('approval.recorded')).toBeLessThan(events.lastIndexOf('task.started'));
+    db.sqlite.close();
+  });
+
+  it('records the finalization approval only after the export succeeds', async () => {
+    const db = openDatabase(':memory:');
+    const repository = new ProjectRepository(db);
+    const fake = new FakeModelProvider();
+    const unlicensed: ModelProvider = {
+      async propose(task, signal) {
+        if (task.stage !== 'finalization') return fake.propose(task, signal);
+        return { taskId: task.id, status: 'succeeded', summary: 'Attach an asset', proposal: { op: 'proposal', operations: [{ op: 'add', path: '/assets/items/-', value: { id: 'unlicensed', kind: 'raster', uri: 'higgsfield://x', alt: 'Sem licença', provenance: { source: 'higgsfield', author: 'model', license: '', date: '2026-09-06', hash: 'x' }, status: 'ready' } }], baseVersionId: task.baseVersionId, touchedPaths: ['/assets/items'], rationale: 'Attach the raster asset', confidence: 1, stage: task.stage, role: task.role, idempotencyKey: 'unlicensed-asset' } };
+      },
+    };
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-license-')), 'exports'), provider: unlicensed });
+    await run.initialize('run-license');
+    await run.runNext();
+    await run.approve('identity', 'captain');
+    await run.runNext();
+    await run.approve('prototype', 'captain');
+    expect((await run.runNext()).currentStage).toBe('finalization');
+    await expect(run.approve('finalization', 'captain')).rejects.toThrow(/license/i);
+    await expect(run.approve('finalization', 'captain')).rejects.toThrow(/license/i);
+    expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization')).toHaveLength(0);
+    expect(run.snapshot().status).toBe('needs_review');
+    const recorded = (await repository.listEvents('run-license')).filter((event) => event.type === 'approval.recorded' && event.payload.stage === 'finalization');
+    expect(recorded).toHaveLength(0);
+    db.sqlite.close();
+  });
+
+  it('drops a rejected proposal from the document the re-run starts from', async () => {
+    const db = openDatabase(':memory:');
+    const proposer: ModelProvider = {
+      async propose(task) {
+        const name = task.attempt === 1 ? 'rejected' : 'kept';
+        return { taskId: task.id, status: 'succeeded', summary: `Add ${name}`, proposal: { op: 'proposal', operations: [{ op: 'add', path: `/identity/tokens/color/${name}`, value: { $value: '#123456', $type: 'color' } }], baseVersionId: task.baseVersionId, touchedPaths: [`/identity/tokens/color/${name}`], rationale: `Add the ${name} token`, confidence: 1, stage: task.stage, role: task.role, idempotencyKey: `token-${task.attempt}` } };
+      },
+    };
+    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-rewind-')), 'exports'), provider: proposer });
+    await run.initialize('run-rewind');
+    const rootId = run.snapshot().currentVersion.id;
+    const proposed = await run.runNext();
+    expect(proposed.currentVersion.ir.identity.tokens.color).toHaveProperty('rejected');
+    const rejected = await run.reject('identity', 'captain');
+    expect(rejected.currentVersion.id).toBe(rootId);
+    expect(rejected.currentVersion.ir.identity.tokens.color).not.toHaveProperty('rejected');
+    const rerun = await run.runNext();
+    expect(rerun.currentStage).toBe('identity');
+    expect(rerun.currentVersion.ir.identity.tokens.color).toHaveProperty('kept');
+    expect(rerun.currentVersion.ir.identity.tokens.color).not.toHaveProperty('rejected');
     db.sqlite.close();
   });
 

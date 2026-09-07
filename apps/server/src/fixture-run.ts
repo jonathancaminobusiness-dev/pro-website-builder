@@ -65,7 +65,7 @@ export class FixtureRun {
     this.runIdentifier = runId;
     const ir = createFixtureIR();
     await ignoringDuplicate(this.options.repository.createProject({ id: ir.meta.projectId, name: 'Fixture project' }));
-    await ignoringDuplicate(this.options.repository.createRun({ id: runId, projectId: ir.meta.projectId, state: 'queued' }));
+    await ignoringDuplicate(this.options.repository.createRun({ id: runId, projectId: ir.meta.projectId }));
     this.currentVersion = this.applier.createRoot(ir);
     await ignoringDuplicate(this.options.repository.saveVersion({ id: this.currentVersion.id, projectId: ir.meta.projectId, hash: this.currentVersion.hash, ir: this.currentVersion.ir }));
     this.rendered = renderDesign(ir);
@@ -95,16 +95,17 @@ export class FixtureRun {
     this.requireInitialized();
     if (approverRole !== 'captain') throw new Error('Only the captain can approve v1 gates.');
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting approval.`);
+    const manifest = stage === 'finalization' ? await exportStatic(this.rendered, this.currentVersion.ir, this.options.exportRoot) : undefined;
     const approval: Approval = { id: `${this.runId()}-${stage}-approval`, stage, approverRole: 'captain', versionId: this.currentVersion.id, versionHash: this.currentVersion.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
-    this.approvals.push(approval);
     await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
+    this.approvals.push(approval);
     await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
-    if (stage === 'finalization') {
-      this.exportManifest = await exportStatic(this.rendered, this.currentVersion.ir, this.options.exportRoot);
-      this.stageIndex += 1;
+    this.stageIndex += 1;
+    if (manifest) {
+      this.exportManifest = manifest;
       this.status = 'succeeded';
-      await this.record('run.finished', { status: 'succeeded', digest: this.exportManifest.digest });
-    } else { this.stageIndex += 1; this.currentStage = null; this.status = 'queued'; }
+      await this.record('run.finished', { status: 'succeeded', digest: manifest.digest });
+    } else { this.currentStage = null; this.status = 'queued'; }
     this.openGate('approved');
     return this.snapshot();
   }
@@ -114,10 +115,17 @@ export class FixtureRun {
     if (approverRole !== 'captain') throw new Error('Only the captain can reject v1 gates.');
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting review.`);
     const rejection: Approval = { id: `${this.runId()}-${stage}-rejection-${this.approvals.length}`, stage, approverRole: 'captain', versionId: this.currentVersion.id, versionHash: this.currentVersion.hash, decision: 'rejected', rationale, createdAt: new Date().toISOString() };
-    this.approvals.push(rejection);
     await ignoringDuplicate(this.options.repository.createApproval({ ...rejection, runId: this.runId(), projectId: this.projectId() }));
+    this.approvals.push(rejection);
     this.status = 'rejected';
     await this.record('approval.recorded', { stage, decision: 'rejected', versionId: rejection.versionId });
+    const parent = this.applier.rewind(this.currentVersion);
+    if (parent) {
+      this.currentVersion = parent;
+      this.rendered = renderDesign(parent.ir);
+      this.lintErrorCount = lintDesign(parent.ir).errorCount;
+      await this.record('version.rewound', { stage, rejectedVersionId: rejection.versionId, versionId: parent.id });
+    }
     return this.snapshot();
   }
 
@@ -200,8 +208,8 @@ export class FixtureRun {
       }
       let next: VersionRecord;
       try {
-        renderDesign(this.applier.dryRun(proposal, current.allowedPaths).next);
-        next = this.applier.apply(proposal, current.allowedPaths);
+        renderDesign(this.applier.dryRun(proposal, current.allowedPaths, this.currentVersion.id).next);
+        next = this.applier.apply(proposal, current.allowedPaths, this.currentVersion.id);
       } catch (error) {
         this.reported.add(`${current.id}#${current.attempt}`);
         await this.record('task.failed', { taskId: current.id, stage: current.stage, attempt: current.attempt, reason: error instanceof Error ? error.message : 'The proposal did not validate.' });
