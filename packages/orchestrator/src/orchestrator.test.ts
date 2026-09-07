@@ -6,14 +6,14 @@ import { Applier, PatchGate, RunPlanner, Scheduler, VersionStore } from './index
 const ALLOWED = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
 function task(id: string, baseVersionId = 'v0', overrides: Partial<AgentTask> = {}): AgentTask {
-  return { id, stage: 'identity', role: 'director', state: 'queued', lane: 'claude', baseVersionId, inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake', deadlineMs: 1000, allowedPaths: ['/reviewRecord'], brief: 'fixture', ...overrides };
+  return { id, attempt: 1, stage: 'identity', role: 'director', state: 'queued', lane: 'claude', baseVersionId, inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake', deadlineMs: 1000, allowedPaths: ['/reviewRecord'], brief: 'fixture', ...overrides };
 }
 
 describe('orchestrator', () => {
-  it('creates the fixed identity to prototype to finalization DAG', () => {
+  it('plans the fixed identity to prototype to finalization stage order', () => {
     const plan = new RunPlanner().plan('run-1', 'v0', 'brief');
     expect(plan.tasks.map((item) => item.stage)).toEqual(['identity', 'prototype', 'finalization']);
-    expect(plan.edges).toEqual([['task-identity', 'task-prototype'], ['task-prototype', 'task-finalization']]);
+    expect(plan.tasks.map((item) => item.id)).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
   });
 
   it('enforces the configured concurrent task limit', async () => {
@@ -127,42 +127,6 @@ describe('orchestrator', () => {
     expect((result.results[0]?.error as Error).message).toMatch(/deadline/i);
     expect(aborted).toBe(true);
     expect(result.cancelled).toBe(false);
-  });
-
-  it('starts a stage only after the stage it depends on has succeeded', async () => {
-    const plan = new RunPlanner().plan('run-dag', 'v0', 'brief');
-    const scheduler = new Scheduler({ maxActiveClaude: 3 });
-    const started: string[] = [];
-    const finished: string[] = [];
-    let concurrent = 0;
-    let peak = 0;
-    const result = await scheduler.run(plan.tasks, async (item) => {
-      started.push(item.id);
-      concurrent += 1; peak = Math.max(peak, concurrent);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      finished.push(item.id);
-      concurrent -= 1;
-      return item.stage;
-    }, { edges: plan.edges });
-    expect(peak).toBe(1);
-    expect(finished).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
-    for (const [dependency, dependent] of plan.edges) {
-      expect(started.indexOf(dependent)).toBeGreaterThan(finished.indexOf(dependency));
-    }
-    expect(result.results.map((item) => item.state)).toEqual(['succeeded', 'succeeded', 'succeeded']);
-  });
-
-  it('cancels the stages that depend on a stage which did not succeed', async () => {
-    const plan = new RunPlanner().plan('run-dag', 'v0', 'brief');
-    const result = await new Scheduler().run(plan.tasks, async (item) => {
-      if (item.stage === 'identity') throw new Error('director failed');
-      return item.stage;
-    }, { edges: plan.edges });
-    expect(result.results.map((item) => [item.task.id, item.state])).toEqual([
-      ['task-identity', 'failed'],
-      ['task-prototype', 'cancelled'],
-      ['task-finalization', 'cancelled'],
-    ]);
   });
 
   it('creates immutable versions and preserves the parent on cancel/restart', async () => {

@@ -6,7 +6,9 @@ export interface PreviewServer { server: Server; origin: string; start(): Promis
 
 export function createPreviewServer(getRendered: (versionId: string) => RenderedDocument | undefined, port = 4311): PreviewServer {
   const server = createServer((request, response) => {
-    const pathname = new URL(request.url ?? '/', PREVIEW_ORIGIN).pathname;
+    let pathname: string;
+    try { pathname = new URL(request.url ?? '/', PREVIEW_ORIGIN).pathname; }
+    catch { response.writeHead(400, previewHeaders()).end('Malformed request target'); return; }
     const requested = /^\/preview\/([^/]+)(\/.*)?$/.exec(pathname);
     if (!requested) { response.writeHead(404, previewHeaders()).end('Preview unavailable'); return; }
     const document = getRendered(requested[1]!);

@@ -40,6 +40,8 @@ export class FixtureRun {
   private rendered!: RenderedDocument;
   private currentStage: Stage | null = null;
   private stageIndex = 0;
+  private stageAttempt = 0;
+  private stageAbort: AbortController | undefined;
   private status: FixtureStatus = 'queued';
   private cancelRequested = false;
   private exportManifest: ExportManifest | undefined;
@@ -71,13 +73,18 @@ export class FixtureRun {
     const plan = this.planner.plan(this.runId(), this.currentVersion.id, 'Fixture briefing: compile an original identity into a production site.');
     const planned = plan.tasks[this.stageIndex];
     if (!planned) return this.snapshot();
-    const task = { ...planned, id: `${this.runId()}-${planned.id}-${this.currentVersion.id}`, baseVersionId: this.currentVersion.id };
+    this.stageAttempt += 1;
+    const task = { ...planned, attempt: this.stageAttempt, baseVersionId: this.currentVersion.id };
     this.currentStage = task.stage;
     await ignoringDuplicate(this.options.repository.saveTask(task, this.runId()));
     await this.record('task.queued', { taskId: task.id, stage: task.stage, baseVersionId: task.baseVersionId });
     if (!this.started) { this.started = true; await this.record('run.started', { stage: task.stage }); }
     await this.record('task.started', { taskId: task.id, stage: task.stage });
-    const scheduled = await this.scheduler.run([task], (item, signal) => this.options.provider.propose(item, signal));
+    const stageAbort = new AbortController();
+    this.stageAbort = stageAbort;
+    const scheduled = await this.scheduler
+      .run([task], (item, signal) => this.options.provider.propose(item, signal), { signal: stageAbort.signal })
+      .finally(() => { this.stageAbort = undefined; });
     const outcome = scheduled.results[0];
     if (this.cancelRequested || outcome?.state === 'cancelled') return this.cancelStage(task);
     const proposal = outcome?.state === 'succeeded' ? outcome.value?.proposal : undefined;
@@ -122,6 +129,7 @@ export class FixtureRun {
     this.approvals.push(approval);
     await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
     await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
+    this.stageAttempt = 0;
     if (stage === 'finalization') {
       this.exportManifest = await exportStatic(this.rendered, this.currentVersion.ir, this.options.exportRoot);
       this.stageIndex += 1;
@@ -150,6 +158,7 @@ export class FixtureRun {
     this.statusBeforeCancel = this.status;
     this.cancelRequested = true;
     this.status = 'cancelled';
+    this.stageAbort?.abort();
     await this.record('run.cancelled', { status: this.statusBeforeCancel, stage: this.currentStage });
     return this.snapshot();
   }

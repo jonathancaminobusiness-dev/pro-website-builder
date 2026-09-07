@@ -100,6 +100,26 @@ describe('phase 0 fixture run', () => {
     db.sqlite.close();
   });
 
+  it('aborts the signal the in-flight stage worker holds when the captain cancels', async () => {
+    const db = openDatabase(':memory:');
+    let run!: FixtureRun;
+    let abortedWhileRunning = false;
+    const watcher: ModelProvider = {
+      async propose(task, signal) {
+        await run.cancel();
+        abortedWhileRunning = signal?.aborted ?? false;
+        return { taskId: task.id, status: 'failed', summary: 'The captain cancelled the stage.' };
+      },
+    };
+    run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-abort-')), 'exports'), provider: watcher });
+    await run.initialize('run-abort');
+    const cancelled = await run.runNext();
+    expect(abortedWhileRunning).toBe(true);
+    expect(cancelled.status).toBe('cancelled');
+    expect((await run.restart()).status).toBe('queued');
+    db.sqlite.close();
+  });
+
   it('never commits a token rename that the identity contract no longer resolves', async () => {
     const db = openDatabase(':memory:');
     const renamer: ModelProvider = {

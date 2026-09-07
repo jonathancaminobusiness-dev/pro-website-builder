@@ -32,7 +32,6 @@ function cssValue(value: string | number | boolean, values: Record<string, strin
     if (!(path in values)) throw new Error(`Unresolved token reference ${value} on ${node.id}.${key}`);
     return `var(${cssCustomPropertyName(path)})`;
   }
-  if (node.signedException) return String(value);
   throw new Error(`Raw visual value is not token-backed: ${node.id}.${key}`);
 }
 

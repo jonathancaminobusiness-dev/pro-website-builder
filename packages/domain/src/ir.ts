@@ -6,7 +6,7 @@ export const visualValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 export const visualPropKeys = new Set(['color', 'background', 'backgroundColor', 'padding', 'paddingBlock', 'paddingInline', 'gap', 'radius', 'font', 'fontSize', 'shadow', 'motion', 'width', 'height', 'margin', 'maxWidth']);
 
 export const routeSchema = z.string()
-  .regex(/^\/[A-Za-z0-9\-._~/]*$/, 'Route must start with / and use unreserved path characters.')
+  .regex(/^\/$|^(?:\/[A-Za-z0-9\-._~]+)+$/, 'Route must start with / and use non-empty unreserved path segments without a trailing slash.')
   .refine((route) => route.split('/').every((segment) => segment !== '.' && segment !== '..'), 'Route segments must not traverse directories.');
 
 export const pageNodeSchema = z.object({
@@ -16,7 +16,6 @@ export const pageNodeSchema = z.object({
   props: z.record(visualValueSchema),
   slots: z.record(z.array(z.string())).default({}),
   responsive: z.array(z.object({ container: z.string(), rule: z.string() })).default([]),
-  signedException: z.object({ reason: z.string(), approver: z.literal('captain'), signature: z.string() }).optional(),
 });
 
 export function slotChildIds(node: { slots: Record<string, string[]> }): string[] {

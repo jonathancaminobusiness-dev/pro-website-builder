@@ -27,7 +27,7 @@ describe('deterministic renderer', () => {
     expect(html.indexOf('data-node-id="home-title"')).toBeLessThan(html.indexOf('data-node-id="home-proof"'));
   });
 
-  it('refuses raw visual values unless a signed exception exists', () => {
+  it('refuses raw visual values that no token backs', () => {
     const ir = createFixtureIR();
     ir.pages.routes[0]!.nodes[0]!.props.color = '#ff00ff';
     expect(() => renderDesign(ir)).toThrow(/token/i);

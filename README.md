@@ -17,12 +17,12 @@ Each stage stops at a captain-only gate in v1. Agents return schema-validated JS
 - Node HTTP + SQLite WAL + Drizzle for `apps/server`.
 - `packages/domain` owns Zod contracts, DTCG-compatible tokens, JSON Schema, and immutable document fixtures.
 - `packages/renderer` is pure TypeScript and emits semantic HTML/CSS with cascade layers, custom properties, container queries, and reduced-motion handling.
-- `packages/orchestrator` owns the fixed stage DAG, semaphores, deadlines, cancellation, patch CAS, immutable versions, and events.
+- `packages/orchestrator` owns the fixed stage plan, semaphores, deadlines, cancellation, patch CAS, immutable versions, and events. In Fase 0 the stage order is the plan's stage index plus the captain gate: the run hands the scheduler one task per stage, so lane limits and deadlines apply without a dependency graph.
 - `packages/providers` isolates the owner's local Claude Code binary, optional Higgsfield MCP, and deterministic fakes.
 - `packages/render-hub` uses Playwright Chromium for responsive screenshots, DOM/accessibility data, and deterministic QA.
 - `packages/export` writes content-addressed static routes and a license/provenance manifest.
 
-The renderer refuses raw visual values. Colors, dimensions, font settings, radii, shadows, and motion must resolve through tokens unless a captain-signed node exception exists. Preview is served on port `4311`, separate from the Studio/API origin, and the Studio iframe uses `sandbox` without `allow-same-origin`.
+The renderer refuses raw visual values. Colors, dimensions, font settings, radii, shadows, and motion must resolve through tokens, with no exception path in Fase 0. Preview is served on port `4311`, separate from the Studio/API origin, and the Studio iframe uses `sandbox` without `allow-same-origin`.
 
 ## Run locally
 

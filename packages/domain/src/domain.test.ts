@@ -47,6 +47,15 @@ describe('domain contracts', () => {
     expect(() => designIRSchema.parse(duplicateId)).toThrow(/share the id page-home/i);
   });
 
+  it('rejects routes that are not already the path the export writes', () => {
+    const trailing = createFixtureIR();
+    trailing.pages.routes[1]!.route = '/proof/';
+    expect(() => designIRSchema.parse(trailing)).toThrow(/segments/i);
+    const interior = createFixtureIR();
+    interior.pages.routes[1]!.route = '//proof';
+    expect(() => designIRSchema.parse(interior)).toThrow(/segments/i);
+  });
+
   it('rejects an identity without the visual contract fields', () => {
     expect(() => identitySpecSchema.parse({ meta: { id: 'bad' } })).toThrow();
   });

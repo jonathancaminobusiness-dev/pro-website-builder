@@ -15,9 +15,11 @@ export function createApiServer(options: ApiOptions): Server {
   return createServer(async (request, response) => {
     response.setHeader('Access-Control-Allow-Origin', allowedOrigin(request.headers.origin));
     if (request.method === 'OPTIONS') { response.writeHead(204, corsHeaders).end(); return; }
-    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
-    if (request.method === 'POST' && !allowedOrigins.has(request.headers.origin ?? '')) { send(response, 403, { error: 'State-changing requests must come from the local studio origin.' }); return; }
     try {
+      let pathname: string;
+      try { pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname; }
+      catch { send(response, 400, { error: 'Malformed request target.' }); return; }
+      if (request.method === 'POST' && !allowedOrigins.has(request.headers.origin ?? '')) { send(response, 403, { error: 'State-changing requests must come from the local studio origin.' }); return; }
       if (request.method === 'GET' && pathname === '/health') { response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', ...corsHeaders }).end('ok'); return; }
       if (request.method === 'POST' && pathname === '/api/runs') {
         const input = await body(request);

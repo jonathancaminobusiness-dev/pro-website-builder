@@ -6,18 +6,18 @@ export interface LintFinding extends LintIssue { id: string; stage: 'identity' |
 export interface LintRule { id: string; stage: LintFinding['stage']; severity: FindingSeverity; detect: (ir: DesignIR) => LintIssue[]; }
 export interface LintReport { findings: LintFinding[]; errorCount: number; warningCount: number; }
 
-function* visualProps(ir: DesignIR): Generator<{ path: string; value: string | number | boolean; signedException: boolean }> {
+function* visualProps(ir: DesignIR): Generator<{ path: string; value: string | number | boolean }> {
   for (const page of ir.pages.routes) for (const node of page.nodes) for (const [key, value] of Object.entries(node.props)) {
     if (!visualPropKeys.has(key)) continue;
-    yield { path: `/pages/routes/${page.id}/nodes/${node.id}/props/${key}`, value, signedException: Boolean(node.signedException) };
+    yield { path: `/pages/routes/${page.id}/nodes/${node.id}/props/${key}`, value };
   }
 }
 
 function tokenOnly(ir: DesignIR): LintIssue[] {
   const issues: LintIssue[] = [];
-  for (const { path, value, signedException } of visualProps(ir)) {
+  for (const { path, value } of visualProps(ir)) {
     const isRef = typeof value === 'string' && /^\{[^}]+\}$/.test(value);
-    if (!isRef && !signedException) issues.push({ path, message: 'Visual values must resolve from a token or carry a captain-signed exception.' });
+    if (!isRef) issues.push({ path, message: 'Visual values must resolve from a token.' });
   }
   return issues;
 }

@@ -7,7 +7,7 @@ export const taskStateSchema = z.enum(['queued', 'running', 'cancel_requested', 
 export const taskLaneSchema = z.enum(['claude', 'raster']);
 
 export const agentTaskSchema = z.object({
-  id: z.string(), stage: stageSchema, role: taskRoleSchema, state: taskStateSchema, lane: taskLaneSchema.default('claude'), baseVersionId: z.string(), inputDigest: z.string(), promptVersion: z.string(), modelAlias: z.string(), deadlineMs: z.number().positive(), allowedPaths: z.array(z.string()), brief: z.string(),
+  id: z.string(), attempt: z.number().int().positive(), stage: stageSchema, role: taskRoleSchema, state: taskStateSchema, lane: taskLaneSchema.default('claude'), baseVersionId: z.string(), inputDigest: z.string(), promptVersion: z.string(), modelAlias: z.string(), deadlineMs: z.number().positive(), allowedPaths: z.array(z.string()), brief: z.string(),
 });
 
 export const patchOperationSchema = z.object({ op: z.enum(['add', 'replace', 'remove', 'test']), path: z.string().regex(/^\//), value: z.unknown().optional() });

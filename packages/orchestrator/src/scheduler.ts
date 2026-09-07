@@ -12,17 +12,11 @@ export class Scheduler {
   readonly maxActiveRaster: number;
   constructor(options: SchedulerOptions = {}) { this.maxActiveClaude = options.maxActiveClaude ?? 3; this.maxActiveRaster = options.maxActiveRaster ?? 1; }
 
-  async run<T>(tasks: AgentTask[], worker: (task: AgentTask, signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; edges?: [string, string][] } = {}): Promise<ScheduleResult<T>> {
+  async run<T>(tasks: AgentTask[], worker: (task: AgentTask, signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal } = {}): Promise<ScheduleResult<T>> {
     const controller = new AbortController();
     const relay = () => controller.abort();
     options.signal?.addEventListener('abort', relay, { once: true });
     const results: ScheduleResult<T>['results'] = [];
-    const succeeded = new Set<string>();
-    const ids = new Set(tasks.map((task) => task.id));
-    const dependencies = new Map<string, string[]>();
-    for (const [from, to] of options.edges ?? []) {
-      if (ids.has(from) && ids.has(to)) dependencies.set(to, [...(dependencies.get(to) ?? []), from]);
-    }
 
     const runOne = async (task: AgentTask): Promise<void> => {
       if (controller.signal.aborted) { results.push({ task: { ...task, state: 'cancelled' }, state: 'cancelled' }); return; }
@@ -36,7 +30,6 @@ export class Scheduler {
       try {
         const value = await Promise.race([worker({ ...task, state: 'running' }, taskController.signal), deadline]);
         results.push({ task: { ...task, state: 'succeeded' }, value, state: 'succeeded' });
-        succeeded.add(task.id);
       } catch (error) {
         const expired = error instanceof DeadlineExceededError;
         const cancelled = !expired && (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError'));
@@ -57,9 +50,8 @@ export class Scheduler {
       let started = false;
       for (let index = 0; index < pending.length;) {
         const task = pending[index]!;
-        const deps = dependencies.get(task.id) ?? [];
         const lane = laneOf(task);
-        if (deps.every((dep) => succeeded.has(dep)) && active[lane] < limits[lane]) {
+        if (active[lane] < limits[lane]) {
           pending.splice(index, 1);
           active[lane] += 1;
           const promise = runOne(task).then(() => { active[lane] -= 1; running.delete(promise); });
