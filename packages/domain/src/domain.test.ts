@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   designIRSchema,
+  documentRules,
   identitySpecSchema,
   patchSchema,
   createFixtureIdentity,
@@ -58,6 +59,21 @@ describe('domain contracts', () => {
     const interior = createFixtureIR();
     interior.pages.routes[1]!.route = '//proof';
     expect(() => designIRSchema.parse(interior)).toThrow(/segments/i);
+  });
+
+  it('quotes the rule it enforces for every structural rule the worker contract states', () => {
+    const violations: Record<keyof typeof documentRules, () => unknown> = {
+      mediaFigure: () => { const ir = createFixtureIR(); (ir.pages.routes[0]!.nodes[2]! as { semantic: string }).semantic = 'figure'; return ir; },
+      phrasingLeaf: () => { const ir = createFixtureIR(); ir.pages.routes[0]!.nodes[1]!.slots = { children: ['home-proof'] }; return ir; },
+      pageGraph: () => { const ir = createFixtureIR(); ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title'] }; return ir; },
+      uniquePages: () => { const ir = createFixtureIR(); ir.pages.routes[1]!.route = '/contact'; return ir; },
+    };
+    for (const [rule, build] of Object.entries(violations) as Array<[keyof typeof documentRules, () => unknown]>) {
+      const result = designIRSchema.safeParse(build());
+      expect(result.success).toBe(false);
+      const messages = result.success ? [] : result.error.issues.map((issue) => issue.message);
+      expect(messages.some((message) => message.startsWith(documentRules[rule]))).toBe(true);
+    }
   });
 
   it('rejects a node semantic the renderer would not emit for that kind', () => {

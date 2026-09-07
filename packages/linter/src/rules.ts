@@ -1,4 +1,4 @@
-import { cssTokenIssues, flattenTokens, phrasingSemantics, resolveTokens, slotChildIds, visualPropKeys, type DesignIR } from '@pwb/domain';
+import { cssTokenIssues, documentRules, flattenTokens, phrasingSemantics, resolveTokens, slotChildIds, visualPropKeys, type DesignIR } from '@pwb/domain';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export interface LintIssue { path: string; message: string; suggestedPatch?: unknown; }
@@ -25,7 +25,7 @@ function tokenOnly(ir: DesignIR): LintIssue[] {
 function phrasingLeaves(ir: DesignIR): LintIssue[] {
   const issues: LintIssue[] = [];
   for (const page of ir.pages.routes) for (const node of page.nodes) {
-    if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/slots`, message: `Node ${node.id} renders as ${node.semantic}, which carries text and cannot contain other nodes.` });
+    if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/slots`, message: `${documentRules.phrasingLeaf} Node ${node.id} renders as ${node.semantic}.` });
   }
   return issues;
 }

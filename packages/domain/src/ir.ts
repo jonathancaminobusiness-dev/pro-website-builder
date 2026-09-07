@@ -19,6 +19,13 @@ export const routeSchema = z.string()
 export const semanticSchema = z.enum(['h1', 'h2', 'h3', 'p', 'section', 'figure', 'div']);
 export const phrasingSemantics = new Set<string>(['h1', 'h2', 'h3', 'p']);
 
+export const documentRules = {
+  mediaFigure: 'A media node renders as figure, and only a media node may declare figure.',
+  phrasingLeaf: 'A node whose semantic is h1, h2, h3 or p carries its own text and must declare no slot children.',
+  pageGraph: 'Node ids are unique within a page, and every node a page lists is reachable exactly once by following slots from its rootNodeId.',
+  uniquePages: 'Page ids and page routes are unique across the document; routes are compared case-insensitively.',
+} as const;
+
 export const pageNodeSchema = z.object({
   id: z.string(),
   kind: nodeKindSchema,
@@ -26,8 +33,8 @@ export const pageNodeSchema = z.object({
   props: nodePropsSchema,
   slots: z.record(z.array(z.string())).default({}),
 }).superRefine((node, ctx) => {
-  if ((node.kind === 'media') !== (node.semantic === 'figure')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `A media node renders as figure and only a media node does, so ${node.kind} cannot be ${node.semantic}.` });
-  if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['slots'], message: `Node ${node.id} renders as ${node.semantic}, which carries text and cannot contain other nodes.` });
+  if ((node.kind === 'media') !== (node.semantic === 'figure')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `${documentRules.mediaFigure} Node ${node.id} is a ${node.kind} declaring ${node.semantic}.` });
+  if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['slots'], message: `${documentRules.phrasingLeaf} Node ${node.id} renders as ${node.semantic}.` });
 });
 
 export function slotChildIds(node: { slots: Record<string, string[]> }): string[] {
@@ -38,22 +45,22 @@ export const pageSchema = z.object({
   id: z.string(), route: routeSchema, title: z.string(), rootNodeId: z.string(), nodes: z.array(pageNodeSchema),
 }).superRefine((page, ctx) => {
   const byId = new Map(page.nodes.map((node) => [node.id, node]));
-  if (byId.size !== page.nodes.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `Page ${page.id} declares duplicate node ids.` });
+  if (byId.size !== page.nodes.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `${documentRules.pageGraph} Page ${page.id} declares duplicate node ids.` });
   const root = byId.get(page.rootNodeId);
-  if (!root) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rootNodeId'], message: `Page ${page.id} has no node ${page.rootNodeId} to use as its root.` }); return; }
+  if (!root) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rootNodeId'], message: `${documentRules.pageGraph} Page ${page.id} has no node ${page.rootNodeId} to use as its root.` }); return; }
   const visited = new Set([root.id]);
   const walk = (node: typeof root): void => {
     for (const childId of slotChildIds(node)) {
       const child = byId.get(childId);
-      if (!child) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `Node ${node.id} references unknown node ${childId}.` }); continue; }
-      if (visited.has(childId)) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `Node ${childId} appears more than once in the page graph.` }); continue; }
+      if (!child) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `${documentRules.pageGraph} Node ${node.id} references unknown node ${childId}.` }); continue; }
+      if (visited.has(childId)) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `${documentRules.pageGraph} Node ${childId} appears more than once in the page graph.` }); continue; }
       visited.add(childId);
       walk(child);
     }
   };
   walk(root);
   for (const node of page.nodes) {
-    if (!visited.has(node.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `Node ${node.id} is not reachable from the page root ${page.rootNodeId}.` });
+    if (!visited.has(node.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['nodes'], message: `${documentRules.pageGraph} Node ${node.id} is not reachable from the page root ${page.rootNodeId}.` });
   }
 });
 
@@ -68,7 +75,7 @@ export const pagesSchema = z.object({ routes: z.array(pageSchema) }).superRefine
     const seen = new Set<string>();
     for (const page of pages.routes) {
       const value = key === 'route' ? page.route.toLowerCase() : page.id;
-      if (seen.has(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Pages must not share the ${key} ${page[key]}.` });
+      if (seen.has(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `${documentRules.uniquePages} Pages must not share the ${key} ${page[key]}.` });
       seen.add(value);
     }
   }
