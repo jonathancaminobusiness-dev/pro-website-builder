@@ -370,12 +370,12 @@ export class IdentityStage {
   private async critique(brief: BriefSpec, signal?: AbortSignal, only?: IdentityAxisBriefId[]): Promise<CritiqueReport[]> {
     const subjects = only ? this.candidates.filter((candidate) => only.includes(candidate.directionId)) : this.candidates;
     const tasks: AgentTask[] = [];
-    const seatOf = new Map<string, { criticId: string; subject: CritiqueReport['subject'] }>();
+    const seatOf = new Map<string, { criticId: string; dimension: CritiqueReport['dimension']; subject: CritiqueReport['subject'] }>();
     for (const critic of identityCritics) {
       if (critic.scope === 'matrix') {
         const first = this.candidates[0];
         if (!first || only) continue;
-        seatOf.set(`identity-critic-${critic.id}`, { criticId: critic.id, subject: { kind: 'matrix' } });
+        seatOf.set(`identity-critic-${critic.id}`, { criticId: critic.id, dimension: critic.dimension, subject: { kind: 'matrix' } });
         tasks.push(this.task({
           id: `identity-critic-${critic.id}`,
           role: 'critic',
@@ -387,7 +387,7 @@ export class IdentityStage {
         continue;
       }
       for (const candidate of subjects) {
-        seatOf.set(`identity-critic-${critic.id}-${candidate.directionId}`, { criticId: critic.id, subject: { kind: 'direction', directionId: candidate.directionId } });
+        seatOf.set(`identity-critic-${critic.id}-${candidate.directionId}`, { criticId: critic.id, dimension: critic.dimension, subject: { kind: 'direction', directionId: candidate.directionId } });
         tasks.push(this.task({
           id: `identity-critic-${critic.id}-${candidate.directionId}`,
           role: 'critic',
@@ -409,10 +409,15 @@ export class IdentityStage {
       // A critic is advisory, so an answer that misses its schema costs its own
       // report and the captain's attention, never the whole stage.
       try {
-        // The critic and the subject are the seat the task was issued for, not
-        // what the answer says it is: attribution is a fact the stage knows.
+        // The critic, its dimension and the subject are the seat the task was
+        // issued for, not what the answer says they are: attribution is a fact
+        // the stage knows. A seat scores only the rubric it was given, so a
+        // score in another dimension is not the seat's to give and is dropped.
         const report = requireArtifact(critiqueReportSchema, result.artifact, result.taskId, 'CritiqueReport');
-        reports.push({ ...report, ...seatOf.get(result.taskId)! });
+        const seat = seatOf.get(result.taskId)!;
+        const scores = report.scores.filter((entry) => entry.dimension === seat.dimension);
+        if (scores.length === 0) throw new StageError(`Critic ${result.taskId} scored no ${seat.dimension}, the only rubric its seat was given.`);
+        reports.push({ ...report, ...seat, scores });
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'The critique did not validate.';
         this.failures.push({ taskId: result.taskId, reason });
@@ -461,7 +466,7 @@ export class IdentityStage {
 
   private async refine(brief: BriefSpec, signal?: AbortSignal): Promise<IdentityCandidate[]> {
     if (this.refinementCyclesUsed >= 1) return this.candidates;
-    const needing = this.candidates.filter((candidate) => candidate.blocking.length > 0 || candidate.lint.errorCount > 0);
+    const needing = this.candidates.filter((candidate) => candidate.blocking.length > 0 || candidate.rubricGaps.length > 0 || candidate.lint.errorCount > 0);
     if (needing.length === 0) return this.candidates;
     this.refinementCyclesUsed += 1;
     const refined = [...this.candidates];
@@ -475,7 +480,7 @@ export class IdentityStage {
         allowedPaths: IDENTITY_ALLOWED_PATHS,
         ir: base.ir,
         baseVersionId: base.id,
-        brief: identityRefinerPrompt({ brief, directionId: candidate.directionId, baseVersionId: base.id, allowedPaths: IDENTITY_ALLOWED_PATHS, identity: base.ir.identity, findings: { critique: candidate.blocking, lint: candidate.lint.findings } }),
+        brief: identityRefinerPrompt({ brief, directionId: candidate.directionId, baseVersionId: base.id, allowedPaths: IDENTITY_ALLOWED_PATHS, identity: base.ir.identity, findings: { critique: candidate.blocking, rubric: candidate.rubricGaps, lint: candidate.lint.findings } }),
       });
       const [result] = await this.dispatch([task], signal);
       if (!result?.proposal) { this.failures.push({ taskId: task.id, reason: 'The refiner produced no proposal; the candidate keeps its findings for the captain.' }); continue; }

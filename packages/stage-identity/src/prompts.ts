@@ -107,6 +107,7 @@ export function identityRefinerPrompt(input: { brief: BriefSpec; directionId: st
     HOUSE_RULES,
     'A repair is small and causal: change a token value, tighten an axis descriptor, add the missing rationale or evidence to a decision, or correct one governed contract field. Do not restructure the identity and do not add tokens the pages do not use.',
     `The blocking findings you must clear:\n${JSON.stringify(input.findings)}`,
+    `A \`rubric\` entry is a finding like any other: the named dimension scored below ${RUBRIC_MINIMUM} and the repair has to raise it in the document, never by arguing with the score.`,
     `The brief and its evidence ids:\n${JSON.stringify(input.brief)}`,
     `The identity to repair:\n${JSON.stringify(input.identity)}`,
     `Answer with an AgentResult whose \`proposal\` is a patch. It must set baseVersionId to ${input.baseVersionId}, declare stage "identity" and role "${stageRoles.identity}", touch only ${input.allowedPaths.join(', ')}, and contain exactly one operation: replace /identity with the repaired IdentitySpec.`,
