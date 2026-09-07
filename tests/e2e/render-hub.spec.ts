@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -87,6 +87,42 @@ test('walks the keyboard to a composed link and vetoes the same page once its fo
     const vetoes = runTier0({ ir, evidence: [blind!.evidence] }).vetoes;
     expect(vetoes.map((veto) => veto.id)).toContain('QA0-FOCUS');
     expect(vetoes.find((veto) => veto.id === 'QA0-FOCUS')!.message).toContain('home-cta');
+  } finally {
+    await preview.close();
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test('rings a visible control when the state hides the first one inside the node it names', async () => {
+  const ir = createFixtureIR();
+  const home = ir.pages.routes[0]!;
+  const link = (id: string, text: string): (typeof home.nodes)[number] => (
+    { id, kind: 'component', semantic: 'link', props: { text, href: '/proof', color: '{color.ink}', font: '{type.body}' }, slots: {}, responsive: [] }
+  );
+  home.nodes.push(link('home-first', 'Ver a prova'), link('home-second', 'Falar com a oficina'));
+  home.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'home-first', 'home-second'] };
+  // Both states hide the same node, so the two captures differ only by which control takes the ring.
+  ir.stateFixtures.ringed = { description: 'Foco no que sobrou', values: { motion: 'full', hidden: 'home-first', focus: 'home-root' } };
+  ir.stateFixtures.ringless = { description: 'Nada focalizável', values: { motion: 'full', hidden: 'home-first', focus: 'home-title' } };
+
+  const rendered = renderDesign(ir, { routePrefix: `/preview/${ir.meta.versionId}` });
+  const preview = createPreviewServer((requested) => requested === ir.meta.versionId ? rendered : undefined, 0);
+  await preview.start();
+  const origin = `http://127.0.0.1:${(preview.server.address() as AddressInfo).port}`;
+  const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-focus-state-'));
+  try {
+    const hub = new RenderHub({ cacheDir });
+    const shot = async (state: string): Promise<Buffer> => {
+      const [capture] = await hub.capture({
+        ir, rendered, baseUrl: origin, previewPrefix: `/preview/${ir.meta.versionId}`,
+        cases: [{ route: '/', width: 1440, state, reducedMotion: false }],
+      });
+      expect(capture!.evidence.nodes.find((node) => node.nodeId === 'home-first')?.displayed).toBe(false);
+      expect(capture!.evidence.nodes.find((node) => node.nodeId === 'home-second')?.displayed).toBe(true);
+      return readFile(capture!.evidence.screenshotPath);
+    };
+    // The named node still holds a visible link, so the focus state has to show its ring.
+    expect((await shot('ringed')).equals(await shot('ringless'))).toBe(false);
   } finally {
     await preview.close();
     await rm(cacheDir, { recursive: true, force: true });

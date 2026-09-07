@@ -24,6 +24,8 @@ export interface CaptureRequest {
 
 /** Keyboard focus is walked, never scripted, so `:focus-visible` behaves as it does for a real user. */
 const MAX_TAB_STOPS = 25;
+/** What a keyboard can reach. Passed into the page, so the guard and the focus call name one set. */
+const FOCUSABLE_SELECTOR = 'a[href], button, input, select, textarea, [tabindex]';
 /**
  * TypeScript transpilers that keep function names (esbuild, tsx) wrap every function in a `__name`
  * helper, and that helper travels with a function Playwright serializes into the page. This identity
@@ -144,21 +146,18 @@ export class RenderHub {
   private async focusNode(page: Page, nodeId: string): Promise<void> {
     const target = page.locator(`[data-node-id="${nodeId}"]`).first();
     if (await target.count() === 0) return;
-    const reachable = await target.evaluate((element: HTMLElement) => {
-      const selector = 'a[href], button, input, select, textarea, [tabindex]';
-      const focusable = element.matches(selector) ? element : element.querySelector<HTMLElement>(selector);
-      return focusable !== null && focusable.checkVisibility();
-    });
-    // A state may hide the node it names, or name one with nothing focusable in it; pressing Tab
+    const reachable = await target.evaluate((element: HTMLElement, selector: string) =>
+      [element, ...element.querySelectorAll<HTMLElement>(selector)].some((candidate) => candidate.matches(selector) && candidate.checkVisibility()),
+    FOCUSABLE_SELECTOR);
+    // A state may hide the controls of the node it names, or name one that holds none; pressing Tab
     // first would ring whatever the keyboard reached and label that screenshot as this node's focus.
     if (!reachable) return;
     // `:focus-visible` only answers a keyboard, so the state screenshot has to be preceded by a real
     // Tab; scripting focus on a cold page would capture the control without the ring a visitor sees.
     await page.keyboard.press('Tab');
-    await target.evaluate((element: HTMLElement) => {
-      const focusable = element.matches('a[href], button, input, select, textarea, [tabindex]') ? element : element.querySelector<HTMLElement>('a[href], button, input, select, textarea, [tabindex]');
-      focusable?.focus();
-    });
+    await target.evaluate((element: HTMLElement, selector: string) => {
+      [element, ...element.querySelectorAll<HTMLElement>(selector)].find((candidate) => candidate.matches(selector) && candidate.checkVisibility())?.focus();
+    }, FOCUSABLE_SELECTOR);
   }
 
   private async walkFocusOrder(page: Page): Promise<FocusSample[]> {

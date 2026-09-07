@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RenderHub } from '@pwb/render-hub';
+import { renderDesign } from '@pwb/renderer';
 import { RenderHubEvidenceSource } from '@pwb/stage-prototype';
 import { createApiServer, RunConflictError } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
@@ -59,7 +60,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
     },
   });
   const preview = createPreviewServer((versionId) => {
-    for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return snapshot.rendered; }
+    for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` }); }
     return prototypes.preview(versionId);
   }, previewPort);
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);
