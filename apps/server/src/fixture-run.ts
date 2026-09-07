@@ -63,10 +63,10 @@ export class FixtureRun {
   /**
    * The release refiner writes through the run's own versions, but never shares
    * the stage gate's compare-and-swap bookkeeping: it proposes against the
-   * prototype-approved version, which the finalization stage already patched.
+   * version the finalization stage produced, which that gate already patched.
    */
   private readonly releaseGate = new PatchGate();
-  private releaseVersion: VersionRecord | undefined;
+  private finalizationVersion: VersionRecord | undefined;
 
   constructor(private readonly options: { repository: ProjectRepository; exportRoot: string; provider: ModelProvider; siteUrl?: string; siteName?: string }) {}
 
@@ -140,7 +140,7 @@ export class FixtureRun {
     this.status = 'queued';
     let manifest: ReleaseManifest | undefined;
     try {
-      manifest = stage === 'finalization' ? await this.writeRelease() : undefined;
+      manifest = stage === 'finalization' ? await this.writeRelease(approved) : undefined;
       await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
       await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
     } catch (error) { this.status = previousStatus; throw error; }
@@ -199,31 +199,38 @@ export class FixtureRun {
   /**
    * Why Gate 3 may not run yet, or nothing when it may.
    *
-   * The plan closes three gates in order, so a release is only ever compiled
-   * from a document the captain approved at gate 2 — approving finalization
-   * without the first two approvals would publish a site nobody signed off.
+   * The plan closes three gates in order: a release is only ever compiled after
+   * the captain approved identity and prototype, and only from what the
+   * finalization stage produced for them to look at.
    */
   releaseBlocker(): string | undefined {
     this.requireInitialized();
     for (const stage of ['identity', 'prototype'] as const) {
       if (!this.approvedAt(stage)) return `O gate de release exige a aprovação do capitão na etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
     }
-    const approval = this.approvedAt('prototype')!;
-    if (!this.store.get(approval.versionId)) return `A versão aprovada ${approval.versionId} não está no repositório desta execução.`;
+    if (!this.finalizationVersion) return 'A etapa de finalização ainda não produziu a versão que o gate de release compila.';
     return undefined;
   }
 
-  /** The document Gate 3 releases: the prototype-approved version, plus any refinement of it. */
+  /**
+   * The one document this run releases: what the finalization stage produced,
+   * plus the review record the refiner wrote onto it. Gate 3 and the ordinary
+   * finalization approval compile exactly this, so the approval, the manifest
+   * and the published bytes always name the same version.
+   */
   releaseContext(): ReleaseContext {
     const blocker = this.releaseBlocker();
     if (blocker) throw new Error(blocker);
-    const approved = this.store.get(this.approvedAt('prototype')!.versionId)!;
+    const approved = this.finalizationVersion!;
     return {
       approved,
-      current: this.releaseVersion ?? approved,
+      current: this.currentVersion,
       applier: new Applier(this.store, this.releaseGate),
+      record: (type, payload) => this.record(type, payload),
       adopt: async (version) => {
-        this.releaseVersion = version;
+        this.currentVersion = version;
+        this.rendered = renderDesign(version.ir);
+        this.lintErrorCount = lintDesign(version.ir).errorCount;
         await ignoringDuplicate(this.options.repository.saveVersion({ id: version.id, projectId: this.projectId(), ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir }));
         await this.record('version.created', { versionId: version.id, hash: version.hash });
         await this.record('release.refined', { versionId: version.id, approvedVersionId: approved.id });
@@ -241,8 +248,7 @@ export class FixtureRun {
    * — a secret in a page, an asset without a licence, a broken link — refuses
    * the ordinary approval exactly as it refuses Gate 3.
    */
-  private async writeRelease(): Promise<ReleaseManifest> {
-    const source = this.releaseVersion ?? this.currentVersion;
+  private async writeRelease(source: VersionRecord): Promise<ReleaseManifest> {
     const compiled = compileRelease(renderDesign(source.ir), source.ir, {
       siteUrl: this.options.siteUrl ?? 'https://site.invalid',
       siteName: this.options.siteName ?? 'pro-website-builder',
@@ -314,6 +320,7 @@ export class FixtureRun {
       await ignoringDuplicate(this.options.repository.savePatch(proposal, this.runId()));
       await ignoringDuplicate(this.options.repository.saveVersion({ id: next.id, projectId: this.projectId(), ...(next.parentId ? { parentId: next.parentId } : {}), hash: next.hash, ir: next.ir }));
       this.currentVersion = next;
+      if (current.stage === 'finalization') this.finalizationVersion = next;
       this.rendered = renderDesign(next.ir);
       this.lintErrorCount = lintDesign(next.ir).errorCount;
       await this.record('patch.applied', { taskId: current.id, stage: current.stage, baseVersionId: current.baseVersionId, versionId: next.id });

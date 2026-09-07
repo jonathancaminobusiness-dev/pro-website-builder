@@ -11,8 +11,8 @@
  *   PWB_SITE_URL       origin the release will be served from (default https://site.invalid)
  *   PWB_SITE_NAME      site name used in Open Graph (default "pro-website-builder")
  *   PWB_RELEASE_ROOT   where the content-addressed bundle is written (default releases/)
- *   PWB_EVIDENCE_DIR   where the evidence runners write their artifacts (default artifacts/release/)
- *   PWB_RELEASE_DOCUMENT  the DesignIR to release (default <PWB_EVIDENCE_DIR>/release-document.json, else the fixture)
+ *   PWB_EVIDENCE_DIR   where the evidence runners write their artifacts and the
+ *                      release document lives (default artifacts/release/)
  *   PWB_RELEASE_PORT   harness port for --serve (default: a port the OS chooses)
  *   PWB_MODEL_PROVIDER "fake" (default) or "claude-code" for the real critic sessions
  */

@@ -17,15 +17,17 @@ export interface ReleaseRunOptions {
 }
 
 /**
- * What Gate 3 needs from the run it is releasing: the version the captain
- * approved at gate 2, the latest refinement of it, the run's own applier so a
- * refinement becomes a real version, and the way to persist that version.
+ * What Gate 3 needs from the run it is releasing: the version the finalization
+ * stage produced, the latest refinement of it, the run's own applier so a
+ * refinement becomes a real version, the way to persist that version, and the
+ * run's durable log, which is where publishing is recorded.
  */
 export interface ReleaseContext {
   approved: VersionRecord;
   current: VersionRecord;
   applier: Applier;
   adopt(version: VersionRecord): Promise<void>;
+  record(type: string, payload: Record<string, unknown>): Promise<void>;
 }
 
 export interface ReleaseSnapshot {
@@ -52,11 +54,14 @@ function providers(name: string): { critic: ReleaseCriticProvider; refiner: Rele
  * because the document changed, or because the refiner produced a new version —
  * publishing is refused, so what reaches disk is always the bundle the captain
  * actually looked at. Every escalation the gate raises has to be accepted in
- * writing before the bundle is written, so a gap is never passed over silently.
+ * writing before the bundle is written, so a gap is never passed over silently;
+ * that acceptance is recorded in the run's log, never inside the immutable
+ * bundle, so publishing the same bytes again succeeds instead of colliding.
  */
 export class ReleaseRun {
   private snapshotValue: ReleaseSnapshot | undefined;
   private compiled: CompiledSite | undefined;
+  private context: ReleaseContext | undefined;
 
   constructor(private readonly runId: string, private readonly options: ReleaseRunOptions) {}
 
@@ -81,6 +86,7 @@ export class ReleaseRun {
       ...(signal ? { signal } : {}),
     });
     if (result.version.id !== context.current.id) await context.adopt(result.version);
+    this.context = context;
     this.compiled = result.compiled;
     this.snapshotValue = {
       runId: this.runId,
@@ -99,7 +105,7 @@ export class ReleaseRun {
   async publish(approverRole: string, digest: string, rationale?: string): Promise<ReleaseManifest> {
     if (approverRole !== 'captain') throw new Error('Só o capitão aprova o gate de release.');
     const current = this.snapshotValue;
-    if (!current || !this.compiled) throw new Error('O release ainda não foi preparado nesta execução.');
+    if (!current || !this.compiled || !this.context) throw new Error('O release ainda não foi preparado nesta execução.');
     if (digest !== current.digest) throw new Error(`O capitão aprovou o bundle ${digest}, e o release atual é ${current.digest}.`);
     if (current.report.blocked) throw new ReleaseVetoError(current.report.vetoes);
     const escalations = current.report.escalations;
@@ -107,10 +113,8 @@ export class ReleaseRun {
     if (escalations.length > 0 && reason === '') {
       throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
-    const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot, {
-      approvedVersionId: current.versionId,
-      ...(escalations.length > 0 ? { acceptance: { approverRole: 'captain' as const, rationale: reason, escalations } } : {}),
-    });
+    const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot, { approvedVersionId: current.versionId });
+    await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole: 'captain', rationale: reason, escalations });
     this.snapshotValue = { ...current, published: { directory: manifest.directory, digest: manifest.digest } };
     return manifest;
   }

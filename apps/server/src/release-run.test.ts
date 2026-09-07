@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { compileRelease } from '@pwb/export';
-import { FakeModelProvider } from '@pwb/providers';
+import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { writeEvidenceArtifact } from '@pwb/stage-finalization';
 import { createApiServer } from './api.js';
@@ -28,14 +28,32 @@ type EvidenceInput = Omit<Parameters<typeof writeEvidenceArtifact>[1], 'releaseD
 
 const SITE = { siteUrl: 'https://oficina.example', siteName: 'Oficina' };
 
-async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean } = {}) {
+/** A finalization stage that rewrites a page, so its version renders different bytes. */
+function pageEditingProvider(text: string): ModelProvider {
+  const fake = new FakeModelProvider();
+  return {
+    propose: async (task, signal) => task.stage !== 'finalization' ? fake.propose(task, signal) : {
+      taskId: task.id, status: 'succeeded', summary: 'rewrites the proof page',
+      proposal: {
+        operations: [{ op: 'replace', path: '/pages/routes/1/nodes/1/props/text', value: text }],
+        baseVersionId: task.baseVersionId, touchedPaths: ['/pages/routes/1/nodes/1/props/text'],
+        rationale: 'The finalization stage rewrote the proof page.', confidence: 1,
+        stage: task.stage, role: task.role, idempotencyKey: `${task.id}#${task.attempt}`,
+      },
+    },
+  };
+}
+
+async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-release-api-'));
   const evidenceDir = join(dir, 'evidence');
+  const exportRoot = join(dir, 'exports');
   const db = openDatabase(join(dir, 'api.sqlite'));
+  const repository = new ProjectRepository(db);
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs,
-    createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(dir, 'exports'), provider: new FakeModelProvider(), ...SITE }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ repository, exportRoot, provider: options.provider ?? new FakeModelProvider(), ...SITE }); await run.initialize(id); runs.set(id, run); return run; },
     release: { releaseRoot: join(dir, 'releases'), evidenceDir, ...SITE, modelProvider: 'fake' },
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -48,6 +66,7 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
   });
   const created = await fetch(`${origin}/api/runs`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<{ runId: string }>);
   const run = runs.get(created.runId)!;
+  let stageVersionId = '';
   // Gate 3 only opens once the captain has closed gates 1 and 2 on this run.
   if (options.approveGates !== false) {
     await run.runNext();
@@ -58,17 +77,19 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
     // The evidence names the release the gate will evaluate, exactly as the
     // runners do once they compile the run's document.
     const { current } = run.releaseContext();
+    stageVersionId = current.id;
     const compiled = compileRelease(renderDesign(current.ir), current.ir, SITE);
     for (const entry of options.evidence ?? []) {
       await writeEvidenceArtifact(evidenceDir, { releaseDigest: compiled.digest, irHash: compiled.irHash, ...entry });
     }
   }
-  return { origin, runId: created.runId, releaseRoot: join(dir, 'releases'), evidenceDir };
+  const events = (id: string) => repository.listEvents(id);
+  return { origin, runId: created.runId, run, releaseRoot: join(dir, 'releases'), exportRoot, evidenceDir, stageVersionId, events };
 }
 
 describe('Gate 3 over the local API', () => {
   it('prepares a release, reports it, and publishes the exact bundle the captain saw', async () => {
-    const { origin, runId, releaseRoot } = await harness({
+    const { origin, runId, releaseRoot, events } = await harness({
       evidence: [
         { id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'passed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 0, serious: 0 }, notes: [] },
         { id: 'vitest', runner: 'vitest', engine: 'node', route: '/', state: 'unit', status: 'passed', path: 'p', hash: 'h', vetoes: [], metrics: {}, notes: [] },
@@ -86,7 +107,7 @@ describe('Gate 3 over the local API', () => {
     expect(fetched.digest).toBe(prepared.digest);
 
     // The evidence is incomplete, so the captain accepts the gap in writing and
-    // the bundle records what they accepted.
+    // the run records what they accepted.
     const withoutReason = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest }) });
     expect(withoutReason.status).toBe(500);
     expect((await withoutReason.json() as { error: string }).error).toMatch(/aceitar por escrito/);
@@ -95,9 +116,19 @@ describe('Gate 3 over the local API', () => {
     const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Firefox não sobe nesta máquina; aceito publicar com Chromium.' }) });
     expect(published.status).toBe(200);
     expect(await readdir(releaseRoot)).toEqual([prepared.digest]);
-    const manifest = JSON.parse(await readFile(join(releaseRoot, prepared.digest, 'manifest.json'), 'utf8')) as { acceptance?: { rationale: string; escalations: string[] }; approvedVersionId: string };
-    expect(manifest.acceptance?.rationale).toMatch(/Firefox não sobe/);
-    expect(manifest.acceptance?.escalations).toEqual(prepared.report.escalations);
+    // The manifest describes the release, never the act of publishing it, so the
+    // acceptance lives in the run's log and publishing the same bytes again works.
+    const manifest = JSON.parse(await readFile(join(releaseRoot, prepared.digest, 'manifest.json'), 'utf8')) as Record<string, unknown>;
+    expect(manifest.acceptance).toBeUndefined();
+    expect(manifest.approvedVersionId).toBe(prepared.versionId);
+    const recorded = (await events(runId)).filter((event) => event.type === 'release.published');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.payload).toMatchObject({ digest: prepared.digest, versionId: prepared.versionId, rationale: 'Firefox não sobe nesta máquina; aceito publicar com Chromium.' });
+    expect(recorded[0]!.payload.escalations).toEqual(prepared.report.escalations);
+
+    const again = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Republicando os mesmos bytes.' }) });
+    expect(again.status).toBe(200);
+    expect(await readdir(releaseRoot)).toEqual([prepared.digest]);
   });
 
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {
@@ -110,26 +141,44 @@ describe('Gate 3 over the local API', () => {
     await expect(readdir(releaseRoot)).rejects.toThrow();
   });
 
-  it('compiles the bundle from the prototype-approved version and keeps the refinement retrievable', async () => {
-    const { origin, runId, evidenceDir } = await harness({
+  it('compiles the finalization-stage version, keeps the refinement retrievable, and refines only once', async () => {
+    const { origin, runId, evidenceDir, stageVersionId, events } = await harness({
       evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
     });
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
-    const approvals = await fetch(`${origin}/api/runs/${runId}`).then((response) => response.json() as Promise<{ approvals: Array<{ stage: string; decision: string; versionId: string }> }>);
-    const prototype = approvals.approvals.find((entry) => entry.stage === 'prototype' && entry.decision === 'approved')!;
-    expect(prepared.report.approvedVersionId).toBe(prototype.versionId);
+    expect(prepared.report.approvedVersionId).toBe(stageVersionId);
     // The refiner recorded the open finding, so the released version is a real
     // version of this run rather than one that existed only inside the gate.
-    expect(prepared.versionId).not.toBe(prototype.versionId);
+    expect(prepared.versionId).not.toBe(stageVersionId);
     const document = JSON.parse(await readFile(join(evidenceDir, 'release-document.json'), 'utf8')) as { meta: { versionId: string } };
-    expect(document.meta.versionId).toBe(prototype.versionId);
+    expect(document.meta.versionId).toBe(stageVersionId);
 
-    // A second Gate 3 run starts from the refinement instead of redoing it.
+    // A second Gate 3 run starts from the refinement, and rewriting what the
+    // review record already says mints no further version.
     const again = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
-    expect(again.report.approvedVersionId).toBe(prototype.versionId);
+    expect(again.report.approvedVersionId).toBe(stageVersionId);
+    expect(again.versionId).toBe(prepared.versionId);
     const second = JSON.parse(await readFile(join(evidenceDir, 'release-document.json'), 'utf8')) as { meta: { versionId: string }; reviewRecord: { findings: string[] } };
     expect(second.meta.versionId).toBe(prepared.versionId);
     expect(second.reviewRecord.findings.join(' ')).toMatch(/axe-home/);
+    expect((await events(runId)).filter((event) => event.type === 'release.refined')).toHaveLength(1);
+  });
+
+  it('exports the document Gate 3 released, not a sibling of it, when the finalization stage edits a page', async () => {
+    const edited = 'Prova antes do brilho, revisada na finalização.';
+    const { origin, runId, exportRoot, run } = await harness({
+      provider: pageEditingProvider(edited),
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
+    });
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    const snapshot = await run.approve('finalization', 'captain');
+    const approval = snapshot.approvals.find((entry) => entry.stage === 'finalization' && entry.decision === 'approved')!;
+    const manifest = JSON.parse(await readFile(join(exportRoot, snapshot.exportManifest!.digest, 'manifest.json'), 'utf8')) as { approvedVersionId: string };
+    // The approval, the manifest and the published bytes all name one version.
+    expect(approval.versionId).toBe(prepared.versionId);
+    expect(manifest.approvedVersionId).toBe(prepared.versionId);
+    expect(snapshot.exportManifest!.digest).toBe(prepared.digest);
+    expect(await readFile(join(exportRoot, snapshot.exportManifest!.digest, 'proof', 'index.html'), 'utf8')).toContain(edited);
   });
 
   it('refuses to publish for anyone but the captain', async () => {

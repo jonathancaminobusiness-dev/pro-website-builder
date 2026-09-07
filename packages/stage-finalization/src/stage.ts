@@ -52,6 +52,19 @@ export interface FinalizationStageResult {
 const REFINER_PATHS: string[] = ['/reviewRecord'];
 
 /**
+ * Whether two versions say the same thing.
+ *
+ * A version's id is derived from a document that still names its parent, so
+ * re-applying a patch that changes nothing still mints a new id. Comparing the
+ * documents with that name removed is what tells a real refinement from a
+ * rewrite of what the review record already said.
+ */
+function sameDocument(a: DesignIR, b: DesignIR): boolean {
+  const withoutId = (ir: DesignIR): unknown => ({ ...ir, meta: { ...ir.meta, versionId: '' } });
+  return hashJson(withoutId(a)) === hashJson(withoutId(b));
+}
+
+/**
  * The finalization stage: compile, fan out five read-only critics, run the
  * deterministic checks, refine at most twice, and stop at the captain's gate.
  *
@@ -102,6 +115,11 @@ export class FinalizationStage {
         const reason = error instanceof Error ? error.message : 'O patch-refiner falhou sem mensagem.';
         escalations.push(`O patch-refiner falhou no ciclo ${cycles + 1} e os achados seguem abertos: ${reason}`);
         await emit('release.refinement.stopped', { reason: 'refiner-failed', cycles, detail: reason });
+        break;
+      }
+      if (sameDocument(next.ir, version.ir)) {
+        escalations.push('O patch-refiner reescreveu o que o registro de revisão já dizia; os achados abertos sobem para o capitão.');
+        await emit('release.refinement.stopped', { reason: 'no-change', cycles });
         break;
       }
       version = next;
