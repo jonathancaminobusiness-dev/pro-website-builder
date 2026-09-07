@@ -94,7 +94,8 @@ export function belowRubric(report: CritiqueReport): Array<{ dimension: Critique
  * direction is ever generated. A plan carries the negatives and the licence
  * expectation up front so provenance is never reconstructed after the fact. A
  * direction whose contract admits no generated source is never asked for a plan,
- * so an answer here always carries at least one.
+ * so an answer here always carries at least one, and each carries an id of its
+ * own because the asset it becomes is named after it.
  */
 export const imagePromptPlanSchemaFor = (directionId: IdentityAxisBriefId) => z.object({
   schemaVersion: z.literal(1),
@@ -109,7 +110,10 @@ export const imagePromptPlanSchemaFor = (directionId: IdentityAxisBriefId) => z.
     axis: divergenceAxisSchema,
     alt: z.string().min(1),
     licenceExpectation: z.string().min(1),
-  })).min(1).max(4),
+  })).min(1).max(4).refine(
+    (plans) => new Set(plans.map((plan) => plan.id)).size === plans.length,
+    { message: 'Each plan needs an id of its own: the asset id, and the licence and provenance recorded under it, are derived from it.' },
+  ),
 }).strict();
 export type ImagePromptPlan = z.infer<ReturnType<typeof imagePromptPlanSchemaFor>>;
 

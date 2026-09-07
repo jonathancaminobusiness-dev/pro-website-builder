@@ -720,6 +720,52 @@ describe('image art director', () => {
     expect(approval.assets[0]?.provenance.license).toBeTruthy();
   });
 
+  it('takes two plans under one id as a schema failure, and keeps the corrected plan', async () => {
+    const inner = new FakeIdentityProvider();
+    const attempts: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-art-director-modular-technical') return result;
+        attempts.push(task.attempt);
+        const plan = result.artifact as { plans: Array<Record<string, unknown>> };
+        // The asset id is derived from the plan id, so two plans under one id would
+        // put two images, and two licences, on the handoff under a single name.
+        if (task.attempt === 1) return { ...result, artifact: { ...plan, plans: [plan.plans[0]!, { ...plan.plans[0]!, prompt: 'Outra tomada da mesma medida, em luz difusa e enquadramento aberto.' }] } };
+        return result;
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'modular-technical')!;
+    expect(attempts).toEqual([1, 2]);
+    expect(result.failures).toEqual([]);
+    const ids = candidate.imagePlan!.plans.map((plan) => plan.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('records a failure when the art director repeats a plan id after its correction', async () => {
+    const inner = new FakeIdentityProvider();
+    const calls: Array<Record<string, unknown>> = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-art-director-modular-technical') return result;
+        const plan = result.artifact as { plans: Array<Record<string, unknown>> };
+        return { ...result, artifact: { ...plan, plans: [plan.plans[0]!, { ...plan.plans[0]!, prompt: 'Outra tomada da mesma medida, em luz difusa e enquadramento aberto.' }] } };
+      },
+    };
+    const { stage } = harness({ provider, raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'modular-technical')!;
+    expect(candidate.imagePlan).toBeUndefined();
+    expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-modular-technical')).toBe(true);
+    // Nothing is generated for a plan the stage refused, so no two assets share an id on the handoff.
+    const approval = await stage.approve({ directionId: 'modular-technical', rationale: 'Aprovada.', approverRole: 'captain' });
+    expect(calls).toEqual([]);
+    expect(approval.assets).toEqual([]);
+  });
+
   it('takes a plan written for another seat as a schema failure, and records it when the mistake repeats', async () => {
     const inner = new FakeIdentityProvider();
     const attempts: number[] = [];
