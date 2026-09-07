@@ -105,6 +105,13 @@ export const pagesSchema = z.object({ routes: z.array(pageSchema) }).superRefine
       seen.add(value);
     }
   }
+  // The renderer addresses a node by id alone, in one stylesheet shared by every route, so an id
+  // reused on another page would silently overrule the rule written for this one.
+  const seenNodeIds = new Set<string>();
+  for (const page of pages.routes) for (const node of page.nodes) {
+    if (seenNodeIds.has(node.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `${documentRules.pageGraph} Node ${node.id} is declared by more than one page.` });
+    seenNodeIds.add(node.id);
+  }
   const routes = new Set(pages.routes.map((page) => page.route.toLowerCase()));
   for (const page of pages.routes) for (const node of page.nodes) {
     if (node.semantic !== 'link' || routes.has(String(node.props.href).toLowerCase())) continue;

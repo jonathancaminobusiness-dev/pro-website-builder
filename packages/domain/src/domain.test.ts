@@ -94,6 +94,14 @@ describe('domain contracts', () => {
     }
   });
 
+  it('refuses one node id declared by two routes, because the stylesheet addresses it by id alone', () => {
+    const shared = createFixtureIR();
+    shared.pages.routes[1]!.nodes[1]!.id = 'home-title';
+    shared.pages.routes[1]!.nodes[0]!.slots = { children: ['home-title'] };
+    expect(() => designIRSchema.parse(shared)).toThrow(/Node home-title is declared by more than one page/);
+    expect(designIRSchema.parse(createFixtureIR()).pages.routes[1]!.nodes[1]!.id).toBe('proof-title');
+  });
+
   it('holds a responsive rule to the same token contract as the props beside it', () => {
     const raw = createFixtureIR();
     raw.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{breakpoint.compact}', props: { gap: '1rem' } }];

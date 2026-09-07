@@ -142,10 +142,15 @@ describe('prototype stage', () => {
 
     const rendered = renderDesign(ir);
     expect(rendered.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
-    // This renderer emits no anchors, so the journey has to survive in the copy the composer wrote.
+    // The call to action is a real anchor, so the journey is carried by a link the keyboard can reach.
     expect(rendered.routes[0]!.html).toContain('/proof');
     expect(rendered.routes[0]!.html).toMatch(/<h1 data-node-id="home-hero-title"/);
-    expect(rendered.routes[0]!.html).not.toMatch(/style="[^"]*#[0-9a-f]{3,8}/i);
+    // Every composed value reaches the page through a token: the node rules name custom properties,
+    // and the only literal colours in the stylesheet are the ones :root defines them as.
+    const components = rendered.css.slice(rendered.css.indexOf('@layer components'));
+    expect(components).toMatch(/\[data-node-id="home-hero-root"\]/);
+    expect(components).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(rendered.css.slice(0, rendered.css.indexOf('@layer components'))).toMatch(/#[0-9a-f]{6}\b/i);
     // Every responsive rule the composer declared is read back out as a container query.
     // The composer opens its breakpoints at the identity's own container widths, so a query really
     // separates a phone from a desktop instead of matching at every viewport.

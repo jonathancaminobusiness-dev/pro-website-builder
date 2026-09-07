@@ -49,6 +49,13 @@ describe('prototype contracts', () => {
     expect(() => routeManifestSchema.parse(shared)).toThrow(/claimed by more than one section/);
   });
 
+  it('refuses two routes that share a shell id, because the stylesheet addresses a node by id alone', async () => {
+    const plan = await manifest();
+    const sharedShell = structuredClone(plan);
+    sharedShell.routes[1]!.rootNodeId = sharedShell.routes[0]!.rootNodeId;
+    expect(() => routeManifestSchema.parse(sharedShell)).toThrow(/Node id home-shell is claimed by more than one section/);
+  });
+
   it('refuses two sections that share an id, because an id resolves one window and one composer task', async () => {
     const plan = await manifest();
     const collision = structuredClone(plan);

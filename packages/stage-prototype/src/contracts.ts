@@ -60,6 +60,7 @@ export const routeManifestSchema = z.object({
   for (const route of manifest.routes) {
     if (seenRoutes.has(route.route)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `The manifest repeats the route ${route.route}.` });
     seenRoutes.add(route.route);
+    if (seenNodeIds.has(route.rootNodeId)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Node id ${route.rootNodeId} is claimed by more than one section.` });
     seenNodeIds.add(route.rootNodeId);
     let expected = ROUTE_SHELL_SLOT + 1;
     for (const section of route.sections) {
