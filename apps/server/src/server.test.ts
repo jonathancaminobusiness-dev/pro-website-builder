@@ -39,6 +39,25 @@ describe('local API', () => {
     db.sqlite.close();
   });
 
+  it('refuses to recreate a run id that is already open instead of overwriting it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-'));
+    const db = openDatabase(join(dir, 'duplicate.sqlite'));
+    const runs = new Map<string, FixtureRun>();
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    await fetch(`${origin}/api/runs`, { method: 'POST', headers: studio, body: JSON.stringify({ runId: 'repeat-run' }) });
+    const first = runs.get('repeat-run')!;
+    await fetch(`${origin}/api/runs/repeat-run/stage`, { method: 'POST', headers: studio });
+    const again = await fetch(`${origin}/api/runs`, { method: 'POST', headers: studio, body: JSON.stringify({ runId: 'repeat-run' }) });
+    expect(again.status).toBe(409);
+    expect(runs.get('repeat-run')).toBe(first);
+    expect(first.snapshot().status).toBe('needs_review');
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    db.sqlite.close();
+  });
+
   it('answers an absolute-form request target the URL parser rejects and keeps serving', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-'));
     const db = openDatabase(join(dir, 'malformed.sqlite'));

@@ -3,7 +3,14 @@ import { identitySpecSchema } from './identity.js';
 
 export const nodeKindSchema = z.enum(['stack', 'grid', 'cluster', 'media', 'type', 'surface', 'ornament', 'component']);
 export const visualValueSchema = z.union([z.string(), z.number(), z.boolean()]);
-export const visualPropKeys = new Set(['color', 'background', 'backgroundColor', 'padding', 'paddingBlock', 'paddingInline', 'gap', 'radius', 'font', 'fontSize', 'shadow', 'motion', 'width', 'height', 'margin', 'maxWidth']);
+export const visualPropsSchema = z.object({
+  color: visualValueSchema, background: visualValueSchema, padding: visualValueSchema, paddingBlock: visualValueSchema,
+  paddingInline: visualValueSchema, gap: visualValueSchema, radius: visualValueSchema, font: visualValueSchema,
+  fontSize: visualValueSchema, fontWeight: visualValueSchema, shadow: visualValueSchema, motion: visualValueSchema,
+  width: visualValueSchema, height: visualValueSchema, margin: visualValueSchema, maxWidth: visualValueSchema,
+}).partial();
+export const visualPropKeys = new Set<string>(Object.keys(visualPropsSchema.shape));
+export const nodePropsSchema = visualPropsSchema.extend({ text: visualValueSchema.optional() }).strict();
 
 export const routeSchema = z.string()
   .regex(/^\/$|^(?:\/[A-Za-z0-9\-._~]+)+$/, 'Route must start with / and use non-empty unreserved path segments without a trailing slash.')
@@ -13,7 +20,7 @@ export const pageNodeSchema = z.object({
   id: z.string(),
   kind: nodeKindSchema,
   semantic: z.string(),
-  props: z.record(visualValueSchema),
+  props: nodePropsSchema,
   slots: z.record(z.array(z.string())).default({}),
   responsive: z.array(z.object({ container: z.string(), rule: z.string() })).default([]),
 });

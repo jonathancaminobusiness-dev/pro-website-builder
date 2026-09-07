@@ -13,7 +13,6 @@ export const agentTaskSchema = z.object({
 
 export const patchOperationSchema = z.object({ op: z.enum(['add', 'replace', 'remove', 'test']), path: z.string().regex(/^\//), value: z.unknown().optional() });
 export const patchSchema = z.object({
-  op: z.enum(['proposal', 'rejection']).default('proposal'),
   operations: z.array(patchOperationSchema).min(1),
   baseVersionId: z.string(), touchedPaths: z.array(z.string()), rationale: z.string().min(1), confidence: z.number().min(0).max(1),
   stage: stageSchema, role: taskRoleSchema, idempotencyKey: z.string().optional(),

@@ -41,13 +41,13 @@ describe('deterministic renderer', () => {
     node.props.paddingInline = '{space.lg}';
     node.props.maxWidth = '{space.xl}';
     node.props.fontSize = '{space.md}';
-    node.props.backgroundColor = '{color.paper}';
+    node.props.background = '{color.paper}';
     const html = renderDesign(ir).routes[0]!.html;
     const style = /data-node-id="home-proof"[^>]*style="([^"]*)"/.exec(html)?.[1] ?? '';
     expect(style.split(';').map((declaration) => declaration.split(':')[0])).toEqual(
       expect.arrayContaining(['box-shadow', 'padding-inline', 'max-width', 'font-size', 'background-color']),
     );
-    expect(style).not.toMatch(/(^|;)(shadow|paddingInline|maxWidth|fontSize|backgroundColor):/);
+    expect(style).not.toMatch(/(^|;)(shadow|paddingInline|maxWidth|fontSize):/);
   });
 
   it('names the page once, in the document title', () => {

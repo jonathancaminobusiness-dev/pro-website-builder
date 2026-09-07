@@ -32,7 +32,7 @@ describe('orchestrator', () => {
     expect(prototypeTask.documentSlice['/pages']).toEqual(ir.pages);
     (identityTask.documentSlice['/pages'] as DesignIR['pages']).routes.length = 0;
     expect(store.get(root.id)!.ir.pages.routes).toHaveLength(3);
-    const next = applier.apply({ op: 'proposal', operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['changed'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'change the document', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'slice-digest' }, ALLOWED, root.id);
+    const next = applier.apply({ operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['changed'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'change the document', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'slice-digest' }, ALLOWED, root.id);
     const replanned = new RunPlanner(store).plan('run-slice', next.id, 'brief');
     expect(replanned.tasks[0]!.documentSlice['/reviewRecord']).toEqual({ findings: ['changed'], approvals: [] });
     expect(replanned.tasks[0]!.inputDigest).not.toBe(identityTask.inputDigest);
@@ -55,7 +55,7 @@ describe('orchestrator', () => {
   it('rejects stale and overlapping patches before the applier mutates a version', () => {
     const gate = new PatchGate();
     const context = { currentVersionId: 'v0', allowedPaths: ['/reviewRecord'] };
-    const valid = { op: 'proposal' as const, operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['one'] }], baseVersionId: 'v0', touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'valid-key' };
+    const valid = { operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['one'] }], baseVersionId: 'v0', touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'valid-key' };
     const decision = gate.validate(valid, context);
     expect(decision.ok).toBe(true);
     gate.commit('v0', decision);
@@ -67,7 +67,7 @@ describe('orchestrator', () => {
   it('enforces allowed paths against the operations that actually write, not the declared paths', () => {
     const gate = new PatchGate();
     const context = { currentVersionId: 'v0', allowedPaths: ['/reviewRecord'] };
-    const base = { op: 'proposal' as const, baseVersionId: 'v0', touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const };
+    const base = { baseVersionId: 'v0', touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const };
     expect(() => gate.validate({ ...base, idempotencyKey: 'a', operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'approved' }] }, context)).toThrow(/not allowed/i);
     expect(() => gate.validate({ ...base, idempotencyKey: 'b', operations: [{ op: 'add' as const, path: '/__proto__/polluted', value: true }] }, context)).toThrow(/not allowed/i);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
@@ -78,7 +78,7 @@ describe('orchestrator', () => {
     const gate = new PatchGate();
     const applier = new Applier(store, gate);
     const root = applier.createRoot(createFixtureIR());
-    const broken = { op: 'proposal' as const, operations: [{ op: 'test' as const, path: '/reviewRecord/findings', value: ['never matches'] }, { op: 'replace' as const, path: '/reviewRecord/findings', value: ['one'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'retry-me' };
+    const broken = { operations: [{ op: 'test' as const, path: '/reviewRecord/findings', value: ['never matches'] }, { op: 'replace' as const, path: '/reviewRecord/findings', value: ['one'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'retry-me' };
     expect(() => applier.apply(broken, ALLOWED, root.id)).toThrow(/test failed/i);
     const corrected = { ...broken, operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['one'] }] };
     expect(applier.apply(corrected, ALLOWED, root.id).ir.reviewRecord.findings).toEqual(['one']);
@@ -88,8 +88,8 @@ describe('orchestrator', () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
-    const first = applier.apply({ op: 'proposal', operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['first'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'first', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'first' }, ALLOWED, root.id);
-    const stale = { op: 'proposal' as const, operations: [{ op: 'replace' as const, path: '/reviewRecord/approvals', value: ['stale'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/approvals'], rationale: 'stale', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'stale' };
+    const first = applier.apply({ operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['first'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'first', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'first' }, ALLOWED, root.id);
+    const stale = { operations: [{ op: 'replace' as const, path: '/reviewRecord/approvals', value: ['stale'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/approvals'], rationale: 'stale', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'stale' };
     expect(() => applier.apply(stale, ALLOWED, first.id)).toThrow(/stale patch base/i);
     expect(store.get(first.id)?.ir.reviewRecord.findings).toEqual(['first']);
     expect(store.get(root.id)?.ir.reviewRecord.findings).toEqual([]);
@@ -102,7 +102,7 @@ describe('orchestrator', () => {
     const root = applier.createRoot(ir);
     const { source, author, license, date, hash } = ir.identity.provenance;
     const reordered = { hash, date, license, author, source };
-    const patch = { op: 'proposal' as const, operations: [{ op: 'test' as const, path: '/identity/provenance', value: reordered }, { op: 'replace' as const, path: '/reviewRecord/findings', value: ['ok'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'key-order' };
+    const patch = { operations: [{ op: 'test' as const, path: '/identity/provenance', value: reordered }, { op: 'replace' as const, path: '/reviewRecord/findings', value: ['ok'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'key-order' };
     expect(applier.apply(patch, ALLOWED, root.id).ir.reviewRecord.findings).toEqual(['ok']);
   });
 
@@ -110,7 +110,7 @@ describe('orchestrator', () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
-    const patch = { op: 'proposal' as const, operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'draft' }], baseVersionId: root.id, touchedPaths: ['/identity/meta/status'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'scoped' };
+    const patch = { operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'draft' }], baseVersionId: root.id, touchedPaths: ['/identity/meta/status'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'scoped' };
     expect(() => applier.apply(patch, ['/reviewRecord'], root.id)).toThrow(/not allowed/i);
     expect(applier.apply(patch, ['/identity'], root.id).ir.identity.meta.status).toBe('draft');
   });
@@ -119,17 +119,16 @@ describe('orchestrator', () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
-    const patch = { op: 'proposal' as const, operations: [{ op: 'add' as const, path: '/reviewRecord/findings/0', value: 'first' }, { op: 'add' as const, path: '/reviewRecord/findings/-', value: 'last' }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'array-add' };
+    const patch = { operations: [{ op: 'add' as const, path: '/reviewRecord/findings/0', value: 'first' }, { op: 'add' as const, path: '/reviewRecord/findings/-', value: 'last' }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'array-add' };
     const next = applier.apply(patch, ALLOWED, root.id);
     expect(next.ir.reviewRecord.findings).toEqual(['first', 'last']);
-    expect(next.inverse.operations.map((operation) => operation.path)).toEqual(['/reviewRecord/findings/1', '/reviewRecord/findings/0']);
   });
 
   it('reports the paths the operations actually wrote, not the ones the agent declared', () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
-    const patch = { op: 'proposal' as const, operations: [{ op: 'test' as const, path: '/reviewRecord/findings', value: [] }, { op: 'replace' as const, path: '/identity/meta/status', value: 'draft' as const }, { op: 'add' as const, path: '/reviewRecord/findings/-', value: 'noted' }], baseVersionId: root.id, touchedPaths: ['/reviewRecord'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'diff-paths' };
+    const patch = { operations: [{ op: 'test' as const, path: '/reviewRecord/findings', value: [] }, { op: 'replace' as const, path: '/identity/meta/status', value: 'draft' as const }, { op: 'add' as const, path: '/reviewRecord/findings/-', value: 'noted' }], baseVersionId: root.id, touchedPaths: ['/reviewRecord'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'diff-paths' };
     expect(applier.dryRun(patch, ALLOWED, root.id).diff).toEqual(['/identity/meta/status', '/reviewRecord/findings/0']);
   });
 
@@ -137,7 +136,7 @@ describe('orchestrator', () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
-    const patch = { op: 'proposal' as const, operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['first try'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'first try', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'first-try' };
+    const patch = { operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['first try'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'first try', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'first-try' };
     const rejected = applier.apply(patch, ALLOWED, root.id);
     expect(() => applier.apply(patch, ALLOWED, root.id)).toThrow(/idempotent|overlap/i);
     expect(applier.rewind(rejected)?.id).toBe(root.id);
@@ -262,6 +261,5 @@ describe('orchestrator', () => {
     expect(next.id).not.toBe(root.id);
     expect(next.hash).toBe(hashJson(next.ir));
     expect(store.get(root.id)?.hash).toBe(root.hash);
-    expect(next.inverse.operations[0]?.op).toBe('replace');
   });
 });

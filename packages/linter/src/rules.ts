@@ -8,7 +8,7 @@ export interface LintReport { findings: LintFinding[]; errorCount: number; warni
 
 function* visualProps(ir: DesignIR): Generator<{ path: string; value: string | number | boolean }> {
   for (const page of ir.pages.routes) for (const node of page.nodes) for (const [key, value] of Object.entries(node.props)) {
-    if (!visualPropKeys.has(key)) continue;
+    if (!visualPropKeys.has(key) || value === undefined) continue;
     yield { path: `/pages/routes/${page.id}/nodes/${node.id}/props/${key}`, value };
   }
 }

@@ -62,6 +62,15 @@ describe('domain contracts', () => {
     expect(() => designIRSchema.parse(interior)).toThrow(/segments/i);
   });
 
+  it('rejects a node prop the renderer has no vocabulary for', () => {
+    const unknown = createFixtureIR();
+    (unknown.pages.routes[0]!.nodes[0]!.props as Record<string, string>).letterSpacing = '{space.sm}';
+    expect(() => designIRSchema.parse(unknown)).toThrow(/letterSpacing/i);
+    const declared = createFixtureIR();
+    declared.pages.routes[0]!.nodes[1]!.props.fontWeight = '{type.body}';
+    expect(designIRSchema.parse(declared).pages.routes[0]!.nodes[1]!.props.fontWeight).toBe('{type.body}');
+  });
+
   it('rejects an identity without the visual contract fields', () => {
     expect(() => identitySpecSchema.parse({ meta: { id: 'bad' } })).toThrow();
   });

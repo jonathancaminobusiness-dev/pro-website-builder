@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
-import { agentResultSchema, idempotencyKey, schemaJson, type AgentResult, type AgentTask } from '@pwb/domain';
+import { agentResultSchema, idempotencyKey, schemaJson, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +24,7 @@ export class ClaudeRunner implements ModelProvider {
           task.brief,
           `Answer as the ${task.role} of the ${task.stage} stage for taskId ${task.id}.`,
           `A proposal must set baseVersionId to ${task.baseVersionId} and may only touch these paths: ${task.allowedPaths.join(', ')}.`,
+          `A page node may only declare these props: ${[...visualPropKeys].join(', ')} and text. Every visual prop must be a token reference such as {color.ink}.`,
           `This is the immutable slice of the current document you may read; the identity contract is read-only: ${JSON.stringify(task.documentSlice)}`,
           correction ? 'Correct the previous schema violation and return only JSON matching the supplied schema.' : '',
         ].filter(Boolean).join('\n');

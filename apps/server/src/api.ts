@@ -24,6 +24,7 @@ export function createApiServer(options: ApiOptions): Server {
       if (request.method === 'POST' && pathname === '/api/runs') {
         const input = await body(request);
         const runId = typeof input.runId === 'string' ? input.runId : `run-${randomUUID()}`;
+        if (options.runs.has(runId)) { send(response, 409, { error: `Run ${runId} already exists.` }); return; }
         const run = await options.createRun(runId);
         send(response, 201, { runId, snapshot: run.snapshot() });
         return;

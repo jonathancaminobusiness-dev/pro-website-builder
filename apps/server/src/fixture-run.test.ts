@@ -83,7 +83,7 @@ describe('phase 0 fixture run', () => {
     const unlicensed: ModelProvider = {
       async propose(task, signal) {
         if (task.stage !== 'finalization') return fake.propose(task, signal);
-        return { taskId: task.id, status: 'succeeded', summary: 'Attach an asset', proposal: { op: 'proposal', operations: [{ op: 'add', path: '/assets/items/-', value: { id: 'unlicensed', kind: 'raster', uri: 'higgsfield://x', alt: 'Sem licença', provenance: { source: 'higgsfield', author: 'model', license: '', date: '2026-09-06', hash: 'x' }, status: 'ready' } }], baseVersionId: task.baseVersionId, touchedPaths: ['/assets/items'], rationale: 'Attach the raster asset', confidence: 1, stage: task.stage, role: task.role, idempotencyKey: 'unlicensed-asset' } };
+        return { taskId: task.id, status: 'succeeded', summary: 'Attach an asset', proposal: { operations: [{ op: 'add', path: '/assets/items/-', value: { id: 'unlicensed', kind: 'raster', uri: 'higgsfield://x', alt: 'Sem licença', provenance: { source: 'higgsfield', author: 'model', license: '', date: '2026-09-06', hash: 'x' }, status: 'ready' } }], baseVersionId: task.baseVersionId, touchedPaths: ['/assets/items'], rationale: 'Attach the raster asset', confidence: 1, stage: task.stage, role: task.role, idempotencyKey: 'unlicensed-asset' } };
       },
     };
     const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-license-')), 'exports'), provider: unlicensed });
@@ -107,10 +107,11 @@ describe('phase 0 fixture run', () => {
     const proposer: ModelProvider = {
       async propose(task) {
         const name = task.attempt === 1 ? 'rejected' : 'kept';
-        return { taskId: task.id, status: 'succeeded', summary: `Add ${name}`, proposal: { op: 'proposal', operations: [{ op: 'add', path: `/identity/tokens/color/${name}`, value: { $value: '#123456', $type: 'color' } }], baseVersionId: task.baseVersionId, touchedPaths: [`/identity/tokens/color/${name}`], rationale: `Add the ${name} token`, confidence: 1, stage: task.stage, role: task.role, idempotencyKey: `token-${task.attempt}` } };
+        return { taskId: task.id, status: 'succeeded', summary: `Add ${name}`, proposal: { operations: [{ op: 'add', path: `/identity/tokens/color/${name}`, value: { $value: '#123456', $type: 'color' } }], baseVersionId: task.baseVersionId, touchedPaths: [`/identity/tokens/color/${name}`], rationale: `Add the ${name} token`, confidence: 1, stage: task.stage, role: task.role, idempotencyKey: 'identity-token' } };
       },
     };
-    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-rewind-')), 'exports'), provider: proposer });
+    const repository = new ProjectRepository(db);
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-rewind-')), 'exports'), provider: proposer });
     await run.initialize('run-rewind');
     const rootId = run.snapshot().currentVersion.id;
     const proposed = await run.runNext();
@@ -122,6 +123,8 @@ describe('phase 0 fixture run', () => {
     expect(rerun.currentStage).toBe('identity');
     expect(rerun.currentVersion.ir.identity.tokens.color).toHaveProperty('kept');
     expect(rerun.currentVersion.ir.identity.tokens.color).not.toHaveProperty('rejected');
+    const patches = (JSON.parse(repository.dump()) as { patches: Array<{ payload: string }> }).patches;
+    expect(patches.map((row) => (JSON.parse(row.payload) as { operations: Array<{ path: string }> }).operations[0]!.path)).toContain('/identity/tokens/color/kept');
     db.sqlite.close();
   });
 
@@ -232,7 +235,7 @@ describe('phase 0 fixture run', () => {
     const db = openDatabase(':memory:');
     const renamer: ModelProvider = {
       async propose(task) {
-        return { taskId: task.id, status: 'succeeded', summary: 'Rename a token', proposal: { op: 'proposal', operations: [{ op: 'remove', path: '/identity/tokens/color/ink' }], baseVersionId: task.baseVersionId, touchedPaths: ['/identity/tokens/color/ink'], rationale: 'Rename the ink token', confidence: 1, stage: task.stage, role: task.role, idempotencyKey: `rename-${task.stage}` } };
+        return { taskId: task.id, status: 'succeeded', summary: 'Rename a token', proposal: { operations: [{ op: 'remove', path: '/identity/tokens/color/ink' }], baseVersionId: task.baseVersionId, touchedPaths: ['/identity/tokens/color/ink'], rationale: 'Rename the ink token', confidence: 1, stage: task.stage, role: task.role, idempotencyKey: `rename-${task.stage}` } };
       },
     };
     const repository = new ProjectRepository(db);
