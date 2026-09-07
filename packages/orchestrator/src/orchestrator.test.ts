@@ -199,7 +199,6 @@ describe('orchestrator', () => {
     let identityVerdicts: GateVerdict[] = ['rejected', 'approved'];
     const result = await new Scheduler().run(plan.tasks, async (item) => { started.push(`${item.id}#${item.attempt}`); return item.stage; }, {
       edges: plan.edges,
-      admit: (item) => plan.edges.filter(([, to]) => to === item.id).every(([from]) => approved.has(from)),
       settle: async (item) => {
         const verdict = item.id === 'task-identity' ? identityVerdicts.shift()! : 'approved';
         if (verdict === 'approved') approved.add(item.id);
@@ -214,21 +213,20 @@ describe('orchestrator', () => {
     ]);
   });
 
-  it('cancels a dependent stage whose predecessor succeeded but was never approved', async () => {
+  it('refuses a stage submitted on its own until its predecessor is in the completed set', async () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const plan = new RunPlanner(store).plan('run-unapproved', root.id, 'brief');
+    const plan = new RunPlanner(store).plan('run-completed', root.id, 'brief');
+    const prototype = plan.tasks.filter((item) => item.id === 'task-prototype');
     const started: string[] = [];
-    const result = await new Scheduler().run(plan.tasks, async (item) => { started.push(item.id); return item.stage; }, {
-      edges: plan.edges,
-      admit: (item) => item.id === 'task-identity',
-    });
-    expect(started).toEqual(['task-identity']);
-    expect(result.results.map((item) => [item.task.id, item.state])).toEqual([
-      ['task-identity', 'succeeded'],
-      ['task-prototype', 'cancelled'],
-      ['task-finalization', 'cancelled'],
-    ]);
+    const worker = async (item: AgentTask): Promise<string> => { started.push(item.id); return item.stage; };
+    const blocked = await new Scheduler().run(prototype, worker, { edges: plan.edges });
+    expect(started).toEqual([]);
+    expect(blocked.results.map((item) => [item.task.id, item.state])).toEqual([['task-prototype', 'failed']]);
+    expect((blocked.results[0]!.error as Error).message).toMatch(/task-identity/);
+    const admitted = await new Scheduler().run(prototype, worker, { edges: plan.edges, completed: ['task-identity'] });
+    expect(started).toEqual(['task-prototype']);
+    expect(admitted.results.map((item) => [item.task.id, item.state])).toEqual([['task-prototype', 'succeeded']]);
   });
 
   it('creates immutable versions and preserves the parent on cancel/restart', async () => {

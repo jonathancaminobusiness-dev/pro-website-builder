@@ -6,7 +6,7 @@ export type GateVerdict = 'approved' | 'rejected' | 'cancelled';
 export interface RunOptions<T> {
   signal?: AbortSignal;
   edges?: [string, string][];
-  admit?: (task: AgentTask) => boolean;
+  completed?: string[];
   settle?: (task: AgentTask, value: T, signal: AbortSignal) => Promise<GateVerdict>;
 }
 
@@ -25,11 +25,11 @@ export class Scheduler {
     options.signal?.addEventListener('abort', relay, { once: true });
     const results: ScheduleResult<T>['results'] = [];
     const succeeded = new Set<string>();
+    const completed = new Set(options.completed ?? []);
     const ids = new Set(tasks.map((task) => task.id));
     const dependencies = new Map<string, string[]>();
-    for (const [from, to] of options.edges ?? []) {
-      if (ids.has(from) && ids.has(to)) dependencies.set(to, [...(dependencies.get(to) ?? []), from]);
-    }
+    for (const [from, to] of options.edges ?? []) dependencies.set(to, [...(dependencies.get(to) ?? []), from]);
+    const satisfied = (dep: string): boolean => succeeded.has(dep) || completed.has(dep);
 
     const runOne = async (task: AgentTask): Promise<void> => {
       for (let attempt = task.attempt; ; attempt += 1) {
@@ -74,7 +74,7 @@ export class Scheduler {
         const task = pending[index]!;
         const deps = dependencies.get(task.id) ?? [];
         const lane = laneOf(task);
-        if (deps.every((dep) => succeeded.has(dep)) && (options.admit?.(task) ?? true) && active[lane] < limits[lane]) {
+        if (deps.every(satisfied) && active[lane] < limits[lane]) {
           pending.splice(index, 1);
           active[lane] += 1;
           const promise = runOne(task).then(() => { active[lane] -= 1; running.delete(promise); });
@@ -85,7 +85,11 @@ export class Scheduler {
         index += 1;
       }
       if (!started && running.size === 0) {
-        for (const task of pending.splice(0)) results.push({ task: { ...task, state: 'cancelled' }, state: 'cancelled' });
+        for (const task of pending.splice(0)) {
+          const absent = (dependencies.get(task.id) ?? []).filter((dep) => !satisfied(dep) && !ids.has(dep));
+          if (absent.length === 0) { results.push({ task: { ...task, state: 'cancelled' }, state: 'cancelled' }); continue; }
+          results.push({ task: { ...task, state: 'failed' }, error: new Error(`Task ${task.id} depends on ${absent.join(', ')}, which has not succeeded in this run.`), state: 'failed' });
+        }
         break;
       }
       if (running.size > 0) await Promise.race([...running]);

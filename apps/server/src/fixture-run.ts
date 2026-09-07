@@ -55,7 +55,6 @@ export class FixtureRun {
   private pendingVerdict: GateVerdict | undefined;
   private waiters: Array<() => void> = [];
   private failure: unknown;
-  private startRequest: Stage | undefined;
   private running = false;
   private readonly attempts = new Map<Stage, number>();
   private readonly reported = new Set<string>();
@@ -81,10 +80,9 @@ export class FixtureRun {
     const stage = STAGES[this.stageIndex];
     if (!stage) return this.snapshot();
     this.failure = undefined;
-    this.startRequest = stage;
     const parked = this.scheduled !== undefined && (this.running || this.gate !== undefined);
     if (this.status === 'rejected' && this.gate) this.openGate('rejected');
-    const inFlight = parked ? this.scheduled! : this.launch();
+    const inFlight = parked ? this.scheduled! : this.launch(stage);
     await Promise.race([this.settled(), inFlight]);
     const failure = this.failure;
     this.failure = undefined;
@@ -148,16 +146,17 @@ export class FixtureRun {
 
   snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
 
-  private launch(): Promise<void> {
+  private launch(stage: Stage): Promise<void> {
     const plan = this.planner.plan(this.runId(), this.currentVersion.id, BRIEF);
     const controller = new AbortController();
     this.runAbort = controller;
-    const queued = plan.tasks.slice(this.stageIndex).map((task) => ({ ...task, attempt: (this.attempts.get(task.stage) ?? 0) + 1 }));
+    const planned = plan.tasks.find((task) => task.stage === stage)!;
+    const queued = [{ ...planned, attempt: (this.attempts.get(stage) ?? 0) + 1 }];
     const absorbed = this.scheduler
       .run(queued, (task, signal) => this.executeStage(task, signal), {
         signal: controller.signal,
         edges: plan.edges,
-        admit: (task) => this.startRequest === task.stage && plan.edges.filter(([, to]) => to === task.id).every(([from]) => this.approvals.some((entry) => entry.decision === 'approved' && `task-${entry.stage}` === from)),
+        completed: this.approvals.filter((entry) => entry.decision === 'approved').map((entry) => `task-${entry.stage}`),
         settle: (_task, _value, signal) => this.awaitGate(signal),
       })
       .then((result) => this.absorb(result));
@@ -180,7 +179,6 @@ export class FixtureRun {
 
   private async executeStage(task: AgentTask, signal: AbortSignal): Promise<VersionRecord> {
     this.pendingVerdict = undefined;
-    this.startRequest = undefined;
     this.running = true;
     try {
       const plan = this.planner.plan(this.runId(), this.currentVersion.id, BRIEF);
