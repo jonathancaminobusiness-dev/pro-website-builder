@@ -58,11 +58,11 @@ test.describe('render hub evidence', () => {
       expect(wide.status).toBe(200);
       expect((await stat(wide.screenshotPath)).size).toBeGreaterThan(0);
 
-      // The node semantics this renderer accepts carry no interactive element, so the keyboard walk
-      // finds nothing to focus. The collector still runs; the focus checks that read it are covered
-      // against synthesized evidence in packages/qa-deterministic.
-      expect(wide.nodes.find((node) => node.nodeId === 'home-hero-cta')?.focusable).toBe(false);
-      expect(wide.focus).toEqual([]);
+      // The composed call to action is a real anchor, so the keyboard walk reaches it and the focus
+      // checks measure a ring instead of an empty list.
+      expect(wide.nodes.find((node) => node.nodeId === 'home-hero-cta')?.focusable).toBe(true);
+      expect(wide.focus.map((sample) => sample.nodeId)).toContain('home-hero-cta');
+      expect(wide.focus.every((sample) => sample.outlineWidthPx >= 1 || sample.boxShadow !== '')).toBe(true);
 
       // A state fixture really removes its nodes from the captured document.
       const empty = bundle.evidence.find((entry) => entry.context.viewport === 1440 && entry.context.state === 'empty')!;

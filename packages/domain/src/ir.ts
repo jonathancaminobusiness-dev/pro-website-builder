@@ -13,14 +13,16 @@ export const visualPropsSchema = z.object({
   width: tokenReferenceSchema, height: tokenReferenceSchema, margin: tokenReferenceSchema, maxWidth: tokenReferenceSchema,
 }).partial();
 export const visualPropKeys = new Set<string>(Object.keys(visualPropsSchema.shape));
-export const nodePropsSchema = visualPropsSchema.extend({ text: z.string().optional() }).strict();
+export const nodePropsSchema = visualPropsSchema.extend({ text: z.string().optional(), href: z.string().optional() }).strict();
 
 export const routeSchema = z.string()
   .regex(/^\/$|^(?:\/[A-Za-z0-9\-._~]+)+$/, 'Route must start with / and use non-empty unreserved path segments without a trailing slash.')
   .refine((route) => route.split('/').every((segment) => segment !== '.' && segment !== '..'), 'Route segments must not traverse directories.');
 
-export const semanticSchema = z.enum(['h1', 'h2', 'h3', 'p', 'section', 'figure', 'div']);
-export const phrasingSemantics = new Set<string>(['h1', 'h2', 'h3', 'p']);
+export const semanticSchema = z.enum(['h1', 'h2', 'h3', 'p', 'link', 'button', 'section', 'figure', 'div']);
+export const phrasingSemantics = new Set<string>(['h1', 'h2', 'h3', 'p', 'link', 'button']);
+/** The two semantics a keyboard can reach: a link, which carries the route it opens, and a button. */
+export const interactiveSemantics = new Set<string>(['link', 'button']);
 
 /**
  * A responsive rule the renderer actually reads: at a container width of `minWidth` or more, the node
@@ -45,6 +47,15 @@ export const pageNodeSchema = z.object({
   if ((node.kind === 'media') !== (node.semantic === 'figure')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `${documentRules.mediaFigure} Node ${node.id} is a ${node.kind} declaring ${node.semantic}.` });
   if (node.assetId !== undefined && node.kind !== 'media') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['assetId'], message: `${documentRules.mediaAsset} Node ${node.id} is a ${node.kind}.` });
   if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['slots'], message: `${documentRules.phrasingLeaf} Node ${node.id} renders as ${node.semantic}.` });
+  const interactive = interactiveSemantics.has(node.semantic);
+  if (interactive !== (node.kind === 'component')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `${documentRules.interactiveControl} Node ${node.id} is a ${node.kind} declaring ${node.semantic}.` });
+  if (interactive && (node.props.text ?? '').trim() === '') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['props', 'text'], message: `${documentRules.interactiveControl} Node ${node.id} carries no label.` });
+  if (node.semantic === 'link') {
+    const href = routeSchema.safeParse(node.props.href);
+    if (!href.success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['props', 'href'], message: `${documentRules.interactiveControl} Node ${node.id} points at ${String(node.props.href)}, which is not a route of this site.` });
+  } else if (node.props.href !== undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['props', 'href'], message: `${documentRules.interactiveControl} Node ${node.id} declares href while rendering as ${node.semantic}.` });
+  }
 });
 
 export function slotChildIds(node: { slots: Record<string, string[]> }): string[] {

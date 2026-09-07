@@ -1,6 +1,7 @@
 export const documentRules = {
   mediaFigure: 'A media node renders as figure, and only a media node may declare figure.',
-  phrasingLeaf: 'A node whose semantic is h1, h2, h3 or p carries its own text and must declare no slot children.',
+  phrasingLeaf: 'A node whose semantic is h1, h2, h3, p, link or button carries its own text and must declare no slot children.',
+  interactiveControl: 'A link or a button is a component node whose text is its label; only a link declares href, and that href must be a route of this site.',
   pageGraph: 'Node ids are unique within a page, and every node a page lists is reachable exactly once by following slots from its rootNodeId.',
   uniquePages: 'Page ids and page routes are unique across the document; routes are compared case-insensitively.',
   tokenRoles: 'Every tokenRoles entry must name a token path the identity itself defines.',

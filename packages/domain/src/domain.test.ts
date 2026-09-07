@@ -73,6 +73,12 @@ describe('domain contracts', () => {
     const violations: Record<keyof typeof documentRules, () => string[]> = {
       mediaFigure: () => refused((ir) => { (ir.pages.routes[0]!.nodes[2]! as { semantic: string }).semantic = 'figure'; }),
       phrasingLeaf: () => refused((ir) => { ir.pages.routes[0]!.nodes[1]!.slots = { children: ['home-proof'] }; }),
+      interactiveControl: () => refused((ir) => {
+        const control = ir.pages.routes[0]!.nodes[1]! as { kind: string; semantic: string; props: Record<string, unknown> };
+        control.kind = 'component';
+        control.semantic = 'link';
+        control.props.href = 'https://example.com/';
+      }),
       pageGraph: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title'] }; }),
       uniquePages: () => refused((ir) => { ir.pages.routes[1]!.route = '/contact'; }),
       tokenRoles: () => refused((ir) => { ir.identity.tokenRoles.surface = 'color.superficie'; }),

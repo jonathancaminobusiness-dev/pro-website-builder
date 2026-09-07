@@ -144,6 +144,9 @@ export class RenderHub {
   private async focusNode(page: Page, nodeId: string): Promise<void> {
     const target = page.locator(`[data-node-id="${nodeId}"]`).first();
     if (await target.count() === 0) return;
+    // `:focus-visible` only answers a keyboard, so the state screenshot has to be preceded by a real
+    // Tab; scripting focus on a cold page would capture the control without the ring a visitor sees.
+    await page.keyboard.press('Tab');
     await target.evaluate((element: HTMLElement) => {
       const focusable = element.matches('a[href], button, input, select, textarea, [tabindex]') ? element : element.querySelector<HTMLElement>('a[href], button, input, select, textarea, [tabindex]');
       focusable?.focus();

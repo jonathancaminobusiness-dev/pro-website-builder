@@ -111,8 +111,8 @@ describe('A11Y-090 and COPY-110', () => {
   it('names an unnamed control and a generic label', () => {
     const ir = createFixtureIR();
     ir.pages.routes[0]!.nodes.push(
-      node('cta-blank', 'component', 'div', { color: '{color.ink}', text: '  ' }),
-      node('cta-generic', 'component', 'div', { color: '{color.ink}', text: 'Saiba mais' }),
+      node('cta-blank', 'component', 'link', { color: '{color.ink}', text: '  ', href: '/proof' }),
+      node('cta-generic', 'component', 'link', { color: '{color.ink}', text: 'Saiba mais', href: '/proof' }),
     );
     ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'cta-blank', 'cta-generic'] };
     const messages = findings(ir, 'A11Y-090').join(' | ');

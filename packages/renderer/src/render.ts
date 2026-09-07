@@ -58,6 +58,8 @@ function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<
     const image = asset && asset.status === 'ready' ? `<img src="${escapeHtml(asset.uri)}" alt="${escapeHtml(asset.alt)}">` : '';
     return `<figure${common}>${image}<figcaption>${text}</figcaption>${children}</figure>`;
   }
+  if (node.semantic === 'link') return `<a href="${escapeHtml(String(node.props.href))}"${common}>${text}</a>`;
+  if (node.semantic === 'button') return `<button type="button"${common}>${text}</button>`;
   return `<${node.semantic}${common}>${text}${children}</${node.semantic}>`;
 }
 
@@ -136,7 +138,7 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
   const baseSpacing = roleVar(ir.identity, 'baseSpacing', values);
   const sectionSpacing = roleVar(ir.identity, 'sectionSpacing', values);
   const expanded = expandedBreakpoint(ir.identity, values);
-  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n  [hidden] { display: none !important; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: ${expanded}) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderResponsive(ir, values)}\n}`;
+  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n  :where(a, button) { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: inherit; cursor: pointer; }\n  :where(a, button):focus-visible { outline: 2px solid ${text}; outline-offset: 2px; }\n  [hidden] { display: none !important; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: ${expanded}) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderResponsive(ir, values)}\n}`;
 }
 
 export function renderDesign(ir: DesignIR): RenderedDocument {

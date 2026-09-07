@@ -15,7 +15,7 @@ export function renderComposerPrompt(task: AgentTask, section: SectionPlan, mani
     `Approved identity contract, frozen and read-only:\n${JSON.stringify({ direction: identity.direction, tokenRoles: identity.tokenRoles, gridGrammar: identity.gridGrammar, iconography: identity.iconography, content: identity.content, do: identity.do, dont: identity.dont, forbiddenDefaults: identity.forbiddenDefaults })}`,
     `Available token references: ${Object.keys(resolveTokens(identity.tokens).values).map((path) => `{${path}}`).join(', ')}`,
     `A responsive rule may only open at one of the identity's breakpoints — ${identity.gridGrammar.breakpointTokens.join(' or ')} — never at the content max width, which is narrower than the smallest viewport this prototype has to survive.`,
-    `Return a SectionComposition holding exactly ${section.nodeIds.length} nodes, with these ids in this order: ${section.nodeIds.join(', ')}. The first id is the section root; every other id must be reachable from it through the slots you declare. A node may only carry these visual props: ${[...visualPropKeys].join(', ')}, plus text. Every visual prop must be a token reference such as {color.ink}; a raw value is refused. A node whose semantic is h1, h2, h3 or p carries its own text and declares no children. The journey runs ${manifest.routes.map((route) => route.route).join(' then ')}; name the next route in the copy, because this renderer emits no anchors.`,
+    `Return a SectionComposition holding exactly ${section.nodeIds.length} nodes, with these ids in this order: ${section.nodeIds.join(', ')}. The first id is the section root; every other id must be reachable from it through the slots you declare. A node may only carry these visual props: ${[...visualPropKeys].join(', ')}, plus text. Every visual prop must be a token reference such as {color.ink}; a raw value is refused. A node whose semantic is h1, h2, h3, p, link or button carries its own text and declares no children. A link is a component node whose text is its label and whose href is one of the routes of this journey — ${manifest.routes.map((route) => route.route).join(', ')}; a button is a component node with a label and no href. The journey runs ${manifest.routes.map((route) => route.route).join(' then ')}; carry the visitor to the next route with a link, never with a raw URL in the copy.`,
     `Write the copy in ${identity.meta.locale}, in the identity voice, and never use ${identity.content.forbiddenTerms.join(', ')}.`,
   ].join('\n\n');
 }
@@ -48,14 +48,20 @@ export class FakeSectionComposer implements ComposerProvider {
     const children: PageNode[] = childIds.map((id, index) => {
       const heading = section.role === 'support' || index === 0;
       const level: 'h1' | 'h2' = section.role === 'support' || opensRoute ? 'h1' : 'h2';
-      // This renderer emits no anchors, so the journey is carried by the copy rather than by a link.
+      const font = `{${identity.tokenRoles.bodyTypeface}}`;
+      // The section's call to action is the navigation: a real anchor the keyboard can reach, which is
+      // what makes the focus state and the focus veto measure something.
       const closesJourney = section.callToAction !== undefined && index === childIds.length - 1 && section.role !== 'support';
-      const text: string = closesJourney && section.callToAction
-        ? `${section.callToAction.label}: ${section.callToAction.href}`
-        : copy[index] ?? section.body;
+      if (closesJourney && section.callToAction) {
+        return {
+          id, kind: 'component' as const, semantic: 'link' as const,
+          props: { color: ink, font, text: section.callToAction.label, href: section.callToAction.href },
+          slots: {}, responsive: [],
+        };
+      }
       return {
         id, kind: 'type' as const, semantic: heading ? level : ('p' as const),
-        props: { color: ink, font: `{${identity.tokenRoles.bodyTypeface}}`, text },
+        props: { color: ink, font, text: copy[index] ?? section.body },
         slots: {}, responsive: [],
       };
     });
@@ -115,7 +121,11 @@ export function validateComposition(composition: SectionComposition, section: Se
   let tokens: Set<string>;
   try { tokens = new Set(Object.keys(resolveTokens(identity.tokens).values)); } catch { tokens = new Set(); }
   const breakpoints = new Set(identity.gridGrammar.breakpointTokens);
+  const journeyRoutes = new Set(manifest.routes.map((route) => route.route));
   for (const node of composition.nodes) {
+    if (node.semantic === 'link' && !journeyRoutes.has(String(node.props.href))) {
+      problems.push(`Node ${node.id} links to ${String(node.props.href)}, which is not one of the routes this journey declares.`);
+    }
     for (const rule of node.responsive) {
       if (!breakpoints.has(rule.minWidth)) problems.push(`Node ${node.id} opens a breakpoint at ${rule.minWidth}, which the grid grammar does not declare as one of ${identity.gridGrammar.breakpointTokens.join(', ')}.`);
     }

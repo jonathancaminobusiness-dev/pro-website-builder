@@ -19,7 +19,7 @@ export const sectionPlanSchema = z.object({
   intent: z.string().min(1),
   headline: z.string().min(1),
   body: z.string().min(1),
-  /** Where the section sends the visitor next. The renderer emits no anchors yet, so the composer names the route in the copy. */
+  /** Where the section sends the visitor next; the composer emits it as the link that carries the journey. */
   callToAction: z.object({ label: z.string().min(1), href: routeSchema }).optional(),
   nodeIds: z.array(z.string().min(1)).min(1),
   nodeRange: z.object({ start: z.number().int().min(0), count: z.number().int().positive() }).strict(),

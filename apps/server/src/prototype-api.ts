@@ -27,6 +27,13 @@ export interface IssueDecisionRecord {
 
 export type PrototypeRunStatus = 'queued' | 'running' | 'settled' | 'failed' | 'interrupted';
 
+/**
+ * Headroom the scheduler deadline keeps over the loop's own budget. The loop reads its budget at a
+ * cycle boundary, so without this slack the hard abort always fires first and the graceful
+ * `budget_exhausted` stop — with everything the browser already measured — is thrown away.
+ */
+const STAGE_DEADLINE_SLACK_MS = 5 * 60_000;
+
 /** Where a run is right now. A start request returns this immediately; the list endpoint returns only this. */
 export interface PrototypeRunProgress {
   runId: string;
@@ -204,8 +211,9 @@ export class PrototypeRunRegistry {
   }
 
   /**
-   * Runs the stage as one scheduler task on the raster lane, so the browser matrix obeys the same
-   * deadline, abort signal and single-slot limit every other measured job in this orchestrator does.
+   * Runs the stage as one scheduler task on the raster lane, which is where its deadline and abort
+   * signal come from. What serializes the browser matrix is the `lane` promise chain in `create`:
+   * a `Scheduler` counts its lane semaphore per `run()` call, so two calls never see each other.
    */
   private async execute(record: PrototypeRunRecord, applier: Applier, baseVersionId: string): Promise<void> {
     const { runId } = record;
@@ -220,6 +228,9 @@ export class PrototypeRunRegistry {
       evidence: this.options.evidence,
       brief: BRIEF,
       onEvent: async (type, payload) => {
+        // An aborted stage keeps unwinding for a few seconds; whatever it still reports must not
+        // overwrite the terminal record the scheduler already settled.
+        if (record.progress.status !== 'queued' && record.progress.status !== 'running') return;
         record.progress = { ...record.progress, step: type, detail: describeStep(type, payload), updatedAt: new Date().toISOString() };
         await this.options.repository.appendEvent({ id: randomUUID(), runId, type, payload });
         await this.persist(record);
@@ -228,7 +239,7 @@ export class PrototypeRunRegistry {
     const task = agentTaskSchema.parse({
       id: `${runId}-prototype`, attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'raster',
       baseVersionId, inputDigest: hashJson([BRIEF, baseVersionId]), promptVersion: 'gate2-run-v1',
-      modelAlias: claude ? 'claude-local' : 'fake', deadlineMs: DEFAULT_LOOP_BUDGET.deadlineMs,
+      modelAlias: claude ? 'claude-local' : 'fake', deadlineMs: DEFAULT_LOOP_BUDGET.deadlineMs + STAGE_DEADLINE_SLACK_MS,
       allowedPaths: [], brief: BRIEF, documentSlice: { '/identity': identity },
     });
 

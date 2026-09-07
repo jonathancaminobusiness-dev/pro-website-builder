@@ -239,7 +239,7 @@ export default function Gate2(): ReactElement {
           {active && <p className="gate2-note">O servidor mede uma revisão por vez. <a href={`${GATE2_ROUTE}/${encodeURIComponent(active.runId)}`}>Acompanhe {active.runId}</a>.</p>}
           {recent.length > 0 && (
             <div className="gate2-runs">
-              <p className="eyebrow">Execuções desta sessão</p>
+              <p className="eyebrow">Histórico de execuções</p>
               <ul>
                 {recent.map((entry) => (
                   <li key={entry.runId}>
@@ -269,7 +269,6 @@ export default function Gate2(): ReactElement {
           <p className="gate2-note">Passo atual: <code>{snapshot.step}</code> · início {new Date(snapshot.startedAt).toLocaleTimeString('pt-BR')}</p>
           <p>Cada revisão é capturada num navegador real em 390, 768 e 1440 px, em cada estado declarado, antes que qualquer crítico opine. Esta página acompanha sozinha; o endereço guarda a execução.</p>
           {(snapshot.status === 'failed' || snapshot.status === 'interrupted') && <p className="error-banner" role="alert">{snapshot.error ?? snapshot.detail}</p>}
-          {snapshot.status !== 'running' && snapshot.status !== 'queued' && <p><a href={GATE2_ROUTE}>← voltar às execuções</a></p>}
           {error && <p className="error-banner" role="alert">{error}</p>}
         </section>
       </div>
