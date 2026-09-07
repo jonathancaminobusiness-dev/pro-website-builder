@@ -168,14 +168,16 @@ export class FixtureRun {
 
   /**
    * Publishing the bundle the captain looked at is what closes the finalization
-   * gate. The gate is claimed before the first await, so two publishes that race
-   * cannot both write the bundle and record the approval.
+   * gate. The bundle has to come from a release prepared for the proposal now at
+   * the gate, and the gate is claimed before the first await, so two publishes
+   * that race cannot both write the bundle and record the approval.
    */
   async publishRelease(digest: string, rationale?: string, approverRole: ReleaseApprover = 'captain'): Promise<ReleaseManifest> {
     this.requireInitialized();
     if (!this.releaseRun) throw new Error('A finalização não está habilitada nesta execução.');
     if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new Error('Stage finalization is not awaiting approval.');
     this.requireClean('finalization', this.currentVersion);
+    if (this.releaseRun.snapshot()?.refinedFromVersionId !== this.finalizationVersion?.id) throw new Error('O release preparado não é o da proposta que está no gate; prepare o release novamente antes de publicar.');
     this.status = 'queued';
     try { return await this.releaseRun.publish(approverRole, digest, rationale); }
     catch (error) { if (this.status === 'queued') this.status = 'needs_review'; throw error; }
@@ -198,7 +200,7 @@ export class FixtureRun {
     // the rewind starts from the stage's own version and lands on its base.
     const rejected = stage === 'finalization' && this.finalizationVersion ? this.finalizationVersion : this.currentVersion;
     const parent = this.applier.rewind(rejected);
-    if (stage === 'finalization') this.finalizationVersion = undefined;
+    if (stage === 'finalization') { this.finalizationVersion = undefined; this.discardPreparedRelease(); }
     if (parent) {
       this.currentVersion = parent;
       this.rendered = renderDesign(parent.ir);
@@ -298,14 +300,19 @@ export class FixtureRun {
         await this.record('run.finished', { status: 'succeeded', digest: manifest.digest });
       },
       adopt: async (version) => {
+        if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new Error('O gate de finalização se moveu enquanto o release era preparado; a preparação não adota a versão refinada.');
         this.currentVersion = version;
         this.rendered = renderDesign(version.ir);
         this.lintErrorCount = lintDesign(version.ir).errorCount;
         await ignoringDuplicate(this.options.repository.saveVersion({ id: version.id, projectId: this.projectId(), ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir }));
         await this.record('version.created', { versionId: version.id, hash: version.hash });
-        await this.record('release.refined', { versionId: version.id, approvedVersionId: approved.id });
       },
     };
+  }
+
+  /** A prepared release belongs to one finalization proposal; a new one is prepared for the next. */
+  private discardPreparedRelease(): void {
+    if (this.options.release) this.releaseRun = new ReleaseRun(this.runIdentifier, this.options.release);
   }
 
   private approvedAt(stage: Stage): Approval | undefined {
@@ -376,7 +383,7 @@ export class FixtureRun {
       await ignoringDuplicate(this.options.repository.savePatch(proposal, this.runId()));
       await ignoringDuplicate(this.options.repository.saveVersion({ id: next.id, projectId: this.projectId(), ...(next.parentId ? { parentId: next.parentId } : {}), hash: next.hash, ir: next.ir }));
       this.currentVersion = next;
-      if (current.stage === 'finalization') this.finalizationVersion = next;
+      if (current.stage === 'finalization') { this.finalizationVersion = next; this.discardPreparedRelease(); }
       this.rendered = renderDesign(next.ir);
       this.lintErrorCount = lintDesign(next.ir).errorCount;
       await this.record('patch.applied', { taskId: current.id, stage: current.stage, baseVersionId: current.baseVersionId, versionId: next.id });

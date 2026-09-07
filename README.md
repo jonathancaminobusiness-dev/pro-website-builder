@@ -158,7 +158,10 @@ publish until the captain has approved identity and prototype on that run and th
 finalization stage has produced the version they are looking at — rejecting that
 proposal closes Gate 3 again until the stage runs anew, and rewinds to what the
 prototype gate approved whether or not Gate 3 refined it. That version, plus the
-review record the refiner writes onto it, is the run's release.
+review record the refiner writes onto it, is the run's release. A prepared
+release belongs to that one proposal: rejecting it, or running the stage again,
+discards it, and publishing a bundle prepared for another proposal is refused
+rather than writing bytes the captain never approved.
 
 Publishing the bundle *is* the finalization approval: there is no second action
 that could close the gate, so nothing can write a release with a veto standing or
@@ -206,7 +209,9 @@ hear write typed artifacts into `artifacts/release/`, and the gate reads those
 files. `evidenceVetoes` derives an accessibility regression from axe's raw
 violation counts rather than from a field a runner chose to set, and
 `sealSummary` overwrites the summarizer's veto count with the authoritative one,
-so no summary can hide a veto. A runner that did not run leaves no artifact, and
+so no summary can hide a veto. What the gate did — each refinement cycle, a
+critic or a model session that failed, the verdict itself — is written to the
+run's event log as it happens, so a blocked Gate 3 leaves a durable trace. A runner that did not run leaves no artifact, and
 the gate reports the gap as an escalation instead of treating silence as a pass.
 
 Every artifact names the release it measured — the bundle digest and the

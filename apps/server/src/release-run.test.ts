@@ -35,7 +35,7 @@ function pageEditingProvider(text: string): ModelProvider {
     propose: async (task, signal) => task.stage !== 'finalization' ? fake.propose(task, signal) : {
       taskId: task.id, status: 'succeeded', summary: 'rewrites the proof page',
       proposal: {
-        operations: [{ op: 'replace', path: '/pages/routes/1/nodes/1/props/text', value: text }],
+        operations: [{ op: 'replace', path: '/pages/routes/1/nodes/1/props/text', value: `${text} (tentativa ${task.attempt})` }],
         baseVersionId: task.baseVersionId, touchedPaths: ['/pages/routes/1/nodes/1/props/text'],
         rationale: 'The finalization stage rewrote the proof page.', confidence: 1,
         stage: task.stage, role: task.role, idempotencyKey: `${task.id}#${task.attempt}`,
@@ -239,6 +239,40 @@ describe('Gate 3 over the local API', () => {
     // what the prototype gate approved, not to the proposal they just refused.
     const rejected = await run.reject('finalization', 'captain');
     expect(rejected.currentVersion.id).toBe(prototype.versionId);
+  });
+
+  it('refuses to publish a release prepared for the proposal the captain rejected', async () => {
+    const { origin, runId, run, releaseRoot } = await harness({
+      provider: pageEditingProvider('Prova reescrita na finalização.'),
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'passed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 0, serious: 0 }, notes: [] }],
+    });
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(prepared.report.blocked).toBe(false);
+
+    // The captain rejects the proposal and the stage runs again, so the document
+    // at the gate renders different bytes than the prepared bundle.
+    await run.reject('finalization', 'captain');
+    await run.runNext();
+    expect(run.snapshot().currentVersion.id).not.toBe(prepared.versionId);
+
+    const stale = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(stale.status).toBe(500);
+    expect((await stale.json() as { error: string }).error).toMatch(/prepare o release novamente/);
+    await expect(readdir(releaseRoot)).rejects.toThrow();
+    expect(run.snapshot().status).toBe('needs_review');
+    expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization' && entry.decision === 'approved')).toHaveLength(0);
+
+    // Preparing again compiles the proposal now at the gate, and the bundle, the
+    // release record and the approval all name that one document.
+    const again = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(again.digest).not.toBe(prepared.digest);
+    const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: again.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(published.status).toBe(200);
+    expect((await readdir(releaseRoot)).filter((entry) => !entry.endsWith('.json'))).toEqual([again.digest]);
+    const approval = run.snapshot().approvals.find((entry) => entry.stage === 'finalization' && entry.decision === 'approved')!;
+    expect(approval.versionId).toBe(again.versionId);
+    const [publication] = await readReleasePublications(releaseRoot, again.digest);
+    expect(publication?.releasedVersionId).toBe(again.versionId);
   });
 
   it('closes Gate 3 again when the captain rejects the finalization proposal', async () => {

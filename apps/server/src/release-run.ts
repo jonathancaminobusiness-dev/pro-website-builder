@@ -98,6 +98,7 @@ export class ReleaseRun {
       approved: context.approved,
       evidence,
       applier: context.applier,
+      onEvent: (type, payload) => context.record(type, payload),
       ...(signal ? { signal } : {}),
     });
     if (result.version.id !== context.current.id) await context.adopt(result.version);
