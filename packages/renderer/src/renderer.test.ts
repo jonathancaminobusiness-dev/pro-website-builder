@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { createFixtureIR, resolveTokens } from '@pwb/domain';
 import { renderDesign } from './index.js';
 
+/** Parses the emitted stylesheet into the rules a node carries outside any container query. */
+function nodeRule(css: string, nodeId: string): string {
+  const components = css.slice(css.indexOf('@layer components'));
+  return new RegExp(`\\n  \\[data-node-id="${nodeId}"\\] \\{ ([^}]*)\\}`).exec(components)?.[1]?.trim() ?? '';
+}
+
 /** Parses the emitted stylesheet into the container queries a browser would apply, widths in px. */
 function containerQueries(css: string): Array<{ minWidthPx: number; selector: string; declarations: string }> {
   return [...css.matchAll(/@container \(min-width: ([^)]+)\) \{\s*([^{]+?) \{ ([^}]*)\}/g)].map((match) => {
@@ -44,15 +50,21 @@ describe('deterministic renderer', () => {
     expect(() => renderDesign(ir)).toThrow(/breakpoint\.absent/);
   });
 
-  it('opens a container query at the identity breakpoint, so 1024 gets a rule 390 does not', () => {
+  it('gives a node and its container query the same specificity, with the query last', () => {
     const ir = createFixtureIR();
     const [compact] = ir.identity.gridGrammar.breakpointTokens as [string, string];
     ir.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: compact, props: { gap: '{space.xl}' } }];
-    const query = containerQueries(renderDesign(ir).css).find((block) => block.selector === '[data-node-id="home-root"]')!;
+    const css = renderDesign(ir).css;
 
+    // A style attribute would outrank the query; the same selector in the same layer cannot.
+    expect(renderDesign(ir).routes[0]!.html).not.toContain('style=');
+    expect(nodeRule(css, 'home-root')).toContain('gap: var(--space-lg);');
+    const query = containerQueries(css).find((block) => block.selector === '[data-node-id="home-root"]')!;
     expect(query.minWidthPx).toBeGreaterThan(390);
     expect(query.minWidthPx).toBeLessThan(1024);
     expect(query.declarations).toContain('gap: var(--space-xl);');
+    // Source order is what decides between them, so the query's copy of the selector comes last.
+    expect(css.lastIndexOf('[data-node-id="home-root"]')).toBeGreaterThan(css.indexOf('[data-node-id="home-root"]'));
   });
 
   it('emits a node\'s breakpoints widest last, so the wider condition is the one that wins', () => {
@@ -123,12 +135,11 @@ describe('deterministic renderer', () => {
     node.props.maxWidth = '{space.xl}';
     node.props.fontSize = '{space.md}';
     node.props.background = '{color.paper}';
-    const html = renderDesign(ir).routes[0]!.html;
-    const style = /data-node-id="home-proof"[^>]*style="([^"]*)"/.exec(html)?.[1] ?? '';
-    expect(style.split(';').map((declaration) => declaration.split(':')[0])).toEqual(
+    const rule = nodeRule(renderDesign(ir).css, 'home-proof');
+    expect(rule.split(';').map((declaration) => declaration.split(':')[0]!.trim())).toEqual(
       expect.arrayContaining(['box-shadow', 'padding-inline', 'max-width', 'font-size', 'background-color']),
     );
-    expect(style).not.toMatch(/(^|;)(shadow|paddingInline|maxWidth|fontSize):/);
+    expect(rule).not.toMatch(/(^|;)\s*(shadow|paddingInline|maxWidth|fontSize):/);
   });
 
   it('names the page once, in the document title', () => {

@@ -16,7 +16,7 @@ export class DeadlineExceededError extends Error {
 
 /** The plan's concurrency: three simultaneous Claude sessions, one browser at a time. */
 export const DEFAULT_MAX_ACTIVE_CLAUDE = 3;
-export const DEFAULT_MAX_ACTIVE_RASTER = 1;
+const DEFAULT_MAX_ACTIVE_RASTER = 1;
 
 /**
  * Rejects as soon as the run is cancelled. Used to bound the settle callback, which is otherwise

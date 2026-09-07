@@ -130,3 +130,34 @@ test('rings a visible control when the state hides the first one inside the node
     await rm(cacheDir, { recursive: true, force: true });
   }
 });
+
+test('applies a container query to a property the node already declares, measured at 390 and 1024', async () => {
+  const ir = createFixtureIR();
+  const shell = ir.pages.routes[0]!.nodes[0]!;
+  // The shape every route shell has: a base shorthand plus a breakpoint that narrows one of its sides.
+  shell.props = { ...shell.props, padding: '{space.md}' };
+  shell.responsive = [{ minWidth: '{breakpoint.compact}', props: { paddingInline: '{space.xl}' } }];
+
+  const rendered = renderDesign(ir, { routePrefix: `/preview/${ir.meta.versionId}` });
+  const preview = createPreviewServer((requested) => requested === ir.meta.versionId ? rendered : undefined, 0);
+  await preview.start();
+  const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-container-query-'));
+  try {
+    const hub = new RenderHub({ cacheDir });
+    const paddingAt = async (width: 390 | 1024): Promise<{ inline: number | null; block: number | null }> => {
+      const [capture] = await hub.capture({
+        ir, rendered, baseUrl: preview.origin, previewPrefix: `/preview/${ir.meta.versionId}`,
+        cases: [{ route: '/', width, state: 'default', reducedMotion: false }],
+      });
+      const node = capture!.evidence.nodes.find((entry) => entry.nodeId === 'home-root')!;
+      return { inline: node.paddingInlinePx, block: node.paddingBlockPx };
+    };
+
+    // 24px is {space.md}; 96px is {space.xl}, which the query opens at 44rem.
+    expect(await paddingAt(390)).toEqual({ inline: 24, block: 24 });
+    expect(await paddingAt(1024)).toEqual({ inline: 96, block: 24 });
+  } finally {
+    await preview.close();
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});

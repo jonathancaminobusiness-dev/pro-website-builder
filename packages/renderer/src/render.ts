@@ -40,8 +40,8 @@ function roleVar(identity: IdentitySpec, role: keyof IdentitySpec['tokenRoles'],
   return `var(${cssCustomPropertyName(path)})`;
 }
 
-function cssValue(value: string, values: Record<string, string | number | boolean>, node: PageNode, key: string): string {
-  if (/^\{[^}]+\}$/.test(value)) {
+function cssValue(value: string | number | boolean, values: Record<string, string | number | boolean>, node: PageNode, key: string): string {
+  if (typeof value === 'string' && /^\{[^}]+\}$/.test(value)) {
     const path = value.slice(1, -1);
     if (!(path in values)) throw new Error(`${documentRules.tokenReferences} Unresolved token reference ${value} on ${node.id}.${key}`);
     return `var(${cssCustomPropertyName(path)})`;
@@ -56,10 +56,7 @@ function propertyName(key: string): string {
 }
 
 function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<string, string | number | boolean>, assets: Map<string, Asset>, routePrefix: string): string {
-  const styleEntries = Object.entries(node.props).filter((entry): entry is [string, string] => visualPropKeys.has(entry[0]) && typeof entry[1] === 'string');
-  const styles = styleEntries.map(([key, value]) => `${propertyName(key)}:${cssValue(value, values, node, key)}`).join(';');
-  const styleAttribute = styles ? ` style="${escapeHtml(styles)}"` : '';
-  const common = ` data-node-id="${escapeHtml(node.id)}" data-node-kind="${escapeHtml(node.kind)}"${styleAttribute}`;
+  const common = ` data-node-id="${escapeHtml(node.id)}" data-node-kind="${escapeHtml(node.kind)}"`;
   const text = node.props.text ? escapeHtml(node.props.text) : '';
   const children = slotChildIds(node).map((childId) => {
     const child = byId.get(childId);
@@ -102,6 +99,29 @@ function breakpointPx(literal: string | number | boolean, nodeId: string): numbe
   return size[2] === 'rem' || size[2] === 'em' ? amount * 16 : amount;
 }
 
+/** The token-backed declarations of one prop bag, in a stable order so the output is byte-identical. */
+function declarationsFor(props: Record<string, unknown>, values: Record<string, string | number | boolean>, node: PageNode, where: string): string[] {
+  return Object.entries(props)
+    .filter((entry): entry is [string, string | number | boolean] => visualPropKeys.has(entry[0]) && entry[1] !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, value]) => `${propertyName(key)}: ${cssValue(value, values, node, `${where}${key}`)};`);
+}
+
+/**
+ * A node's own props are a stylesheet rule, not a style attribute: an attribute outranks every author
+ * rule, so a container query on a property the node already declares could never apply. Emitted in the
+ * same layer as, and ahead of, the queries, the two are equal specificity and source order decides.
+ */
+function renderNodeRules(ir: DesignIR, values: Record<string, string | number | boolean>): string {
+  const blocks: string[] = [];
+  for (const page of ir.pages.routes) for (const node of page.nodes) {
+    const declarations = declarationsFor(node.props, values, node, '');
+    if (declarations.length === 0) continue;
+    blocks.push(`  [data-node-id="${escapeHtml(node.id)}"] { ${declarations.join(' ')} }`);
+  }
+  return blocks.length === 0 ? '' : `\n${blocks.join('\n')}`;
+}
+
 /**
  * Reads the responsive rules of every node into container queries. The width is resolved from its token
  * at build time because a container query condition cannot hold a custom property, so a breakpoint is
@@ -119,10 +139,7 @@ function renderResponsive(ir: DesignIR, values: Record<string, string | number |
     // Equal-specificity blocks are decided by source order, so the widest condition has to be emitted
     // last. Ordering by the token reference would let {space.lg} lose to the narrower {space.md}.
     for (const { rule, literal, width } of [...resolvedRules].sort((a, b) => a.width - b.width)) {
-      const declarations = Object.entries(rule.props)
-        .filter((entry): entry is [string, string | number | boolean] => visualPropKeys.has(entry[0]) && entry[1] !== undefined)
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([key, value]) => `${propertyName(key)}: ${cssValue(value, values, node, `responsive.${key}`)};`);
+      const declarations = declarationsFor(rule.props, values, node, 'responsive.');
       if (declarations.length === 0) continue;
       blocks.push(`  @container (min-width: ${String(literal)}) {\n    [data-node-id="${escapeHtml(node.id)}"] { ${declarations.join(' ')} }\n  }`);
     }
@@ -152,7 +169,7 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
   const baseSpacing = roleVar(ir.identity, 'baseSpacing', values);
   const sectionSpacing = roleVar(ir.identity, 'sectionSpacing', values);
   const expanded = expandedBreakpoint(ir.identity, values);
-  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n  :where(a, button) { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: inherit; cursor: pointer; }\n  :where(a, button):focus-visible { outline: 2px solid ${text}; outline-offset: 2px; }\n  [hidden] { display: none !important; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: ${expanded}) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderResponsive(ir, values)}\n}`;
+  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n  :where(a, button) { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: inherit; cursor: pointer; }\n  :where(a, button):focus-visible { outline: 2px solid ${text}; outline-offset: 2px; }\n  [hidden] { display: none !important; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: ${expanded}) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderNodeRules(ir, values)}${renderResponsive(ir, values)}\n}`;
 }
 
 export function renderDesign(ir: DesignIR, options: RenderOptions = {}): RenderedDocument {
