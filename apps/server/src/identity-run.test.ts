@@ -123,6 +123,31 @@ describe('identity run', () => {
     expect(new Set(reapproved.approvals.map((approval) => approval.id)).size).toBe(2);
   });
 
+  it('re-derives the chosen card from the version a token change produced', async () => {
+    const run = newRun();
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
+    const before = run.snapshot().directions.find((direction) => direction.directionId === 'editorial-material')!;
+
+    const reopened = await run.changeToken({ tokenPath: 'color.accent', value: { $value: '#ff7a00', $type: 'color' }, rationale: 'Sinal mais quente.' });
+    const chosen = reopened.directions.find((direction) => direction.directionId === 'editorial-material')!;
+    expect(chosen.versionId).toBe(reopened.previewVersionId);
+    expect(chosen.identityHash).not.toBe(before.identityHash);
+    expect(chosen.swatches.find((swatch) => swatch.path === 'color.accent')?.value).toBe('#ff7a00');
+
+    // The blocker the server will refuse the approval with is on the card first.
+    const withForbiddenFont = await run.changeToken({ tokenPath: 'type.display', value: { $value: 'Inter-only hero, Georgia, serif', $type: 'fontFamily' }, rationale: 'Testando a fonte proibida.' });
+    const blocked = withForbiddenFont.directions.find((direction) => direction.directionId === 'editorial-material')!;
+    expect(blocked.lintErrors.map((finding) => finding.id)).toContain('DEF-010');
+    await expect(run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Mesmo assim.' })).rejects.toThrow(/automatic selection is not allowed/);
+
+    // The other two cards stay the historical candidates the captain compared.
+    const other = withForbiddenFont.directions.find((direction) => direction.directionId === 'modular-technical')!;
+    expect(other.versionId).not.toBe(withForbiddenFont.previewVersionId);
+    expect(other.lintErrors).toEqual([]);
+  });
+
   it('reports only the render cache entries it actually removed', async () => {
     const run = new IdentityRun({ runId: 'identity-prune', repository: new ProjectRepository(database), provider: new FakeIdentityProvider(), renderCacheDir: join(directory, 'render-cache') });
     await run.initialize();

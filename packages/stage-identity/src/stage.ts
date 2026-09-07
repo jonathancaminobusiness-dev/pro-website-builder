@@ -114,8 +114,9 @@ export interface IdentityApproval {
 
 class StageError extends Error {}
 
-function getTokenAt(tokens: IdentitySpec['tokens'], path: string): unknown {
-  return path.split('.').reduce<unknown>((current, segment) => (current && typeof current === 'object' ? (current as Record<string, unknown>)[segment] : undefined), tokens);
+/** One critic seat: the critic that was asked and the subject it was asked about. */
+function criticSeat(report: CritiqueReport): string {
+  return `${report.criticId}|${report.subject.kind === 'direction' ? report.subject.directionId : 'matrix'}`;
 }
 
 /** The validation errors a corrective re-invocation has to repair, or undefined when the artefact already fits its schema. */
@@ -358,12 +359,12 @@ export class IdentityStage {
   private async critique(brief: BriefSpec, signal?: AbortSignal, only?: IdentityAxisBriefId[]): Promise<CritiqueReport[]> {
     const subjects = only ? this.candidates.filter((candidate) => only.includes(candidate.directionId)) : this.candidates;
     const tasks: AgentTask[] = [];
-    const subjectOf = new Map<string, CritiqueReport['subject']>();
+    const seatOf = new Map<string, { criticId: string; subject: CritiqueReport['subject'] }>();
     for (const critic of identityCritics) {
       if (critic.scope === 'matrix') {
         const first = this.candidates[0];
         if (!first || only) continue;
-        subjectOf.set(`identity-critic-${critic.id}`, { kind: 'matrix' });
+        seatOf.set(`identity-critic-${critic.id}`, { criticId: critic.id, subject: { kind: 'matrix' } });
         tasks.push(this.task({
           id: `identity-critic-${critic.id}`,
           role: 'critic',
@@ -375,7 +376,7 @@ export class IdentityStage {
         continue;
       }
       for (const candidate of subjects) {
-        subjectOf.set(`identity-critic-${critic.id}-${candidate.directionId}`, { kind: 'direction', directionId: candidate.directionId });
+        seatOf.set(`identity-critic-${critic.id}-${candidate.directionId}`, { criticId: critic.id, subject: { kind: 'direction', directionId: candidate.directionId } });
         tasks.push(this.task({
           id: `identity-critic-${critic.id}-${candidate.directionId}`,
           role: 'critic',
@@ -397,10 +398,10 @@ export class IdentityStage {
       // A critic is advisory, so an answer that misses its schema costs its own
       // report and the captain's attention, never the whole stage.
       try {
-        // The subject is the seat the task was issued for, not what the critic
-        // says it read: attribution is a fact the stage already knows.
+        // The critic and the subject are the seat the task was issued for, not
+        // what the answer says it is: attribution is a fact the stage knows.
         const report = requireArtifact(critiqueReportSchema, result.artifact, result.taskId, 'CritiqueReport');
-        reports.push({ ...report, subject: subjectOf.get(result.taskId)! });
+        reports.push({ ...report, ...seatOf.get(result.taskId)! });
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'The critique did not validate.';
         this.failures.push({ taskId: result.taskId, reason });
@@ -437,7 +438,10 @@ export class IdentityStage {
     const refined = this.candidates.filter((candidate) => candidate.refinedFromVersionId).map((candidate) => candidate.directionId);
     if (refined.length === 0) return;
     const reports = await this.critique(brief, signal, refined);
-    this.critiques = [...this.critiques.filter((report) => !(report.subject.kind === 'direction' && refined.includes(report.subject.directionId as IdentityAxisBriefId))), ...reports];
+    // A seat that did not answer the second time keeps what it found the first
+    // time: a veto disappears only when the same critic has read the repair.
+    const reread = new Set(reports.map(criticSeat));
+    this.critiques = [...this.critiques.filter((report) => !reread.has(criticSeat(report))), ...reports];
     this.applyCritiqueToCandidates();
   }
 
@@ -664,7 +668,7 @@ export class IdentityStage {
     const baseId = this.approvedVersionId!;
     const base = this.branches.version(baseId);
     const pointer = `/identity/tokens/${input.tokenPath.split('.').join('/')}`;
-    if (!getTokenAt(base.ir.identity.tokens, input.tokenPath)) throw new StageError(`Token ${input.tokenPath} is not defined by the approved identity.`);
+    if (!flattenTokens(base.ir.identity.tokens).has(input.tokenPath)) throw new StageError(`Token ${input.tokenPath} is not defined by the approved identity.`);
     const patch: Patch = {
       operations: [{ op: 'replace', path: pointer, value: input.value }],
       baseVersionId: baseId,

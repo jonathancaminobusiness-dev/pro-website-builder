@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { createFixtureIR, type Approval, type Token } from '@pwb/domain';
+import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
-import { approvalOf, IdentityStage, pruneRenderCache, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
+import { approvalOf, identityHash, IdentityStage, pruneRenderCache, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 
 const duplicateCodes = new Set(['SQLITE_CONSTRAINT_PRIMARYKEY', 'SQLITE_CONSTRAINT_UNIQUE']);
@@ -180,6 +181,9 @@ export class IdentityRun {
   snapshot(): IdentityRunSnapshot {
     const gate = this.stage.gateState();
     const handoff = this.stage.handoff(gate);
+    // A reopened gate is decided on the version the token change produced, so the
+    // chosen card describes that version and not the candidate it started as.
+    const reopened = gate.state === 'reopened' ? gate.record.directionId : undefined;
     return {
       runId: this.options.runId,
       projectId: this.projectId,
@@ -187,7 +191,7 @@ export class IdentityRun {
       baseVersionId: this.root.id,
       briefing: this.options.briefing ?? IDENTITY_BRIEFING,
       ...(this.result ? { brief: this.result.brief } : {}),
-      directions: this.result ? this.result.candidates.map((candidate) => this.viewOf(candidate)) : [],
+      directions: this.result ? this.result.candidates.map((candidate) => this.viewOf(candidate, reopened === candidate.directionId ? this.store.get(this.stage.approvedVersionId!) : undefined)) : [],
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),
       critiques: this.result?.critiques ?? [],
       failures: this.result?.failures ?? [],
@@ -218,15 +222,16 @@ export class IdentityRun {
     }
   }
 
-  private viewOf(candidate: IdentityCandidate): IdentityDirectionView {
-    const identity = candidate.identity;
+  private viewOf(candidate: IdentityCandidate, current?: VersionRecord): IdentityDirectionView {
+    const identity = current?.ir.identity ?? candidate.identity;
+    const lint = current ? lintDesign(current.ir) : candidate.lint;
     const swatches = Object.entries(identity.tokens.color as Record<string, { $value: string | number | boolean }>).map(([name, token]) => ({ path: `color.${name}`, value: String(token.$value) }));
     return {
       directionId: candidate.directionId,
       label: candidate.label,
-      versionId: candidate.versionId,
-      parentVersionId: candidate.parentVersionId,
-      identityHash: candidate.identityHash,
+      versionId: current?.id ?? candidate.versionId,
+      parentVersionId: current?.parentId ?? candidate.parentVersionId,
+      identityHash: current ? identityHash(current.ir) : candidate.identityHash,
       thesis: identity.direction.thesis,
       tension: identity.direction.tension,
       rationale: identity.direction.rationale,
@@ -235,7 +240,7 @@ export class IdentityRun {
       axes: Object.entries(candidate.vector.axes).map(([axis, value]) => ({ axis, key: value.key, descriptor: value.descriptor })),
       swatches,
       decisions: identity.decisions.map((decision) => ({ choice: decision.choice, ...(decision.axis ? { axis: decision.axis } : {}), evidenceIds: decision.evidenceIds, ...(decision.rationale ? { rationale: decision.rationale } : {}) })),
-      lintErrors: candidate.lint.findings.filter((finding) => finding.severity === 'error').map((finding) => ({ id: finding.id, path: finding.path, message: finding.message })),
+      lintErrors: lint.findings.filter((finding) => finding.severity === 'error').map((finding) => ({ id: finding.id, path: finding.path, message: finding.message })),
       blocking: candidate.blocking.map((finding) => ({ id: finding.id, observation: finding.observation, why: finding.why })),
       rubricGaps: candidate.rubricGaps,
       abstained: candidate.abstained,

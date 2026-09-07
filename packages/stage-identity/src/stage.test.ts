@@ -247,6 +247,30 @@ describe('identity stage fan-out', () => {
     expect(store.get(repaired.versionId)!.parentId).toBe(repaired.refinedFromVersionId);
   });
 
+  it('keeps a veto whose critic never read the repair', async () => {
+    const inner = new FakeIdentityProvider();
+    let brandFitReads = 0;
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id !== 'identity-critic-brand-fit-critic-editorial-material') return inner.propose(task, signal);
+        brandFitReads += 1;
+        if (brandFitReads > 1) return { taskId: task.id, status: 'failed', summary: 'The critic exceeded its deadline.' };
+        const result = await inner.propose(task, signal);
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, findings: [{ id: 'bf-1', dimension: 'brand-fit', severity: 'error', path: '/identity/direction/thesis', observation: 'A tese não cita a prova.', why: 'O público avalia processo, não promessa.', evidenceIds: ['ev-proof'], confidence: 0.7 }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const repaired = result.candidates.find((candidate) => candidate.directionId === 'editorial-material')!;
+    expect(repaired.refinedFromVersionId).toBeDefined();
+    expect(brandFitReads).toBe(2);
+    // The seat that never answered the second time keeps what it found the first time.
+    expect(repaired.blocking.map((finding) => finding.id)).toEqual(['bf-1']);
+    expect(result.failures.some((failure) => failure.taskId === 'identity-critic-brand-fit-critic-editorial-material')).toBe(true);
+    await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
+  });
+
   it('lets a refined direction be approved without an override once the critics read the repair', async () => {
     const inner = new FakeIdentityProvider();
     const reads: number[] = [];
@@ -464,6 +488,15 @@ describe('gate 1', () => {
     await stage.run();
     await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
     await expect(stage.changeToken({ tokenPath: 'color.ghost', value: { $value: '#000000', $type: 'color' }, rationale: 'x' })).rejects.toThrow(/is not defined/);
+  });
+
+  it('refuses to replace a whole token group with a single token', async () => {
+    const { stage, store } = harness();
+    await stage.run();
+    const approval = await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
+    await expect(stage.changeToken({ tokenPath: 'motion', value: { $value: '1ms', $type: 'duration' }, rationale: 'x' })).rejects.toThrow(/is not defined/);
+    expect(store.get(approval.versionId)!.ir.identity.tokens.motion).toEqual({ quick: { $value: '220ms', $type: 'duration' } });
+    expect(stage.gateState().state).toBe('closed');
   });
 });
 
