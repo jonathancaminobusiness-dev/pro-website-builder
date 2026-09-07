@@ -216,18 +216,22 @@ reads. A face is self-hosted only when its licence clearly permits redistributin
 the file with the site (`OFL-1.1`, `Apache-2.0`, `MIT`, `CC0-1.0`, `UFL-1.0`,
 `CC-BY-4.0`); anything else stays unhosted and the stack falls back, so an
 ambiguous licence degrades the typography instead of shipping a file the owner
-may not redistribute. Either way the decision lands in `licenses.json` with the
-author, source, date and terms the manifest declared, and the hash of the bytes
-when the release ships them. No manifest means no self-hosted face, which is the
-default; a manifest that exists but cannot be read is an error, never silently
-no faces.
+may not redistribute. Either way the face gets a row in `licenses.json`, but the
+bundle is a public artifact, so only a face the release actually ships publishes
+the author, source, date, licence URL and hash the manifest declared; a face that
+stays out is named with its licence and the reason it stays out, and what the
+owner wrote about it — an invoice, a private note — never leaves the project's
+own manifest. No manifest means no self-hosted face, which is the default; a
+manifest that exists but cannot be read is an error, never silently no faces.
 
 Every compile site reads the same directory — the studio's Gate 3, `run:release`,
 `run:evidence`, `run:lighthouse` and the release harness — so the evidence
 runners measure the bundle the gate credits. The preview serves those same faces
-from its own origin under `font-src 'self'`, so the captain reviews the
-typography the release publishes, and `tests/release/parity.spec.ts` asks both
-sides what they actually loaded rather than comparing two fallbacks.
+from its own origin under `font-src 'self'`, reading the manifest when it serves
+a document rather than once at start, so a face added while the studio runs
+reaches the captain's iframe and an unreadable manifest fails that request rather
+than the studio. `tests/release/parity.spec.ts` then asks both sides what they
+actually loaded rather than comparing two fallbacks.
 
 **Release vetoes.** Eight objective stop conditions, catalogued in
 `packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
@@ -285,7 +289,10 @@ it contains, the manifest carries no timestamp, and the same document and
 toolchain produce byte-identical bundles. Parity is proven twice: Vitest fixtures
 read the compiled stylesheet back with a parser that shares no code with the
 compiler that wrote it, and `tests/release/parity.spec.ts` compares computed
-styles and text between the preview and the release in every engine.
+styles, text and the faces each side actually loaded, between the preview and the
+release in every engine. That runner writes its own typed artifact like every
+other one, so a divergence a browser sees reaches Gate 3 as a failed measurement
+— a `BUILD_FAILED` veto — instead of only turning a test red.
 
 **Gate 3.** The studio panel shows the digest, the standing vetoes, the rubric
 each critic gave on the 0–4 scale with a minimum of 3, parity per route, which

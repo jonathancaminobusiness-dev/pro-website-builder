@@ -69,21 +69,19 @@ export function buildLicenseInventory(ir: DesignIR, fonts: FontDecision[], toolc
     (bundled ? missing : warnings).push({ id: asset.id, detail });
   }
 
+  // The inventory is a public artifact, so it discloses provenance for the faces
+  // the release actually ships. A face that stays out is named with its licence
+  // and the reason it stays out; what the owner declared about it — an invoice,
+  // a private note — is not this artifact's business.
   for (const font of fonts) {
     const id = `font:${font.family}:${font.weight}:${font.style}`;
-    entries.push({
-      id,
-      kind: 'font',
-      source: font.source,
-      author: font.author,
-      license: font.license,
-      date: font.date,
-      hash: font.hash ?? '',
-      bundled: font.selfHosted,
-      modifications: 'None recorded.',
-      ...(font.licenseUrl ? { licenseUrl: font.licenseUrl } : {}),
-      termsNote: font.reason,
-    });
+    entries.push(font.selfHosted
+      ? {
+        id, kind: 'font', source: font.source, author: font.author, license: font.license, date: font.date,
+        hash: font.hash ?? '', bundled: true, modifications: 'None recorded.',
+        ...(font.licenseUrl ? { licenseUrl: font.licenseUrl } : {}), termsNote: font.reason,
+      }
+      : { id, kind: 'font', source: 'not bundled', author: '', license: font.license, date: '', hash: '', bundled: false, modifications: 'None recorded.', termsNote: font.reason });
     if (font.selfHosted && !isUsableLicense(font.license)) missing.push({ id, detail: `Font ${id} is bundled under the licence "${font.license}", which does not clear it for release.` });
   }
 

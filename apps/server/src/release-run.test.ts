@@ -170,14 +170,19 @@ describe('Gate 3 over the local API', () => {
     // The bundle is a public artifact: the face it may redistribute is in it,
     // the one it may not is named in the inventory and left out of the bytes.
     const bundle = join(releaseRoot, prepared.digest);
-    const manifest = JSON.parse(await readFile(join(bundle, 'manifest.json'), 'utf8')) as { stylesheetPath: string; fonts: Array<{ family: string; selfHosted: boolean; path?: string }> };
+    const manifest = JSON.parse(await readFile(join(bundle, 'manifest.json'), 'utf8')) as { stylesheetPath: string; fonts: Array<Record<string, unknown> & { family: string; selfHosted: boolean; path?: string }> };
     const hosted = manifest.fonts.find((font) => font.family === 'Fixture Sans')!;
     expect(hosted.selfHosted).toBe(true);
     expect(await readFile(join(bundle, hosted.path!))).toEqual(bytes);
     expect(await readFile(join(bundle, manifest.stylesheetPath), 'utf8')).toContain(`src:url("${hosted.path!.replace('assets/', '')}")`);
-    expect(manifest.fonts.find((font) => font.family === 'Foundry Grotesk')?.selfHosted).toBe(false);
-    // The inventory states the provenance the owner declared, not a substitute
-    // derived from the bundle: this file is what traces a face to its origin.
+    // The manifest publishes what the release decided about each face and nothing
+    // the owner declared about one it does not ship.
+    expect(manifest.fonts.find((font) => font.family === 'Foundry Grotesk')).toEqual({
+      family: 'Foundry Grotesk', weight: '400', style: 'normal', format: 'woff2',
+      selfHosted: false, license: 'Foundry desktop licence', reason: expect.stringMatching(/does not clearly permit/),
+    });
+    // The inventory states the provenance the owner declared for the face the
+    // release ships, not a substitute derived from the bundle.
     const licenses = JSON.parse(await readFile(join(bundle, 'licenses.json'), 'utf8')) as Array<{ id: string; kind: string; license: string; bundled: boolean; author: string; source: string; date: string; hash: string; licenseUrl?: string }>;
     const [hostedRow, unhostedRow, ...others] = licenses.filter((entry) => entry.kind === 'font');
     expect(others).toEqual([]);
@@ -186,10 +191,15 @@ describe('Gate 3 over the local API', () => {
       author: 'Fixture Foundry', source: 'https://fonts.example/fixture-sans', date: '2026-09-07', bundled: true,
     });
     expect(hostedRow!.hash).toMatch(/^[0-9a-f]{64}$/);
+    // A face the release never serves is named with its licence and why it stays
+    // out; the private reference the owner declared for it is not published.
     expect(unhostedRow).toMatchObject({
       id: 'font:Foundry Grotesk:400:normal', license: 'Foundry desktop licence',
-      author: 'Foundry', source: 'invoice 42', date: '2026-09-07', bundled: false, hash: '',
+      author: '', source: 'not bundled', date: '', hash: '', bundled: false,
     });
+    expect(unhostedRow?.licenseUrl).toBeUndefined();
+    const publicArtifacts = `${await readFile(join(bundle, 'licenses.json'), 'utf8')}${await readFile(join(bundle, 'manifest.json'), 'utf8')}`;
+    expect(publicArtifacts).not.toContain('invoice 42');
   });
 
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {

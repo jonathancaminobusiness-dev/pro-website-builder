@@ -27,9 +27,14 @@ const FACE = {
 describe('preview origin', () => {
   it('serves the faces the release self-hosts, so the captain reviews the published typography', async () => {
     const rendered = renderDesign(createFixtureIR());
-    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, [FACE]);
+    // The manifest is read when a document is served: a face the owner adds
+    // while the studio runs reaches the preview without restarting it.
+    let available: typeof FACE[] = [];
+    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, async () => available);
     await preview.start();
     try {
+      expect(await (await fetch(`${preview.origin}/preview/v0/`)).text()).toBe(rendered.routes.find((route) => route.route === '/')!.html);
+      available = [FACE];
       const document = await (await fetch(`${preview.origin}/preview/v0/`)).text();
       const href = /src:url\("([^"]+)"\)/.exec(document)?.[1];
       expect(document).toContain('@font-face{font-family:"Fixture Sans";');
@@ -42,6 +47,19 @@ describe('preview origin', () => {
       // The policy has to allow what the origin now serves.
       expect(face.headers.get('content-security-policy')).toContain("font-src 'self'");
       expect((await fetch(`${preview.origin}/assets/fonts/absent.woff2`)).status).toBe(404);
+    } finally { await preview.close(); }
+  });
+
+  it('fails the preview request, not the studio, when the fonts of the project cannot be read', async () => {
+    const rendered = renderDesign(createFixtureIR());
+    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, async () => { throw new Error('The fonts manifest could not be read.'); });
+    await preview.start();
+    try {
+      const refused = await fetch(`${preview.origin}/preview/v0/`);
+      expect(refused.status).toBe(500);
+      expect(await refused.text()).toMatch(/manifest could not be read/);
+      // The origin is still up; only this request failed.
+      expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(500);
     } finally { await preview.close(); }
   });
 

@@ -21,7 +21,7 @@ async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSumm
   const versionId = snapshot.currentVersion.id;
   const reviewed = renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` });
   // Port 0 keeps this CLI off the developer ports, so it runs beside the dev server and other checkouts.
-  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, 0, await loadFontSources(fontsDir));
+  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, 0, () => loadFontSources(fontsDir));
   await preview.start();
   try {
     // `createRenderMatrix` owns the matrix; this CLI only chooses how wide a sweep to pay for and

@@ -21,7 +21,8 @@ export interface ReleaseManifest {
   stylesheetPath: string;
   routes: Array<{ route: string; path: string; title: string; description: string; canonical: string; hash: string }>;
   files: Array<{ path: string; hash: string; bytes: number }>;
-  fonts: CompiledSite['fonts'];
+  /** What the release decided about each face; the terms live in `licenses`. */
+  fonts: Array<Pick<CompiledSite['fonts'][number], 'family' | 'weight' | 'style' | 'format' | 'selfHosted' | 'reason' | 'license'> & { path?: string }>;
   licenses: CompiledSite['licenses']['entries'];
 }
 
@@ -72,7 +73,11 @@ export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string
     stylesheetPath: compiled.stylesheetPath,
     routes: compiled.routes.map((route) => ({ route: route.route, path: route.path, title: route.title, description: route.description, canonical: route.canonical, hash: byPath.get(route.path)?.hash ?? '' })),
     files: compiled.files.map((file) => ({ path: file.path, hash: file.hash, bytes: file.bytes })),
-    fonts: compiled.fonts,
+    fonts: compiled.fonts.map((font) => ({
+      family: font.family, weight: font.weight, style: font.style, format: font.format,
+      selfHosted: font.selfHosted, reason: font.reason, license: font.license,
+      ...(font.path ? { path: font.path } : {}),
+    })),
     licenses: compiled.licenses.entries,
   };
   // The manifest is written last and is excluded from the digest, so the same IR
