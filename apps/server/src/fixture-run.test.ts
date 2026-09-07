@@ -77,6 +77,45 @@ describe('phase 0 fixture run', () => {
     db.sqlite.close();
   });
 
+  it('spends no model call on approval alone and exactly one on the next start request', async () => {
+    const db = openDatabase(':memory:');
+    const fake = new FakeModelProvider();
+    const attempted: string[] = [];
+    const recording: ModelProvider = { async propose(task, signal) { attempted.push(`${task.stage}#${task.attempt}`); return fake.propose(task, signal); } };
+    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-start-')), 'exports'), provider: recording });
+    await run.initialize('run-start');
+    await run.runNext();
+    expect(attempted).toEqual(['identity#1']);
+    await run.approve('identity', 'captain');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(attempted).toEqual(['identity#1']);
+    expect((await run.runNext()).currentStage).toBe('prototype');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(attempted).toEqual(['identity#1', 'prototype#1']);
+    db.sqlite.close();
+  });
+
+  it('records a terminal event for a stage whose worker throws, and does not replay it on the next attempt', async () => {
+    const db = openDatabase(':memory:');
+    const repository = new ProjectRepository(db);
+    const fake = new FakeModelProvider();
+    let failOnce = true;
+    const flaky: ModelProvider = { async propose(task, signal) { if (failOnce) { failOnce = false; throw new Error('the model process died'); } return fake.propose(task, signal); } };
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-throw-')), 'exports'), provider: flaky });
+    await run.initialize('run-throw');
+    await expect(run.runNext()).rejects.toThrow(/the model process died/);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const afterFailure = (await repository.listEvents('run-throw')).map((event) => event.type);
+    expect(afterFailure.at(-1)).toBe('task.failed');
+    expect(run.snapshot().status).toBe('failed');
+    const recovered = await run.runNext();
+    expect(recovered.status).toBe('needs_review');
+    expect(recovered.currentStage).toBe('identity');
+    const tasks = (JSON.parse(repository.dump()) as { tasks: Array<{ stage: string; attempt: number }> }).tasks;
+    expect(tasks.filter((task) => task.stage === 'identity').map((task) => task.attempt).sort()).toEqual([1, 2]);
+    db.sqlite.close();
+  });
+
   it('keeps a pending captain gate across cancel and restart', async () => {
     const db = openDatabase(':memory:');
     const repository = new ProjectRepository(db);

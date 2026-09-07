@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createFixtureIR, type AgentTask, type Approval } from '@pwb/domain';
 import { exportStatic, type ExportManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
-import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type VersionRecord, VersionStore } from '@pwb/orchestrator';
+import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type ScheduleResult, type VersionRecord, VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import type { ProjectRepository } from './db/repository.js';
@@ -11,6 +11,7 @@ type Stage = 'identity' | 'prototype' | 'finalization';
 type FixtureStatus = 'queued' | 'needs_review' | 'rejected' | 'cancelled' | 'succeeded' | 'failed';
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
+const STAGES: Stage[] = ['identity', 'prototype', 'finalization'];
 const duplicateCodes = new Set(['SQLITE_CONSTRAINT_PRIMARYKEY', 'SQLITE_CONSTRAINT_UNIQUE']);
 async function ignoringDuplicate(write: Promise<void>): Promise<void> {
   try { await write; } catch (error) {
@@ -54,6 +55,10 @@ export class FixtureRun {
   private pendingVerdict: GateVerdict | undefined;
   private waiters: Array<() => void> = [];
   private failure: unknown;
+  private startRequest: Stage | undefined;
+  private running = false;
+  private readonly attempts = new Map<Stage, number>();
+  private readonly reported = new Set<string>();
 
   constructor(private readonly options: { repository: ProjectRepository; exportRoot: string; provider: ModelProvider }) {}
 
@@ -73,8 +78,13 @@ export class FixtureRun {
   async runNext(): Promise<FixtureSnapshot> {
     this.requireInitialized();
     if (this.status === 'succeeded' || this.status === 'cancelled' || this.status === 'needs_review') return this.snapshot();
-    if (this.stageIndex >= 3) return this.snapshot();
-    const inFlight = this.scheduled ?? this.launch();
+    const stage = STAGES[this.stageIndex];
+    if (!stage) return this.snapshot();
+    this.failure = undefined;
+    this.startRequest = stage;
+    const parked = this.scheduled !== undefined && (this.running || this.gate !== undefined);
+    if (this.status === 'rejected' && this.gate) this.openGate('rejected');
+    const inFlight = parked ? this.scheduled! : this.launch();
     await Promise.race([this.settled(), inFlight]);
     const failure = this.failure;
     this.failure = undefined;
@@ -110,7 +120,6 @@ export class FixtureRun {
     await ignoringDuplicate(this.options.repository.createApproval({ ...rejection, runId: this.runId(), projectId: this.projectId() }));
     this.status = 'rejected';
     await this.record('approval.recorded', { stage, decision: 'rejected', versionId: rejection.versionId });
-    this.openGate('rejected');
     return this.snapshot();
   }
 
@@ -143,25 +152,41 @@ export class FixtureRun {
     const plan = this.planner.plan(this.runId(), this.currentVersion.id, BRIEF);
     const controller = new AbortController();
     this.runAbort = controller;
-    const scheduled = this.scheduler
-      .run(plan.tasks.slice(this.stageIndex), (task, signal) => this.executeStage(task, signal), {
+    const queued = plan.tasks.slice(this.stageIndex).map((task) => ({ ...task, attempt: (this.attempts.get(task.stage) ?? 0) + 1 }));
+    const absorbed = this.scheduler
+      .run(queued, (task, signal) => this.executeStage(task, signal), {
         signal: controller.signal,
         edges: plan.edges,
-        admit: (task) => plan.edges.filter(([, to]) => to === task.id).every(([from]) => this.approvals.some((entry) => entry.decision === 'approved' && `task-${entry.stage}` === from)),
+        admit: (task) => this.startRequest === task.stage && plan.edges.filter(([, to]) => to === task.id).every(([from]) => this.approvals.some((entry) => entry.decision === 'approved' && `task-${entry.stage}` === from)),
         settle: (_task, _value, signal) => this.awaitGate(signal),
       })
-      .then(() => undefined)
-      .finally(() => { this.runAbort = undefined; this.scheduled = undefined; });
+      .then((result) => this.absorb(result));
+    const scheduled: Promise<void> = absorbed.finally(() => { if (this.scheduled === scheduled) { this.runAbort = undefined; this.scheduled = undefined; } });
     this.scheduled = scheduled;
     return scheduled;
   }
 
+  private async absorb(result: ScheduleResult<VersionRecord>): Promise<void> {
+    for (const entry of result.results) {
+      if (entry.state !== 'failed') continue;
+      const key = `${entry.task.id}#${entry.task.attempt}`;
+      if (this.reported.has(key)) continue;
+      this.reported.add(key);
+      await this.record('task.failed', { taskId: entry.task.id, stage: entry.task.stage, attempt: entry.task.attempt, reason: entry.error instanceof Error ? entry.error.message : 'The stage did not produce a proposal.' });
+      this.failure = entry.error;
+      if (this.status !== 'cancelled') this.status = 'failed';
+    }
+  }
+
   private async executeStage(task: AgentTask, signal: AbortSignal): Promise<VersionRecord> {
     this.pendingVerdict = undefined;
+    this.startRequest = undefined;
+    this.running = true;
     try {
       const plan = this.planner.plan(this.runId(), this.currentVersion.id, BRIEF);
       const current = { ...plan.tasks.find((item) => item.id === task.id)!, attempt: task.attempt };
       this.currentStage = current.stage;
+      this.attempts.set(current.stage, current.attempt);
       await ignoringDuplicate(this.options.repository.saveTask(current, this.runId()));
       await this.record('task.queued', { taskId: current.id, stage: current.stage, attempt: current.attempt, baseVersionId: current.baseVersionId });
       if (!this.started) { this.started = true; await this.record('run.started', { stage: current.stage }); }
@@ -170,7 +195,8 @@ export class FixtureRun {
       const proposal = outcome.proposal;
       if (!proposal) {
         const reason = outcome.summary || 'The stage produced no proposal.';
-        await this.record('task.failed', { taskId: current.id, stage: current.stage, reason });
+        this.reported.add(`${current.id}#${current.attempt}`);
+        await this.record('task.failed', { taskId: current.id, stage: current.stage, attempt: current.attempt, reason });
         if (this.status !== 'cancelled') this.status = 'failed';
         throw new Error(`Stage ${current.stage} produced no proposal: ${reason}`);
       }
@@ -179,7 +205,8 @@ export class FixtureRun {
         renderDesign(this.applier.dryRun(proposal, current.allowedPaths).next);
         next = this.applier.apply(proposal, current.allowedPaths);
       } catch (error) {
-        await this.record('task.failed', { taskId: current.id, stage: current.stage, reason: error instanceof Error ? error.message : 'The proposal did not validate.' });
+        this.reported.add(`${current.id}#${current.attempt}`);
+        await this.record('task.failed', { taskId: current.id, stage: current.stage, attempt: current.attempt, reason: error instanceof Error ? error.message : 'The proposal did not validate.' });
         throw error;
       }
       await ignoringDuplicate(this.options.repository.savePatch(proposal, this.runId()));
@@ -197,6 +224,7 @@ export class FixtureRun {
       this.failure = error;
       throw error;
     } finally {
+      this.running = false;
       this.notify();
     }
   }

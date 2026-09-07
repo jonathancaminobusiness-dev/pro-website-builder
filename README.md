@@ -17,7 +17,7 @@ Each stage stops at a captain-only gate in v1. Agents return schema-validated JS
 - Node HTTP + SQLite WAL + Drizzle for `apps/server`.
 - `packages/domain` owns Zod contracts, DTCG-compatible tokens, JSON Schema, and immutable document fixtures.
 - `packages/renderer` is pure TypeScript and emits semantic HTML/CSS with cascade layers, custom properties, container queries, and reduced-motion handling.
-- `packages/orchestrator` owns the fixed stage DAG, semaphores, deadlines, cancellation, patch CAS, immutable versions, and events. `RunPlanner` emits the identity to prototype to finalization edges, and the run submits the whole plan to the scheduler once: a stage is admitted only after its predecessor task succeeded and the captain approved that predecessor's gate, so the DAG and the gates order the run together.
+- `packages/orchestrator` owns the fixed stage DAG, semaphores, deadlines, cancellation, patch CAS, immutable versions, and events. `RunPlanner` emits the identity to prototype to finalization edges, and the run submits the plan to the scheduler with those edges: a stage is admitted only when its predecessor task succeeded, the captain approved that predecessor's gate, and the captain explicitly asked for that stage to start. Approving a gate never spends a model call on its own; a rejection returns the stage to a re-runnable state and the next start request re-runs it under a new attempt number.
 - `packages/providers` isolates the owner's local Claude Code binary, optional Higgsfield MCP, and deterministic fakes.
 - `packages/render-hub` uses Playwright Chromium for responsive screenshots, DOM/accessibility data, and deterministic QA.
 - `packages/export` writes content-addressed static routes and a license/provenance manifest.
