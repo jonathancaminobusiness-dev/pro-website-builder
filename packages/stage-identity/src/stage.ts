@@ -106,7 +106,7 @@ export interface CritiqueScore { criticId: string; dimension: string; score: num
 export interface RubricGap { dimension: string; score: number; evidence: string; }
 
 /** What the critics said about the fan-out as a whole, which belongs to no single card. */
-export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[]; blocking: CritiqueFinding[]; abstained: boolean; }
+export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[]; unscoredDimensions: string[]; blocking: CritiqueFinding[]; abstained: boolean; }
 
 /** The lint findings a direction can answer for: a set-scoped finding belongs to the fan-out, not to one document. */
 function ownLintFindings(report: LintReport): LintFinding[] {
@@ -186,7 +186,7 @@ export class IdentityStage {
   private brief: BriefSpec | undefined;
   private candidates: IdentityCandidate[] = [];
   private critiques: CritiqueReport[] = [];
-  private setCritique: SetCritique = { scores: [], rubricGaps: [], blocking: [], abstained: false };
+  private setCritique: SetCritique = { scores: [], rubricGaps: [], unscoredDimensions: [], blocking: [], abstained: false };
   private divergence: DivergenceOutcome = { pairs: [], passed: false, blockedPairs: [] };
   private failures: Array<{ taskId: string; reason: string }> = [];
   private gateRecord: IdentityGateRecord | undefined;
@@ -480,10 +480,12 @@ export class IdentityStage {
    */
   private applyCritiqueToCandidates(): void {
     const forSet = this.critiques.filter((report) => report.subject.kind === 'matrix');
-    const directionRubrics = identityCritics.filter((critic) => critic.scope === 'direction').map((critic) => critic.dimension);
+    const rubricsOf = (scope: 'direction' | 'matrix') => identityCritics.filter((critic) => critic.scope === scope).map((critic) => critic.dimension);
+    const unscored = (rubrics: string[], reports: CritiqueReport[]) => rubrics.filter((dimension) => !reports.some((report) => report.scores.some((entry) => entry.dimension === dimension)));
     this.setCritique = {
       scores: scoresOf(forSet),
       rubricGaps: forSet.flatMap(belowRubric),
+      unscoredDimensions: unscored(rubricsOf('matrix'), forSet),
       blocking: forSet.flatMap(blockingFindings),
       abstained: forSet.some((report) => report.abstain),
     };
@@ -494,7 +496,7 @@ export class IdentityStage {
         blocking: own.flatMap(blockingFindings),
         scores: scoresOf(own),
         rubricGaps: own.flatMap(belowRubric),
-        unscoredDimensions: directionRubrics.filter((dimension) => !own.some((report) => report.scores.some((entry) => entry.dimension === dimension))),
+        unscoredDimensions: unscored(rubricsOf('direction'), own),
         abstained: own.some((report) => report.abstain),
       };
     });
@@ -521,13 +523,12 @@ export class IdentityStage {
     if (refined.length === 0) return;
     const reports = await this.critique(brief, signal, refined);
     // A seat that did not answer the second time keeps what it found the first
-    // time: a veto disappears only when the same critic has read the repair, and
-    // an answer that scored nothing in its own rubric has not read that rubric,
-    // so the scores it did not give stay as they were.
-    const scoredBefore = new Map(this.critiques.map((report) => [criticSeat(report), report.scores]));
-    const reread = reports.map((report) => (report.scores.length > 0 ? report : { ...report, scores: scoredBefore.get(criticSeat(report)) ?? [] }));
-    const seats = new Set(reread.map(criticSeat));
-    this.critiques = [...this.critiques.filter((report) => !seats.has(criticSeat(report))), ...reread];
+    // time — its report never reaches here, so nothing replaces it. A seat that
+    // did answer describes the repaired document and replaces its own report
+    // whole: an answer that scored nothing of its own leaves that rubric
+    // unevaluated rather than inheriting a score given to another version.
+    const seats = new Set(reports.map(criticSeat));
+    this.critiques = [...this.critiques.filter((report) => !seats.has(criticSeat(report))), ...reports];
     this.applyCritiqueToCandidates();
   }
 
@@ -686,6 +687,7 @@ export class IdentityStage {
       ...ownLintErrors(lintDesign(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir)).map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
       ...this.blockedPairsFor(candidate.directionId),
       ...this.setCritique.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score} for the fan-out as a whole, below the absolute minimum of ${RUBRIC_MINIMUM}: ${gap.evidence}`),
+      ...this.setCritique.unscoredDimensions.map((dimension) => `Rubric ${dimension} was never evaluated for the fan-out as a whole: the critic that owns it returned no score of its own.`),
       ...this.setCritique.blocking.map((finding) => `${finding.id} about the fan-out as a whole: ${finding.observation}`),
       ...candidate.blocking.map((finding) => `${finding.id}: ${finding.observation}`),
       ...candidate.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score}, below the absolute minimum of ${RUBRIC_MINIMUM}.`),

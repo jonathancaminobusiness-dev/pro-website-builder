@@ -351,7 +351,7 @@ describe('identity stage fan-out', () => {
     expect(approved.record.directionId).toBe('modular-technical');
   });
 
-  it('keeps a rubric gap the re-critique never scored again', async () => {
+  it('treats a re-critique that scored nothing of its own as an unevaluated rubric', async () => {
     const inner = new FakeIdentityProvider();
     const refinerCalls: string[] = [];
     const evidence = 'O par de texto de anotação sobre papel não alcança AA.';
@@ -373,8 +373,37 @@ describe('identity stage fan-out', () => {
     const repaired = result.candidates.find((entry) => entry.directionId === 'editorial-material')!;
     expect(refinerCalls).toEqual(['identity-refiner-editorial-material']);
     expect(repaired.refinedFromVersionId).toBeDefined();
-    expect(repaired.rubricGaps).toEqual([{ dimension: 'system-accessibility', score: 2, evidence }]);
-    await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/below the absolute minimum of 3/);
+    // The pre-repair score described a version nobody approved, so the card does
+    // not carry it forward; the rubric is simply unevaluated for the repair.
+    expect(repaired.rubricGaps).toEqual([]);
+    expect(repaired.scores.some((score) => score.dimension === 'system-accessibility')).toBe(false);
+    expect(repaired.unscoredDimensions).toEqual(['system-accessibility']);
+    await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/Rubric system-accessibility was never evaluated/);
+  });
+
+  it('blocks every direction when the set rubric was never evaluated', async () => {
+    const inner = new FakeIdentityProvider();
+    const attempts: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-divergence-critic') return result;
+        attempts.push(task.attempt);
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, scores: [{ dimension: 'brand-fit', score: 4, evidence: 'Rubrica que este assento não recebeu.' }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    // The one correction was spent and the only matrix seat still scored nothing it owns.
+    expect(attempts).toEqual([1, 2]);
+    expect(result.setCritique.unscoredDimensions).toEqual(['divergence']);
+    expect(result.setCritique.scores).toEqual([]);
+    for (const candidate of result.candidates) expect(candidate.unscoredDimensions).toEqual([]);
+    // An unevaluated set rubric is not a passing one: every direction needs the written override.
+    await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/Rubric divergence was never evaluated for the fan-out as a whole/);
+    const approved = await stage.approve({ directionId: 'modular-technical', rationale: 'Gosto dessa.', approverRole: 'captain', overrideRationale: 'A divergência medida passa DIV-030; sigo sem a nota do crítico.' });
+    expect(approved.record.directionId).toBe('modular-technical');
   });
 
   it('keeps a set-level rubric gap on the set, off the cards and out of the refinement cycle', async () => {
@@ -590,8 +619,11 @@ describe('identity stage fan-out', () => {
     const repaired = result.candidates.find((candidate) => candidate.directionId === 'editorial-material')!;
     expect(repaired.refinedFromVersionId).toBeDefined();
     expect(brandFitReads).toBe(2);
-    // The seat that never answered the second time keeps what it found the first time.
+    // The seat that never answered the second time keeps what it found the first time,
+    // score included: nothing replaced the report it wrote.
     expect(repaired.blocking.map((finding) => finding.id)).toEqual(['bf-1']);
+    expect(repaired.unscoredDimensions).toEqual([]);
+    expect(repaired.scores.some((score) => score.criticId === 'brand-fit-critic' && score.dimension === 'brand-fit')).toBe(true);
     expect(result.failures.some((failure) => failure.taskId === 'identity-critic-brand-fit-critic-editorial-material')).toBe(true);
     await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
   });
