@@ -24,15 +24,15 @@ Only the `Applier` creates a new document version. A patch carries its base vers
 
 `DesignIR` contains metadata, an `IdentitySpec`, DTCG-compatible tokens, a page graph, an asset ledger, state fixtures, and review data. Pages are composed from stable primitive nodes (`stack`, `grid`, `cluster`, `media`, `type`, `surface`, `ornament`) and approved components. `IdentitySpec` stores strategy, direction, grid grammar, imagery, iconography, content/voice, do/don't rules, forbidden defaults, governance, and provenance.
 
-Runtime validation uses Zod. The same schemas expose JSON Schema for Claude Code calls. Token aliases are resolved with explicit circular/orphan errors. Renderer values must be token references or signed node exceptions; raw colors, dimensions, font values, radii, shadows, and motion values are rejected by the linter and renderer.
+Runtime validation uses Zod. The same schemas expose JSON Schema for Claude Code calls. Token aliases are resolved with explicit circular/orphan errors. Renderer values must be token references, with no exception path in Phase 0; the gate refuses a reference the identity does not define, and raw colors, dimensions, font values, radii, shadows, and motion values are rejected by the linter and the renderer.
 
 ## Runtime boundaries and safety
 
-`ClaudeRunner` invokes the locally installed `claude` with `execFile`, no shell, one-shot session UUIDs, `--no-session-persistence`, structured JSON output, schema validation, abort support, and timeouts. It verifies only `claude --version` at startup and never reads or persists credentials. `FakeModelProvider` is used by all CI tests. `HiggsfieldMcpProvider` is optional and reports `not configured` without asking for credentials; placeholder assets remain visibly flagged in provenance.
+`ClaudeRunner` invokes the locally installed `claude` with `execFile`, no shell, one-shot session UUIDs, `--no-session-persistence`, structured JSON output, schema validation, abort support, and timeouts. It never probes the binary, reads credentials, or persists them; the owner verifies `claude --version` before starting a run, as `README.md` describes. `FakeModelProvider` is used by all CI tests. `HiggsfieldMcpProvider` is optional and reports `not configured` without asking for credentials; placeholder assets remain visibly flagged in provenance.
 
 Preview is served from a separate server port/origin and embedded with `<iframe sandbox>` without `allow-same-origin`. The studio exchanges only exact-origin postMessage values. CSP forbids inline script/eval for preview and export. Database, logs, and export scanning tests fail on secret-like strings.
 
-SQLite uses WAL and a single-writer queue. Versions and events are append-only; the initial persistence implementation uses Drizzle migrations and JSON snapshots while preserving relational tables for projects, runs, tasks, patches, approvals, assets, and events.
+SQLite uses WAL and a single-writer queue. Versions and events are append-only; the initial persistence implementation uses Drizzle migrations and JSON snapshots while preserving relational tables for projects, versions, runs, tasks, patches, approvals, and events.
 
 ## Verification
 
