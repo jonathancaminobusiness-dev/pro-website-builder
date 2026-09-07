@@ -36,6 +36,7 @@ import {
   blockingFindings,
   briefSpecSchema,
   critiqueReportSchema,
+  critiqueReportSchemaFor,
   directionVectorDraftSchema,
   imagePromptPlanSchemaFor,
   IDENTITY_PROMPT_VERSION,
@@ -92,6 +93,8 @@ export interface IdentityCandidate {
   blocking: CritiqueFinding[];
   scores: CritiqueScore[];
   rubricGaps: RubricGap[];
+  /** Rubrics a direction critic owed this direction and never scored, even after its correction. */
+  unscoredDimensions: string[];
   abstained: boolean;
   imagePlan?: ImagePromptPlan;
   imageryViolations: string[];
@@ -105,9 +108,13 @@ export interface RubricGap { dimension: string; score: number; evidence: string;
 /** What the critics said about the fan-out as a whole, which belongs to no single card. */
 export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[]; blocking: CritiqueFinding[]; abstained: boolean; }
 
-/** The lint errors a direction can answer for: a set-scoped finding belongs to the fan-out, not to one document. */
+/** The lint findings a direction can answer for: a set-scoped finding belongs to the fan-out, not to one document. */
+function ownLintFindings(report: LintReport): LintFinding[] {
+  return report.findings.filter((finding) => finding.scope !== 'set');
+}
+
 function ownLintErrors(report: LintReport): LintFinding[] {
-  return report.findings.filter((finding) => finding.severity === 'error' && finding.scope !== 'set');
+  return ownLintFindings(report).filter((finding) => finding.severity === 'error');
 }
 
 function blockedPairsOf(pairs: DirectionComparison[]): string[] {
@@ -371,6 +378,7 @@ export class IdentityStage {
       blocking: previous?.blocking ?? [],
       scores: previous?.scores ?? [],
       rubricGaps: previous?.rubricGaps ?? [],
+      unscoredDimensions: previous?.unscoredDimensions ?? [],
       abstained: previous?.abstained ?? false,
       ...(previous?.imagePlan ? { imagePlan: previous.imagePlan } : {}),
       imageryViolations: previous?.imageryViolations ?? [],
@@ -392,7 +400,7 @@ export class IdentityStage {
    * form it and no others: a direction in no failing pair is not answerable for
    * a distance it is not part of.
    */
-  private blockedPairsFor(directionId: string): string[] {
+  blockedPairsFor(directionId: string): string[] {
     return blockedPairsOf(this.divergence.pairs.filter((pair) => pair.a === directionId || pair.b === directionId));
   }
 
@@ -429,7 +437,7 @@ export class IdentityStage {
         }));
       }
     }
-    const results = await this.dispatch(tasks, signal, () => critiqueReportSchema);
+    const results = await this.dispatch(tasks, signal, (task) => critiqueReportSchemaFor(seatOf.get(task.id)!.dimension));
     const reports: CritiqueReport[] = [];
     for (const result of results) {
       if (result.proposal) {
@@ -447,7 +455,13 @@ export class IdentityStage {
         // and whether it abstained still reach the candidate either way.
         const report = requireArtifact(critiqueReportSchema, result.artifact, result.taskId, 'CritiqueReport');
         const seat = seatOf.get(result.taskId)!;
-        reports.push({ ...report, ...seat, scores: report.scores.filter((entry) => entry.dimension === seat.dimension) });
+        const scores = report.scores.filter((entry) => entry.dimension === seat.dimension);
+        if (scores.length === 0) {
+          const reason = `Critic ${result.taskId} scored no ${seat.dimension} even after its correction, so that rubric is unevaluated.`;
+          this.failures.push({ taskId: result.taskId, reason });
+          await this.record('identity.critic.unscored', { taskId: result.taskId, dimension: seat.dimension, reason });
+        }
+        reports.push({ ...report, ...seat, scores });
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'The critique did not validate.';
         this.failures.push({ taskId: result.taskId, reason });
@@ -466,6 +480,7 @@ export class IdentityStage {
    */
   private applyCritiqueToCandidates(): void {
     const forSet = this.critiques.filter((report) => report.subject.kind === 'matrix');
+    const directionRubrics = identityCritics.filter((critic) => critic.scope === 'direction').map((critic) => critic.dimension);
     this.setCritique = {
       scores: scoresOf(forSet),
       rubricGaps: forSet.flatMap(belowRubric),
@@ -479,6 +494,7 @@ export class IdentityStage {
         blocking: own.flatMap(blockingFindings),
         scores: scoresOf(own),
         rubricGaps: own.flatMap(belowRubric),
+        unscoredDimensions: directionRubrics.filter((dimension) => !own.some((report) => report.scores.some((entry) => entry.dimension === dimension))),
         abstained: own.some((report) => report.abstain),
       };
     });
@@ -533,7 +549,7 @@ export class IdentityStage {
         allowedPaths: IDENTITY_ALLOWED_PATHS,
         ir: base.ir,
         baseVersionId: base.id,
-        brief: identityRefinerPrompt({ brief, directionId: candidate.directionId, baseVersionId: base.id, allowedPaths: IDENTITY_ALLOWED_PATHS, identity: base.ir.identity, findings: { critique: candidate.blocking, rubric: this.rubricFindingsFor(candidate.directionId), lint: candidate.lint.findings } }),
+        brief: identityRefinerPrompt({ brief, directionId: candidate.directionId, baseVersionId: base.id, allowedPaths: IDENTITY_ALLOWED_PATHS, identity: base.ir.identity, findings: { critique: candidate.blocking, rubric: this.rubricFindingsFor(candidate.directionId), lint: ownLintFindings(candidate.lint) } }),
       });
       const [result] = await this.dispatch([task], signal);
       if (!result?.proposal) { this.failures.push({ taskId: task.id, reason: 'The refiner produced no proposal; the candidate keeps its findings for the captain.' }); continue; }
@@ -673,6 +689,7 @@ export class IdentityStage {
       ...this.setCritique.blocking.map((finding) => `${finding.id} about the fan-out as a whole: ${finding.observation}`),
       ...candidate.blocking.map((finding) => `${finding.id}: ${finding.observation}`),
       ...candidate.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score}, below the absolute minimum of ${RUBRIC_MINIMUM}.`),
+      ...candidate.unscoredDimensions.map((dimension) => `Rubric ${dimension} was never evaluated for ${candidate.directionId}: the critic that owns it returned no score of its own.`),
       ...candidate.imageryViolations,
     ];
     if (blockers.length > 0 && !(input.overrideRationale ?? '').trim()) {

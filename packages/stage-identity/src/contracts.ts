@@ -71,6 +71,16 @@ export const critiqueReportSchema = z.object({
 }).strict();
 export type CritiqueReport = z.infer<typeof critiqueReportSchema>;
 
+/**
+ * The schema a critic seat's answer is held to: the report has to score the one
+ * rubric that seat was given, so an answer that scored only somebody else's
+ * rubric is an artefact problem and buys the single corrective re-invocation.
+ */
+export const critiqueReportSchemaFor = (dimension: CritiqueDimension) => critiqueReportSchema.refine(
+  (report) => report.scores.some((entry) => entry.dimension === dimension),
+  { path: ['scores'], message: `At least one score must name ${dimension}, the only rubric this critic was given.` },
+);
+
 export function blockingFindings(report: CritiqueReport): CritiqueFinding[] {
   return report.findings.filter((finding) => finding.severity === 'veto' || finding.severity === 'error');
 }

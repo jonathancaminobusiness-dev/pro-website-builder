@@ -38,6 +38,9 @@ export interface IdentityDirectionView {
   blocking: Array<{ id: string; observation: string; why: string }>;
   scores: Array<{ criticId: string; dimension: string; score: number }>;
   rubricGaps: Array<{ dimension: string; score: number; evidence: string }>;
+  /** Rubrics no critic scored for this direction, and the failing DIV-030 pairs it is part of. */
+  unscoredDimensions: string[];
+  blockedPairs: string[];
   abstained: boolean;
   refinedFromVersionId?: string;
   imagePlans: Array<{ id: string; role: string; axis: string; alt: string; licenceExpectation: string }>;
@@ -250,6 +253,8 @@ export class IdentityRun {
       blocking: candidate.blocking.map((finding) => ({ id: finding.id, observation: finding.observation, why: finding.why })),
       scores: candidate.scores,
       rubricGaps: candidate.rubricGaps,
+      unscoredDimensions: candidate.unscoredDimensions,
+      blockedPairs: this.stage.blockedPairsFor(candidate.directionId),
       abstained: candidate.abstained,
       ...(candidate.refinedFromVersionId ? { refinedFromVersionId: candidate.refinedFromVersionId } : {}),
       imagePlans: (candidate.imagePlan?.plans ?? []).map((plan) => ({ id: plan.id, role: plan.role, axis: plan.axis, alt: plan.alt, licenceExpectation: plan.licenceExpectation })),

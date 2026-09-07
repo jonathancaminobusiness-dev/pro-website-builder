@@ -18,6 +18,8 @@ export interface IdentityDirectionView {
   blocking: Array<{ id: string; observation: string; why: string }>;
   scores: Array<{ criticId: string; dimension: string; score: number }>;
   rubricGaps: Array<{ dimension: string; score: number; evidence: string }>;
+  unscoredDimensions: string[];
+  blockedPairs: string[];
   abstained: boolean;
   refinedFromVersionId?: string;
   imagePlans: Array<{ id: string; role: string; axis: string; alt: string; licenceExpectation: string }>;
@@ -71,6 +73,8 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),
     ...direction.blocking.map((finding) => `${finding.id} · ${finding.observation}`),
     ...direction.rubricGaps.map((gap) => `Rubrica ${gap.dimension} · nota ${gap.score} abaixo do mínimo absoluto · ${gap.evidence}`),
+    ...direction.unscoredDimensions.map((dimension) => `Rubrica ${dimension} · nenhum crítico pontuou esta direção`),
+    ...direction.blockedPairs.map((pair) => `DIV-030 · ${pair}`),
     ...direction.imageryViolations,
   ], []);
 

@@ -83,8 +83,15 @@ describe('identity run', () => {
     const snapshot = await run.start();
     expect(snapshot.divergence?.passed).toBe(false);
     expect(snapshot.divergence?.blockedPairs.join(' ')).toMatch(/editorial-material and modular-technical/);
-    // The pair belongs to the set, so the card of each direction carries only what that direction can answer for.
+    // The pair belongs to the set, so no card repeats the lint finding every document carries.
     for (const direction of snapshot.directions) expect(direction.lintErrors.map((finding) => finding.id)).not.toContain('DIV-030');
+    // The card and the approve call agree: the two directions in the pair carry it, the third does not.
+    for (const directionId of ['editorial-material', 'modular-technical']) {
+      const card = snapshot.directions.find((direction) => direction.directionId === directionId)!;
+      expect(card.blockedPairs.join(' ')).toMatch(/editorial-material and modular-technical/);
+      await expect(run.approve({ directionId, approverRole: 'captain', rationale: 'Gosto dessa.' })).rejects.toThrow(/editorial-material and modular-technical differ/);
+    }
+    expect(snapshot.directions.find((direction) => direction.directionId === 'typographic-low-chroma')!.blockedPairs).toEqual([]);
   });
 
   it('records the captain decision and serves the approved version to the preview', async () => {

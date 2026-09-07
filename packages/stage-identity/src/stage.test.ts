@@ -91,6 +91,31 @@ describe('identity stage fan-out', () => {
     await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Aprovada.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
   });
 
+  it('never asks a refiner to clear a distance between two other documents', async () => {
+    const inner = new FakeIdentityProvider();
+    const briefs: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-refiner-typographic-low-chroma') briefs.push(task.brief);
+        const result = await inner.propose(task, signal);
+        if (task.id === 'identity-critic-system-a11y-critic-typographic-low-chroma') {
+          const report = result.artifact as Record<string, unknown>;
+          return { ...result, artifact: { ...report, scores: [{ dimension: 'system-accessibility', score: 2, evidence: 'Contraste do texto de anotação.' }] } };
+        }
+        if (task.id !== 'identity-director-modular-technical' || !result.proposal) return result;
+        const converged = { ...fakeIdentityFor('editorial-material'), meta: fakeIdentityFor('modular-technical').meta, direction: fakeIdentityFor('modular-technical').direction };
+        return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: converged }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    expect(result.divergence.blockedPairs.join(' ')).toMatch(/editorial-material and modular-technical/);
+    expect(briefs).toHaveLength(1);
+    // The repair brief names only what this direction can answer for.
+    const findings = JSON.parse(briefs[0]!.match(/The blocking findings you must clear:\n(\{.*\})/)![1]!) as { lint: Array<{ id: string; message: string }> };
+    expect(findings.lint.some((finding) => /differ on \d+ of the required/.test(finding.message))).toBe(false);
+  });
+
   it('keeps a failing DIV-030 pair on the set: no refinement, and only the two directions in it are blocked', async () => {
     const inner = new FakeIdentityProvider();
     const refinerCalls: string[] = [];
@@ -400,6 +425,58 @@ describe('identity stage fan-out', () => {
     expect(briefs).toHaveLength(1);
     const rubric = JSON.parse(briefs[0]!.match(/The blocking findings you must clear:\n(\{.*\})/)![1]!) as { rubric: Array<{ criticId: string; dimension: string; score: number; evidence: string; summary: string }> };
     expect(rubric.rubric).toEqual([{ criticId: 'system-a11y-critic', dimension: 'system-accessibility', score: 2, evidence, summary }]);
+  });
+
+  it('spends the corrective re-invocation on a critic that scored somebody else\u2019s rubric, and takes the repaired score', async () => {
+    const inner = new FakeIdentityProvider();
+    const attempts: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-system-a11y-critic-typographic-low-chroma') return result;
+        attempts.push(task.attempt);
+        if (task.attempt > 1) return result;
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, scores: [{ dimension: 'brand-fit', score: 4, evidence: 'Rubrica que este assento não recebeu.' }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'typographic-low-chroma')!;
+    expect(attempts).toEqual([1, 2]);
+    expect(candidate.unscoredDimensions).toEqual([]);
+    expect(candidate.scores.some((score) => score.criticId === 'system-a11y-critic' && score.dimension === 'system-accessibility')).toBe(true);
+    expect(result.failures).toEqual([]);
+    const approved = await stage.approve({ directionId: 'typographic-low-chroma', rationale: 'A direção tipográfica responde ao briefing.', approverRole: 'captain' });
+    expect(approved.record.directionId).toBe('typographic-low-chroma');
+  });
+
+  it('blocks a direction whose rubric was never evaluated, even after the correction', async () => {
+    const inner = new FakeIdentityProvider();
+    const attempts: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-system-a11y-critic-typographic-low-chroma') return result;
+        attempts.push(task.attempt);
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, scores: [{ dimension: 'brand-fit', score: 4, evidence: 'Rubrica que este assento não recebeu.' }] } };
+      },
+    };
+    const { stage, events } = harness({ provider });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'typographic-low-chroma')!;
+    // The one correction was spent and the seat still scored nothing it owns.
+    expect(attempts).toEqual([1, 2]);
+    expect(candidate.unscoredDimensions).toEqual(['system-accessibility']);
+    expect(result.failures.some((failure) => failure.taskId === 'identity-critic-system-a11y-critic-typographic-low-chroma')).toBe(true);
+    expect(events.some((event) => event.type === 'identity.critic.unscored')).toBe(true);
+    // An unevaluated rubric is not a passing rubric: the gate needs a written override.
+    await expect(stage.approve({ directionId: 'typographic-low-chroma', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/Rubric system-accessibility was never evaluated/);
+    const approved = await stage.approve({ directionId: 'typographic-low-chroma', rationale: 'Gosto dessa.', approverRole: 'captain', overrideRationale: 'Aceito seguir sem a nota de acessibilidade; o Gate 2 revisa.' });
+    expect(approved.record.directionId).toBe('typographic-low-chroma');
+    // The other two directions were scored by every seat that owes them one.
+    for (const other of result.candidates.filter((entry) => entry.directionId !== 'typographic-low-chroma')) expect(other.unscoredDimensions).toEqual([]);
   });
 
   it('spends exactly one corrective re-invocation on an artefact that misses its schema', async () => {
