@@ -1,4 +1,4 @@
-import { hashJson, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCriticDimension } from '@pwb/domain';
+import { hashJson, stageRoles, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCriticDimension } from '@pwb/domain';
 import type { CompiledSite } from '@pwb/export';
 
 /** The rubric each critic scores against, on the plan's absolute 0–4 scale. */
@@ -107,7 +107,9 @@ export function criticTasks(context: CriticTaskContext): Array<{ definition: Cri
         id: `${definition.taskId}#${context.runId}`,
         attempt: context.attempt,
         stage: 'finalization',
-        role: 'release-critic',
+        // The stage pins its role; a critic is one read-only session of that
+        // stage, told apart by its task id and the dimension in its slice.
+        role: stageRoles.finalization,
         state: 'queued',
         lane: 'claude',
         baseVersionId: context.baseVersionId,

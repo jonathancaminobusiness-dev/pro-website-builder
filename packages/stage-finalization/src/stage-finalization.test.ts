@@ -152,8 +152,8 @@ describe('five read-only release critics', () => {
       expect(() => gate.validate({
         operations: [{ op: 'replace', path: '/reviewRecord/findings', value: [] }],
         baseVersionId: 'v0', touchedPaths: ['/reviewRecord/findings'], rationale: 'critic overreach', confidence: 1,
-        stage: 'finalization', role: 'release-critic', idempotencyKey: 'k',
-      }, { currentVersionId: 'v0', allowedPaths: task.allowedPaths })).toThrow(/not allowed/);
+        stage: 'finalization', role: 'compiler', idempotencyKey: 'k',
+      }, { currentVersionId: 'v0', allowedPaths: task.allowedPaths, stage: task.stage, role: task.role })).toThrow(/not allowed/);
     }
   });
 
@@ -213,12 +213,15 @@ describe('patch refiner', () => {
     expect(decision.action === 'stop' && decision.escalations.join(' ')).toMatch(/repetiu em duas rodadas/);
   });
 
-  it('produces a schema-valid patch confined to the review record', async () => {
-    const task = { baseVersionId: 'v0', inputDigest: 'digest', documentSlice: { '/reviewRecord': { findings: ['old'], approvals: [] } } } as unknown as AgentTask;
+  it('produces a patch the finalization patch gate accepts, confined to the review record', async () => {
+    const task = { baseVersionId: 'v0', inputDigest: 'digest', stage: 'finalization', role: 'compiler', allowedPaths: ['/reviewRecord'], documentSlice: { '/reviewRecord': { findings: ['old'], approvals: [] } } } as unknown as AgentTask;
     const patch = await new FakeReleaseRefiner().refine(task, [finding('a')]);
     expect(patch?.touchedPaths).toEqual(['/reviewRecord/findings']);
-    expect(patch?.role).toBe('patch-refiner');
+    // The stage pins its role, so the refiner's proposal declares it.
+    expect(patch?.role).toBe('compiler');
+    expect(patch?.stage).toBe('finalization');
     expect(patch?.operations[0]?.value).toEqual(['a: c', 'old']);
+    expect(() => new PatchGate().validate(patch!, { currentVersionId: 'v0', allowedPaths: task.allowedPaths, stage: task.stage, role: task.role })).not.toThrow();
   });
 });
 
@@ -381,6 +384,15 @@ describe('the finalization stage end to end with the deterministic providers', (
     expect(result.report.escalations.join(' ')).toMatch(/repetiu em duas rodadas/);
     expect(events).toContain('release.refined');
     expect(events).toContain('release.gate.ready');
+  });
+
+  it('refuses to be configured to write outside what the finalization stage may write', () => {
+    expect(() => new FinalizationStage({
+      criticProvider: new FakeReleaseCriticProvider(),
+      refiner: new PatchRefiner(new FakeReleaseRefiner()),
+      compilerOptions: COMPILER_OPTIONS,
+      refinerAllowedPaths: ['/identity'],
+    })).toThrow(/may not write \/identity/);
   });
 
   it('keeps the critics inside the scheduler lane limit', async () => {

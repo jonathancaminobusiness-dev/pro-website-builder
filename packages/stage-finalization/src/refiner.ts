@@ -1,4 +1,4 @@
-import { patchSchema, schemaJson, type AgentTask, type DesignIR, type Patch, type ReleaseFinding } from '@pwb/domain';
+import { patchSchema, releaseJsonSchemas, stageRoles, type AgentTask, type DesignIR, type Patch, type ReleaseFinding } from '@pwb/domain';
 import type { JsonModelRunner } from '@pwb/providers';
 
 export interface ReleaseRefinerProvider {
@@ -64,7 +64,9 @@ export class FakeReleaseRefiner implements ReleaseRefinerProvider {
       rationale: `O patch-refiner registra ${findings.length} achado(s) de release no histórico de revisão do documento.`,
       confidence: 1,
       stage: 'finalization',
-      role: 'patch-refiner',
+      // The PatchGate validates a finalization patch against the stage's pinned
+      // role: the refiner composes the proposal, the stage authors it.
+      role: stageRoles.finalization,
       idempotencyKey: task.inputDigest,
     });
   }
@@ -82,8 +84,8 @@ export class ClaudeReleaseRefiner implements ReleaseRefinerProvider {
       `Findings: ${JSON.stringify(findings)}`,
       `This is the immutable slice you may read: ${JSON.stringify(task.documentSlice)}`,
     ].join('\n');
-    const raw = await this.runner.run({ prompt, schema: schemaJson.Patch, deadlineMs: task.deadlineMs }, signal);
+    const raw = await this.runner.run({ prompt, schema: releaseJsonSchemas.FinalizationPatch, deadlineMs: task.deadlineMs }, signal);
     const parsed = patchSchema.parse(raw);
-    return { ...parsed, baseVersionId: task.baseVersionId, stage: 'finalization', role: 'patch-refiner', idempotencyKey: task.inputDigest };
+    return { ...parsed, baseVersionId: task.baseVersionId, stage: 'finalization', role: stageRoles.finalization, idempotencyKey: task.inputDigest };
   }
 }

@@ -1,4 +1,4 @@
-import { hashJson, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding, type ReleaseGateReport } from '@pwb/domain';
+import { hashJson, stageRoles, stageWritablePaths, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding, type ReleaseGateReport } from '@pwb/domain';
 import { compileRelease, type CompiledSite, type ReleaseCompilerOptions } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { Scheduler } from '@pwb/orchestrator';
@@ -39,7 +39,8 @@ export interface FinalizationStageResult {
   cycles: number;
 }
 
-const DEFAULT_REFINER_PATHS = ['/reviewRecord'];
+/** The refiner writes the review record; the stage may write more, and does not need to. */
+const DEFAULT_REFINER_PATHS: string[] = ['/reviewRecord'];
 
 /**
  * The finalization stage: compile, fan out five read-only critics, run the
@@ -57,6 +58,10 @@ export class FinalizationStage {
   constructor(private readonly options: FinalizationStageOptions) {
     this.scheduler = options.scheduler ?? new Scheduler();
     this.summarizer = options.summarizer ?? new DeterministicReleaseSummarizer();
+    // The foundation decides what the finalization stage may write; a caller can
+    // narrow the refiner's reach but never widen it past that boundary.
+    const outside = (options.refinerAllowedPaths ?? DEFAULT_REFINER_PATHS).filter((path) => !stageWritablePaths.finalization.some((allowed) => path === allowed || path.startsWith(`${allowed}/`)));
+    if (outside.length > 0) throw new Error(`The finalization stage may not write ${outside.join(', ')}; it writes ${stageWritablePaths.finalization.join(', ')}.`);
   }
 
   async run(input: FinalizationStageInput): Promise<FinalizationStageResult> {
@@ -79,7 +84,7 @@ export class FinalizationStage {
       const task = this.refinerTask(input.runId, version, compiled, findings, cycles + 1);
       const patch = await this.options.refiner.propose(task, findings.filter((finding) => finding.severity === 'error'), input.signal);
       if (!patch) { escalations.push('O patch-refiner não produziu proposta; os achados abertos sobem para o capitão.'); await emit('release.refinement.stopped', { reason: 'no-proposal', cycles }); break; }
-      version = input.applier.apply(patch, task.allowedPaths, version.id);
+      version = input.applier.apply(patch, task, version.id);
       cycles += 1;
       await emit('release.refined', { cycle: cycles, versionId: version.id, findings: previousFindingIds });
       compiled = this.compile(version.ir);
@@ -157,7 +162,7 @@ export class FinalizationStage {
       id: `release-patch-refiner#${runId}`,
       attempt,
       stage: 'finalization',
-      role: 'patch-refiner',
+      role: stageRoles.finalization,
       state: 'queued',
       lane: 'claude',
       baseVersionId: version.id,

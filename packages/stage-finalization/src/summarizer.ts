@@ -1,4 +1,4 @@
-import { releaseSummarySchema, schemaJson, type ReleaseCritique, type ReleaseSummary, type ReleaseVeto } from '@pwb/domain';
+import { releaseJsonSchemas, releaseSummarySchema, type ReleaseCritique, type ReleaseSummary, type ReleaseVeto } from '@pwb/domain';
 import type { JsonModelRunner } from '@pwb/providers';
 import { vetoDefinition } from './veto-catalog.js';
 
@@ -52,7 +52,7 @@ export class ClaudeReleaseSummarizer implements ReleaseSummarizerProvider {
       'You have no gate authority: you never approve, never reject, never soften a veto and never omit one. The gate recomputes every veto from the raw artifacts regardless of what you write.',
       `This is what the release produced: ${JSON.stringify(input)}`,
     ].join('\n');
-    const raw = await this.runner.run({ prompt, schema: schemaJson.ReleaseSummary, deadlineMs: this.deadlineMs }, signal);
+    const raw = await this.runner.run({ prompt, schema: releaseJsonSchemas.ReleaseSummary, deadlineMs: this.deadlineMs }, signal);
     return sealSummary(releaseSummarySchema.parse(raw), input.vetoes);
   }
 }
