@@ -198,7 +198,7 @@ export class IdentityRun {
       directions: this.result ? this.result.candidates.map((candidate) => this.viewOf(candidate, decided === candidate.directionId ? this.store.get(this.stage.approvedVersionId!) : undefined)) : [],
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),
       critiques: this.result?.critiques ?? [],
-      setCritique: this.result?.setCritique ?? { scores: [], rubricGaps: [] },
+      setCritique: this.result?.setCritique ?? { scores: [], rubricGaps: [], blocking: [], abstained: false },
       failures: this.result?.failures ?? [],
       gate,
       approvals: structuredClone(this.approvals),

@@ -103,7 +103,7 @@ export interface CritiqueScore { criticId: string; dimension: string; score: num
 export interface RubricGap { dimension: string; score: number; evidence: string; }
 
 /** What the critics said about the fan-out as a whole, which belongs to no single card. */
-export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[]; }
+export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[]; blocking: CritiqueFinding[]; abstained: boolean; }
 
 function scoresOf(reports: CritiqueReport[]): CritiqueScore[] {
   return reports.flatMap((report) => report.scores.map((entry) => ({ criticId: report.criticId, dimension: entry.dimension, score: entry.score })));
@@ -168,7 +168,7 @@ export class IdentityStage {
   private brief: BriefSpec | undefined;
   private candidates: IdentityCandidate[] = [];
   private critiques: CritiqueReport[] = [];
-  private setCritique: SetCritique = { scores: [], rubricGaps: [] };
+  private setCritique: SetCritique = { scores: [], rubricGaps: [], blocking: [], abstained: false };
   private divergence: DivergenceOutcome = { pairs: [], passed: false, blockedPairs: [] };
   private failures: Array<{ taskId: string; reason: string }> = [];
   private gateRecord: IdentityGateRecord | undefined;
@@ -441,23 +441,27 @@ export class IdentityStage {
   }
 
   /**
-   * A direction carries the findings written about it and the findings written
-   * about the set it belongs to: a matrix critic judges the fan-out as a whole,
-   * so its findings weigh on every candidate in it. Its scores do not: a
-   * set-level rubric is about the fan-out, not about any one direction, so it
-   * is recorded once and blocks the gate once instead of on all three cards.
+   * A matrix critic judges the fan-out as a whole, and what it says stays there:
+   * a set-level score, veto or abstention is about the set, not about any one
+   * direction, so no per-direction repair can clear it. It is recorded once,
+   * blocks the gate once and never selects a candidate for refinement.
    */
   private applyCritiqueToCandidates(): void {
     const forSet = this.critiques.filter((report) => report.subject.kind === 'matrix');
-    this.setCritique = { scores: scoresOf(forSet), rubricGaps: forSet.flatMap(belowRubric) };
+    this.setCritique = {
+      scores: scoresOf(forSet),
+      rubricGaps: forSet.flatMap(belowRubric),
+      blocking: forSet.flatMap(blockingFindings),
+      abstained: forSet.some((report) => report.abstain),
+    };
     this.candidates = this.candidates.map((candidate) => {
       const own = this.critiques.filter((report) => report.subject.kind === 'direction' && report.subject.directionId === candidate.directionId);
       return {
         ...candidate,
-        blocking: [...own, ...forSet].flatMap(blockingFindings),
+        blocking: own.flatMap(blockingFindings),
         scores: scoresOf(own),
         rubricGaps: own.flatMap(belowRubric),
-        abstained: [...own, ...forSet].some((report) => report.abstain),
+        abstained: own.some((report) => report.abstain),
       };
     });
   }
@@ -483,9 +487,13 @@ export class IdentityStage {
     if (refined.length === 0) return;
     const reports = await this.critique(brief, signal, refined);
     // A seat that did not answer the second time keeps what it found the first
-    // time: a veto disappears only when the same critic has read the repair.
-    const reread = new Set(reports.map(criticSeat));
-    this.critiques = [...this.critiques.filter((report) => !reread.has(criticSeat(report))), ...reports];
+    // time: a veto disappears only when the same critic has read the repair, and
+    // an answer that scored nothing in its own rubric has not read that rubric,
+    // so the scores it did not give stay as they were.
+    const scoredBefore = new Map(this.critiques.map((report) => [criticSeat(report), report.scores]));
+    const reread = reports.map((report) => (report.scores.length > 0 ? report : { ...report, scores: scoredBefore.get(criticSeat(report)) ?? [] }));
+    const seats = new Set(reread.map(criticSeat));
+    this.critiques = [...this.critiques.filter((report) => !seats.has(criticSeat(report))), ...reread];
     this.applyCritiqueToCandidates();
   }
 
@@ -644,6 +652,7 @@ export class IdentityStage {
       ...lintDesign(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir).findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
       ...this.divergence.blockedPairs,
       ...this.setCritique.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score} for the fan-out as a whole, below the absolute minimum of ${RUBRIC_MINIMUM}: ${gap.evidence}`),
+      ...this.setCritique.blocking.map((finding) => `${finding.id} about the fan-out as a whole: ${finding.observation}`),
       ...candidate.blocking.map((finding) => `${finding.id}: ${finding.observation}`),
       ...candidate.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score}, below the absolute minimum of ${RUBRIC_MINIMUM}.`),
       ...candidate.imageryViolations,

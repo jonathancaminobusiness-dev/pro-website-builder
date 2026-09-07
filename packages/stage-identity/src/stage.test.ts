@@ -272,6 +272,61 @@ describe('identity stage fan-out', () => {
     await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
   });
 
+  it('keeps a set-level veto on the set, off the cards and out of the refinement cycle', async () => {
+    const inner = new FakeIdentityProvider();
+    const refinerCalls: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-refiner-')) refinerCalls.push(task.id);
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-divergence-critic') return result;
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, abstain: true, findings: [{ id: 'div-veto', dimension: 'divergence', severity: 'veto', path: '/identity/direction/divergence', observation: 'Duas direções não se distinguem por descrição.', why: 'O capitão compararia duas versões da mesma proposta.', evidenceIds: [], confidence: 0.8 }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    // No per-direction repair can clear a judgement about the set, so none is attempted.
+    expect(refinerCalls).toEqual([]);
+    expect(result.setCritique.blocking.map((finding) => finding.id)).toEqual(['div-veto']);
+    expect(result.setCritique.abstained).toBe(true);
+    for (const candidate of result.candidates) {
+      expect(candidate.blocking).toEqual([]);
+      expect(candidate.abstained).toBe(false);
+      expect(candidate.refinedFromVersionId).toBeUndefined();
+    }
+    // It still blocks every direction until the captain writes an override.
+    await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/div-veto about the fan-out as a whole/);
+    const approved = await stage.approve({ directionId: 'modular-technical', rationale: 'Gosto dessa.', approverRole: 'captain', overrideRationale: 'A divergência medida passa DIV-030; o veto do crítico fica registrado.' });
+    expect(approved.record.directionId).toBe('modular-technical');
+  });
+
+  it('keeps a rubric gap the re-critique never scored again', async () => {
+    const inner = new FakeIdentityProvider();
+    const refinerCalls: string[] = [];
+    const evidence = 'O par de texto de anotação sobre papel não alcança AA.';
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-refiner-')) refinerCalls.push(task.id);
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-system-a11y-critic-editorial-material') return result;
+        const report = result.artifact as Record<string, unknown>;
+        // The second read answers about a rubric this seat was never given, so it
+        // re-read the document but not the rubric its score is supposed to move.
+        return refinerCalls.length > 0
+          ? { ...result, artifact: { ...report, scores: [{ dimension: 'brand-fit', score: 4, evidence: 'Rubrica que este assento não recebeu.' }] } }
+          : { ...result, artifact: { ...report, scores: [{ dimension: 'system-accessibility', score: 2, evidence }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const repaired = result.candidates.find((entry) => entry.directionId === 'editorial-material')!;
+    expect(refinerCalls).toEqual(['identity-refiner-editorial-material']);
+    expect(repaired.refinedFromVersionId).toBeDefined();
+    expect(repaired.rubricGaps).toEqual([{ dimension: 'system-accessibility', score: 2, evidence }]);
+    await expect(stage.approve({ directionId: 'editorial-material', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/below the absolute minimum of 3/);
+  });
+
   it('keeps a set-level rubric gap on the set, off the cards and out of the refinement cycle', async () => {
     const inner = new FakeIdentityProvider();
     const refinerCalls: string[] = [];

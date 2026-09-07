@@ -87,6 +87,7 @@ export function criticPrompt(input: CriticPromptInput): string {
     `You are the ${input.criticId} of the identity stage. You are a separate session from the director that produced this document, you have no access to how it was produced, and you may not edit it.`,
     'Read the rubric and the veto list below before you read the document.',
     `Rubric for ${input.dimension}, scored 0 to 4 with ${RUBRIC_MINIMUM} as the minimum that passes:\n${input.rubric.map((line, index) => `${index}. ${line}`).join('\n')}`,
+    `Score ${input.dimension} and nothing else: every entry in \`scores\` must name ${input.dimension}, which is the only rubric you were given. A score in another dimension is not yours to give and is discarded.`,
     `Immediate vetoes, which are not scores:\n${input.vetoes.map((line) => `- ${line}`).join('\n')}`,
     input.subject.kind === 'matrix'
       ? 'You are reviewing the whole fan-out at once. Report with `subject` set to { "kind": "matrix" }.'

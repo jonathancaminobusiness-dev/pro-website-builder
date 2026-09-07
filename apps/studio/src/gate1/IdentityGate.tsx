@@ -32,7 +32,7 @@ export interface IdentityGateSnapshot {
   brief?: { audience: string; promise: string; proof: string[]; exclusions: string[]; evidence: Array<{ id: string; quote: string; source: string }>; unknowns: string[]; assumptions: Array<{ id: string; statement: string; risk: string }> };
   directions: IdentityDirectionView[];
   divergence?: { passed: boolean; blockedPairs: string[]; pairs: Array<{ a: string; b: string; distinctAxes: string[]; hueOnlyColor: boolean }> };
-  setCritique: { scores: Array<{ criticId: string; dimension: string; score: number }>; rubricGaps: Array<{ dimension: string; score: number; evidence: string }> };
+  setCritique: { scores: Array<{ criticId: string; dimension: string; score: number }>; rubricGaps: Array<{ dimension: string; score: number; evidence: string }>; blocking: Array<{ id: string; observation: string; why: string }>; abstained: boolean };
   gate: { state: 'open'; reason: string } | { state: 'closed'; record: GateRecord } | { state: 'reopened'; record: GateRecord; impact: { changedTokenPaths: string[]; changedContractFields: string[]; staleRenderKeys: string[] } };
   approvals: Array<{ stage: string; decision: string; versionId: string; rationale: string }>;
   assets: Array<{ id: string; alt: string; status: string; provenance: { license: string; prompt?: string; termsNote?: string } }>;
@@ -117,16 +117,18 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
           : `DIV-030 bloqueia a seleção automática: ${snapshot.divergence.blockedPairs.join(' ')}`}
       </p>}
 
-      {snapshot.setCritique.scores.length > 0 && <div className="set-critique">
+      {(snapshot.setCritique.scores.length > 0 || snapshot.setCritique.blocking.length > 0) && <div className="set-critique">
         <p className="eyebrow">Rubrica do conjunto — vale para as três direções</p>
         <ul className="score-row" aria-label="Notas dos críticos sobre o conjunto">
           {snapshot.setCritique.scores.map((score) => <li key={`${score.criticId}-${score.dimension}`} className={snapshot.setCritique.rubricGaps.some((gap) => gap.dimension === score.dimension && gap.score === score.score) ? 'below-rubric' : ''}>
             <code>{score.dimension}</code> {score.score}/4 <small>{score.criticId}</small>
           </li>)}
         </ul>
-        {snapshot.setCritique.rubricGaps.length > 0 && <ul className="blocker-list" aria-label="Bloqueios do conjunto">
+        {(snapshot.setCritique.rubricGaps.length > 0 || snapshot.setCritique.blocking.length > 0) && <ul className="blocker-list" aria-label="Bloqueios do conjunto">
           {snapshot.setCritique.rubricGaps.map((gap) => <li key={gap.dimension}>Rubrica {gap.dimension} · nota {gap.score} abaixo do mínimo absoluto para o conjunto · {gap.evidence}</li>)}
+          {snapshot.setCritique.blocking.map((finding) => <li key={finding.id}>{finding.id} · {finding.observation}</li>)}
         </ul>}
+        {snapshot.setCritique.abstained && <p className="gate-check blocked">Um crítico do conjunto respondeu “incerto”: a decisão sobe para o capitão.</p>}
       </div>}
 
       {snapshot.brief && <details className="gate-brief">
