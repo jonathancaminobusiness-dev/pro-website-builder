@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { identitySpecSchema } from './identity.js';
+import { resolveTokens } from './tokens.js';
 import { documentRules } from './rules.js';
 
 export const nodeKindSchema = z.enum(['stack', 'grid', 'cluster', 'media', 'type', 'surface', 'ornament', 'component']);
@@ -60,7 +61,7 @@ export const pageSchema = z.object({
 
 export const assetSchema = z.object({
   id: z.string(), kind: z.enum(['raster', 'vector', 'font', 'manual']), uri: z.string(), alt: z.string(),
-  provenance: z.object({ source: z.string(), author: z.string(), license: z.string(), date: z.string(), hash: z.string(), prompt: z.string().optional(), model: z.string().optional(), termsNote: z.string().optional() }),
+  provenance: z.object({ source: z.string(), author: z.string(), license: z.string().min(1, 'An asset must record the license its provenance grants before the site can be exported.'), date: z.string(), hash: z.string(), prompt: z.string().optional(), model: z.string().optional(), termsNote: z.string().optional() }),
   status: z.enum(['placeholder', 'ready', 'failed']),
 });
 
@@ -84,6 +85,15 @@ export const designIRSchema = z.object({
   assets: assetsSchema,
   stateFixtures: z.record(z.object({ description: z.string(), values: z.record(visualValueSchema) })),
   reviewRecord: reviewRecordSchema,
+}).superRefine((ir, ctx) => {
+  let defined: Record<string, string | number | boolean>;
+  try { defined = resolveTokens(ir.identity.tokens).values; }
+  catch (error) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['identity', 'tokens'], message: error instanceof Error ? error.message : `${documentRules.tokenReferences} Token aliases do not resolve.` }); return; }
+  for (const page of ir.pages.routes) for (const node of page.nodes) for (const [key, value] of Object.entries(node.props)) {
+    if (!visualPropKeys.has(key) || typeof value !== 'string') continue;
+    const path = /^\{([^}]+)\}$/.exec(value)?.[1];
+    if (path !== undefined && !(path in defined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pages', 'routes'], message: `${documentRules.tokenReferences} Node ${node.id} sets ${key} to ${value}, which the identity does not define.` });
+  }
 });
 
 export type PageNode = z.infer<typeof pageNodeSchema>;

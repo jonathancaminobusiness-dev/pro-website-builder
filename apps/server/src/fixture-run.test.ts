@@ -1,4 +1,4 @@
-import { mkdtemp, readdir } from 'node:fs/promises';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -79,22 +79,17 @@ describe('phase 0 fixture run', () => {
   it('records the finalization approval only after the export succeeds', async () => {
     const db = openDatabase(':memory:');
     const repository = new ProjectRepository(db);
-    const fake = new FakeModelProvider();
-    const unlicensed: ModelProvider = {
-      async propose(task, signal) {
-        if (task.stage !== 'finalization') return fake.propose(task, signal);
-        return { taskId: task.id, status: 'succeeded', summary: 'Attach an asset', proposal: { operations: [{ op: 'add', path: '/assets/items/-', value: { id: 'unlicensed', kind: 'raster', uri: 'higgsfield://x', alt: 'Sem licença', provenance: { source: 'higgsfield', author: 'model', license: '', date: '2026-09-06', hash: 'x' }, status: 'ready' } }], baseVersionId: task.baseVersionId, touchedPaths: ['/assets/items'], rationale: 'Attach the raster asset', confidence: 1, stage: task.stage, role: task.role, idempotencyKey: 'unlicensed-asset' } };
-      },
-    };
-    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-license-')), 'exports'), provider: unlicensed });
+    const blocked = join(await mkdtemp(join(tmpdir(), 'pwb-license-')), 'not-a-directory');
+    await writeFile(blocked, 'the export root cannot be created under a regular file', 'utf8');
+    const run = new FixtureRun({ repository, exportRoot: join(blocked, 'exports'), provider: new FakeModelProvider() });
     await run.initialize('run-license');
     await run.runNext();
     await run.approve('identity', 'captain');
     await run.runNext();
     await run.approve('prototype', 'captain');
     expect((await run.runNext()).currentStage).toBe('finalization');
-    await expect(run.approve('finalization', 'captain')).rejects.toThrow(/license/i);
-    await expect(run.approve('finalization', 'captain')).rejects.toThrow(/license/i);
+    await expect(run.approve('finalization', 'captain')).rejects.toThrow(/ENOTDIR|not a directory/i);
+    await expect(run.approve('finalization', 'captain')).rejects.toThrow(/ENOTDIR|not a directory/i);
     expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization')).toHaveLength(0);
     expect(run.snapshot().status).toBe('needs_review');
     const recorded = (await repository.listEvents('run-license')).filter((event) => event.type === 'approval.recorded' && event.payload.stage === 'finalization');

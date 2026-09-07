@@ -1,4 +1,4 @@
-import { cssCustomPropertyName, cssTokenIssues, hashJson, resolveTokens, slotChildIds, visualPropKeys, type DesignIR, type IdentitySpec, type Page, type PageNode } from '@pwb/domain';
+import { cssCustomPropertyName, cssTokenIssues, documentRules, hashJson, resolveTokens, slotChildIds, visualPropKeys, type DesignIR, type IdentitySpec, type Page, type PageNode } from '@pwb/domain';
 
 export const RENDERER_VERSION = 'renderer-0.1.0';
 
@@ -29,7 +29,7 @@ function roleVar(identity: IdentitySpec, role: keyof IdentitySpec['tokenRoles'],
 function cssValue(value: string | number | boolean, values: Record<string, string | number | boolean>, node: PageNode, key: string): string {
   if (typeof value === 'string' && /^\{[^}]+\}$/.test(value)) {
     const path = value.slice(1, -1);
-    if (!(path in values)) throw new Error(`Unresolved token reference ${value} on ${node.id}.${key}`);
+    if (!(path in values)) throw new Error(`${documentRules.tokenReferences} Unresolved token reference ${value} on ${node.id}.${key}`);
     return `var(${cssCustomPropertyName(path)})`;
   }
   throw new Error(`Raw visual value is not token-backed: ${node.id}.${key}`);

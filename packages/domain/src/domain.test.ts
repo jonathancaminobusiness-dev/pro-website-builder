@@ -81,11 +81,30 @@ describe('domain contracts', () => {
       uniquePages: () => refused((ir) => { ir.pages.routes[1]!.route = '/contact'; }),
       tokenRoles: () => refused((ir) => { ir.identity.tokenRoles.surface = 'color.superficie'; }),
       cssTokens: () => emitted((ir) => { (ir.identity.tokens as { color: Record<string, unknown> }).color.papel_claro = { $value: '#f4efe6', $type: 'color' }; }),
+      tokenReferences: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.props.color = '{color.accent-2}'; }),
     };
     for (const [rule, collect] of Object.entries(violations) as Array<[keyof typeof documentRules, () => string[]]>) {
       const messages = collect();
       expect(messages.some((message) => message.startsWith(documentRules[rule]))).toBe(true);
     }
+  });
+
+  it('refuses a document whose token aliases or prop references do not resolve, and keeps legal aliases', () => {
+    const orphanAlias = createFixtureIR();
+    (orphanAlias.identity.tokens as { color: Record<string, unknown> }).color.link = { $value: '{color.ausente}', $type: 'color' };
+    expect(() => designIRSchema.parse(orphanAlias)).toThrow(/Orphan token alias: color\.ausente/);
+    const aliased = createFixtureIR();
+    (aliased.identity.tokens as { color: Record<string, unknown> }).color.link = { $value: '{color.accent}', $type: 'color' };
+    aliased.pages.routes[0]!.nodes[1]!.props.color = '{color.link}';
+    expect(designIRSchema.parse(aliased).pages.routes[0]!.nodes[1]!.props.color).toBe('{color.link}');
+    expect(resolveTokens(aliased.identity.tokens).values['color.link']).toBe('#d86445');
+  });
+
+  it('refuses an asset that records no license, at the gate that writes it', () => {
+    const unlicensed = createFixtureIR();
+    unlicensed.assets.items[0]!.provenance.license = '';
+    expect(() => designIRSchema.parse(unlicensed)).toThrow(/must record the license/i);
+    expect(designIRSchema.parse(createFixtureIR()).assets.items[0]!.provenance.license).toBe('internal fixture');
   });
 
   it('rejects a node semantic the renderer would not emit for that kind', () => {

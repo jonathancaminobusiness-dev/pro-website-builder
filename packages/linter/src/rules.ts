@@ -37,7 +37,7 @@ function aliasesAndRefs(ir: DesignIR): LintIssue[] {
   for (const { path, value } of visualProps(ir)) {
     if (typeof value !== 'string') continue;
     const match = /^\{([^}]+)\}$/.exec(value);
-    if (match && (!resolved || !(match[1]! in resolved.values))) issues.push({ path, message: `Token reference ${value} is orphaned.` });
+    if (match && (!resolved || !(match[1]! in resolved.values))) issues.push({ path, message: `${documentRules.tokenReferences} Token reference ${value} is orphaned.` });
   }
   return issues;
 }

@@ -137,6 +137,22 @@ describe('orchestrator', () => {
     expect(plan.tasks.map((task) => [task.stage, task.role])).toEqual(plan.tasks.map((task) => declared(task.stage)));
   });
 
+  it('refuses a prop that references a token the identity does not define, at the gate', () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const root = applier.createRoot(createFixtureIR());
+    const composer = { allowedPaths: ['/pages', '/assets', '/reviewRecord'], stage: 'prototype' as const, role: 'composer' as const };
+    const withRoutes = (mutate: (routes: ReturnType<typeof createFixtureIR>['pages']['routes']) => void, key: string) => {
+      const routes = createFixtureIR().pages.routes;
+      mutate(routes);
+      return { operations: [{ op: 'replace' as const, path: '/pages', value: { routes } }], baseVersionId: root.id, touchedPaths: ['/pages'], rationale: 'restyle the hero', confidence: 1, stage: 'prototype' as const, role: 'composer' as const, idempotencyKey: key };
+    };
+    const undefinedToken = withRoutes((routes) => { routes[0]!.nodes[1]!.props.color = '{color.accent-2}'; }, 'undefined-token');
+    expect(() => applier.dryRun(undefinedToken, composer, root.id)).toThrow(/home-title sets color to \{color\.accent-2\}/);
+    const definedToken = withRoutes((routes) => { routes[0]!.nodes[1]!.props.color = '{color.muted}'; }, 'defined-token');
+    expect(applier.dryRun(definedToken, composer, root.id).next.pages.routes[0]!.nodes[1]!.props.color).toBe('{color.muted}');
+  });
+
   it('refuses a phrasing node that carries other nodes, at the gate', () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());

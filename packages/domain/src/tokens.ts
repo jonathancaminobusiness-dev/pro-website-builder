@@ -67,7 +67,7 @@ export function resolveTokens(tokens: TokenTree): ResolvedTokenSet {
     const existing = values[path];
     if (existing !== undefined) return existing;
     const token = flat.get(path);
-    if (!token) throw new Error(`Orphan token alias: ${path}`);
+    if (!token) throw new Error(`${documentRules.tokenReferences} Orphan token alias: ${path}`);
     if (resolving.includes(path)) throw new Error(`Circular token alias: ${[...resolving, path].join(' -> ')}`);
     resolving.push(path);
     const raw = token.$value;
