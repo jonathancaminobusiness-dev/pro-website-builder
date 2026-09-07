@@ -17,7 +17,7 @@ function tokenOnly(ir: DesignIR): LintIssue[] {
   const issues: LintIssue[] = [];
   for (const { path, value } of visualProps(ir)) {
     const isRef = typeof value === 'string' && /^\{[^}]+\}$/.test(value);
-    if (!isRef) issues.push({ path, message: 'Visual values must resolve from a token.' });
+    if (!isRef) issues.push({ path, message: `${documentRules.visualPropTokens} ${path} is ${JSON.stringify(value)}.` });
   }
   return issues;
 }

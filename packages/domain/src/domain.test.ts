@@ -6,7 +6,6 @@ import {
   patchSchema,
   createFixtureIdentity,
   createFixtureIR,
-  cssTokenIssues,
   hashJson,
   resolveTokens,
 } from './index.js';
@@ -69,19 +68,15 @@ describe('domain contracts', () => {
       const result = designIRSchema.safeParse(ir);
       return result.success ? [] : result.error.issues.map((issue) => issue.message);
     };
-    const emitted = (mutate: (ir: ReturnType<typeof createFixtureIR>) => void): string[] => {
-      const ir = createFixtureIR();
-      mutate(ir);
-      return cssTokenIssues(resolveTokens(ir.identity.tokens).values).map((issue) => issue.message);
-    };
     const violations: Record<keyof typeof documentRules, () => string[]> = {
       mediaFigure: () => refused((ir) => { (ir.pages.routes[0]!.nodes[2]! as { semantic: string }).semantic = 'figure'; }),
       phrasingLeaf: () => refused((ir) => { ir.pages.routes[0]!.nodes[1]!.slots = { children: ['home-proof'] }; }),
       pageGraph: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title'] }; }),
       uniquePages: () => refused((ir) => { ir.pages.routes[1]!.route = '/contact'; }),
       tokenRoles: () => refused((ir) => { ir.identity.tokenRoles.surface = 'color.superficie'; }),
-      cssTokens: () => emitted((ir) => { (ir.identity.tokens as { color: Record<string, unknown> }).color.papel_claro = { $value: '#f4efe6', $type: 'color' }; }),
+      cssTokens: () => refused((ir) => { (ir.identity.tokens as { color: Record<string, unknown> }).color.papel_claro = { $value: '#f4efe6', $type: 'color' }; }),
       tokenReferences: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.props.color = '{color.accent-2}'; }),
+      visualPropTokens: () => refused((ir) => { ir.pages.routes[0]!.nodes[1]!.props.color = '#d86445'; }),
       mediaAsset: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.assetId = 'missing-asset'; }),
     };
     for (const [rule, collect] of Object.entries(violations) as Array<[keyof typeof documentRules, () => string[]]>) {

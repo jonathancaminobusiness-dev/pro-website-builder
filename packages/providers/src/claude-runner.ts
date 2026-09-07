@@ -6,7 +6,6 @@ import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, 
 import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
-const transientCodes = new Set(['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN', '429', 'OVERLOADED', 'RATE_LIMIT']);
 const deniedTools = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 export const CLAUDE_RUNNER_TIMEOUT_MS = 7 * 60_000;
 
@@ -19,13 +18,13 @@ export class ClaudeRunner implements ModelProvider {
 
   async propose(task: AgentTask, signal?: AbortSignal): Promise<AgentResult> {
     let correction = false;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const prompt = [
           task.brief,
           `Answer as the ${task.role} of the ${task.stage} stage for taskId ${task.id}.`,
           `A proposal must set baseVersionId to ${task.baseVersionId} and may only touch these paths: ${task.allowedPaths.join(', ')}.`,
-          `A page node may only declare these props: ${[...visualPropKeys].join(', ')} and text. Every visual prop must be a token reference such as {color.ink}.`,
+          `A page node may only declare these props: ${[...visualPropKeys].join(', ')} and text.`,
           `The gate also enforces rules the JSON Schema cannot state, and rejects a proposal that breaks any of them: ${Object.values(documentRules).join(' ')}`,
           `Every operation value must match the JSON Schema of the document subtree it writes: ${JSON.stringify(Object.fromEntries(task.allowedPaths.filter((path) => path in documentPathSchemas).map((path) => [path, documentPathSchemas[path]])))}`,
           `This is the immutable slice of the current document you may read; the identity contract is read-only: ${JSON.stringify(task.documentSlice)}`,
@@ -50,7 +49,6 @@ export class ClaudeRunner implements ModelProvider {
           if (!correction) { correction = true; continue; }
           return { taskId: task.id, status: 'needs_review', summary: 'Claude returned an invalid structured proposal.', errorCode: 'SCHEMA_INVALID' };
         }
-        if (transientCodes.has(code) && attempt < 2) { await new Promise((resolve) => setTimeout(resolve, 30 * (attempt + 1))); continue; }
         return { taskId: task.id, status: 'failed', summary: `The Claude Code process failed with ${code || 'an unknown error'}.`, errorCode: code || 'PROCESS_FAILED' };
       }
     }

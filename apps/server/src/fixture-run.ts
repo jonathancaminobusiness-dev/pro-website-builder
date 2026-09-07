@@ -85,19 +85,18 @@ export class FixtureRun {
     for (const version of versions) this.store.save({ id: version.id, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir });
     const approvals = await this.options.repository.listApprovals(runId);
     const approved = approvals.filter((approval) => approval.decision === 'approved');
-    const head = approved.at(-1) ? byId.get(approved.at(-1)!.versionId) : undefined;
-    const latest = head ?? versions.reduce((deepest, version) => {
-      const depth = (record: typeof version): number => { let steps = 0; let cursor: typeof version | undefined = record; while (cursor?.parentId) { steps += 1; cursor = byId.get(cursor.parentId); } return steps; };
-      return depth(version) > depth(deepest) ? version : deepest;
-    }, versions[0]!);
-    this.currentVersion = { id: latest.id, ...(latest.parentId ? { parentId: latest.parentId } : {}), hash: latest.hash, ir: latest.ir };
-    this.rendered = renderDesign(latest.ir);
-    this.lintErrorCount = lintDesign(latest.ir).errorCount;
+    const head = approved.at(-1) ? byId.get(approved.at(-1)!.versionId) : versions.find((version) => !version.parentId);
+    if (!head) return false;
+    this.currentVersion = { id: head.id, ...(head.parentId ? { parentId: head.parentId } : {}), hash: head.hash, ir: head.ir };
+    this.rendered = renderDesign(head.ir);
+    this.lintErrorCount = lintDesign(head.ir).errorCount;
     this.approvals.push(...approvals);
     this.stageIndex = Math.min(approved.length, STAGES.length);
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
-    this.started = approved.length > 0;
+    const events = await this.options.repository.listEvents(runId);
+    this.started = events.some((event) => event.type === 'run.started');
+    for (const event of events) if (event.type === 'task.queued') this.attempts.set(event.payload.stage as Stage, Number(event.payload.attempt));
     this.initialized = true;
     return true;
   }

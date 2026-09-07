@@ -6,5 +6,6 @@ export const documentRules = {
   tokenRoles: 'Every tokenRoles entry must name a token path the identity itself defines.',
   cssTokens: 'Every token path must compile to a distinct CSS custom property built from letters, digits and hyphens only, and no token value, once its aliases are resolved, may contain < > ; { } or a CSS comment delimiter.',
   tokenReferences: 'Every token alias and every visual prop reference must name a token path the identity defines.',
+  visualPropTokens: 'Every visual prop a node declares must be written as a token reference such as {color.ink}; a raw literal value is never renderable.',
   mediaAsset: 'Only a media node may declare assetId, it must name an asset the document lists, and a ready asset a node references must carry non-empty alt text and a data: URI the preview and export policies can display.',
 } as const;

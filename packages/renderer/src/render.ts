@@ -32,7 +32,7 @@ function cssValue(value: string | number | boolean, values: Record<string, strin
     if (!(path in values)) throw new Error(`${documentRules.tokenReferences} Unresolved token reference ${value} on ${node.id}.${key}`);
     return `var(${cssCustomPropertyName(path)})`;
   }
-  throw new Error(`Raw visual value is not token-backed: ${node.id}.${key}`);
+  throw new Error(`${documentRules.visualPropTokens} Node ${node.id} sets ${key} to ${JSON.stringify(value)}.`);
 }
 
 const propertyAliases: Record<string, string> = { background: 'background-color', radius: 'border-radius', font: 'font-family', motion: 'transition-duration', shadow: 'box-shadow' };

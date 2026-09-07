@@ -347,4 +347,34 @@ describe('phase 0 fixture run', () => {
     expect(await restored.restore('absent-run')).toBe(false);
     second.sqlite.close();
   });
+
+  it('discards an ungated proposal when the process restarts before the captain decides', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-pending-'));
+    const dbPath = join(dir, 'pending.sqlite');
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() });
+    await original.initialize('run-pending');
+    const root = original.snapshot().currentVersion;
+    const pending = await original.runNext();
+    expect(pending.status).toBe('needs_review');
+    expect(pending.currentVersion.id).not.toBe(root.id);
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const repository = new ProjectRepository(second);
+    const restored = new FixtureRun({ repository, exportRoot: join(dir, 'exports'), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-pending')).toBe(true);
+    const after = restored.snapshot();
+    expect(after.currentVersion.id).toBe(root.id);
+    expect(after.status).toBe('queued');
+    expect(after.approvals).toHaveLength(0);
+
+    const next = await restored.runNext();
+    expect(next.currentStage).toBe('identity');
+    expect(next.currentVersion.parentId).toBe(root.id);
+    const events = await repository.listEvents('run-pending');
+    expect(events.filter((event) => event.type === 'run.started')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'task.queued').map((event) => event.payload.attempt)).toEqual([1, 2]);
+    second.sqlite.close();
+  });
 });
