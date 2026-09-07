@@ -1,5 +1,7 @@
 # Phase 0 Foundation Implementation Plan
 
+> **Historical record.** This is the pre-implementation plan as written on 2026-09-05. The delivered code diverged from it during review, so file names, exported symbols and task details below no longer describe the branch. `README.md` and the schemas in `packages/domain` own the delivered contracts; read them instead of this file.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a tested local-first monorepo that carries one fixed briefing through identity, prototype, finalization, captain approvals, deterministic preview, and static export.

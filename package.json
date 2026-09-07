@@ -9,7 +9,7 @@
     "test:e2e": "playwright test",
     "run:fixture": "tsx scripts/run-fixture.ts",
     "typecheck": "tsc -b",
-    "lint": "pnpm typecheck"
+    "lint": "corepack pnpm typecheck"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",

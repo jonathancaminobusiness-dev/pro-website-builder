@@ -18,7 +18,7 @@ brief -> identity proposal -> captain gate 1 -> prototype proposal
       -> content-addressed static export
 ```
 
-Only the `Applier` creates a new document version. A patch carries its base version, allowed paths, touched paths, rationale, confidence, and an idempotency digest. A stale or overlapping patch is rejected without mutating storage. A token edit invalidates dependent renders and reopens the affected approval.
+Only the `Applier` creates a new document version. A patch carries its base version, allowed paths, touched paths, rationale, confidence, and an idempotency digest. A stale or overlapping patch is rejected without mutating storage. A rejected gate rewinds to the parent version and returns the stage to a re-runnable state; the identity itself is frozen once the captain approves Gate 1, so no later stage may rewrite it.
 
 ## Domain contracts
 
@@ -32,7 +32,7 @@ Runtime validation uses Zod. The same schemas expose JSON Schema for Claude Code
 
 Preview is served from a separate server port/origin and embedded with `<iframe sandbox>` without `allow-same-origin`. The studio exchanges only exact-origin postMessage values. CSP forbids inline script/eval for preview and export. Database, logs, and export scanning tests fail on secret-like strings.
 
-SQLite uses WAL and a single-writer queue. Versions and events are append-only; the initial persistence implementation uses Drizzle migrations and JSON snapshots while preserving relational tables for projects, versions, runs, tasks, patches, approvals, and events.
+SQLite uses WAL and a single-writer queue. Versions and events are append-only; the initial persistence implementation stores JSON snapshots in Drizzle-declared relational tables for projects, versions, runs, tasks, patches, approvals, and events, created on open by one idempotent SQL bootstrap guarded by a `PRAGMA user_version` schema number rather than by a migration tool.
 
 ## Verification
 
