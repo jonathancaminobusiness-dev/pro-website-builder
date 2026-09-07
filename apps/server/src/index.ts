@@ -11,7 +11,7 @@ import { createPreviewServer } from './preview.js';
 import { createModelProvider } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
 
-export async function startServer(options: { dbPath?: string; exportRoot?: string; renderCacheDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
+export async function startServer(options: { dbPath?: string; exportRoot?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
   const root = process.cwd();
   const dbPath = options.dbPath ?? process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'pro-website-builder.sqlite');
   const exportRoot = options.exportRoot ?? process.env.PWB_EXPORT_ROOT ?? join(root, 'exports');
@@ -47,6 +47,9 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   prototypes = registry;
   // A review the captain already paid minutes of browser time for survives a restart.
   await registry.restore();
+  const releaseRoot = options.releaseRoot ?? process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
+  const evidenceDir = options.evidenceDir ?? process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
+  await mkdir(releaseRoot, { recursive: true });
   const api = createApiServer({
     runs,
     prototypes: registry,
@@ -67,6 +70,13 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
       if (!await run.restore(id)) return undefined;
       runs.set(id, run);
       return run;
+    },
+    release: {
+      releaseRoot,
+      evidenceDir,
+      siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid',
+      siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder',
+      modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
     },
   });
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);
