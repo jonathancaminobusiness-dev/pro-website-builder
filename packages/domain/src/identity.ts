@@ -6,8 +6,11 @@ const provenanceSchema = z.object({
   source: z.string(), author: z.string(), license: z.string(), date: z.string(), hash: z.string(),
 });
 
-/** The narrowest viewport a prototype has to survive; a breakpoint at or below it never distinguishes one. */
-export const NARROWEST_VIEWPORT_PX = 320;
+/**
+ * A breakpoint is emitted as a container query, and a container is never wider than the viewport that
+ * holds it, so a breakpoint at or below the narrowest capture width is on in every single capture.
+ */
+const NARROWEST_CONTAINER_PX = 320;
 
 function referencedLengthPx(reference: string, values: Record<string, string | number | boolean>): number | undefined {
   const match = /^\{([^}]+)\}$/.exec(reference);
@@ -49,7 +52,7 @@ export const identitySpecSchema = z.object({
   }
   let values: Record<string, string | number | boolean> = {};
   try { values = resolveTokens(identity.tokens).values; } catch { values = {}; }
-  let narrower = NARROWEST_VIEWPORT_PX;
+  let narrower = NARROWEST_CONTAINER_PX;
   for (const [index, reference] of identity.gridGrammar.breakpointTokens.entries()) {
     const width = referencedLengthPx(reference, values);
     if (width === undefined) {
@@ -57,7 +60,7 @@ export const identitySpecSchema = z.object({
       continue;
     }
     if (width <= narrower) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['gridGrammar', 'breakpointTokens', index], message: `The grid grammar breakpoint ${reference} resolves to ${width}px, which is not above ${narrower}px; a breakpoint that every supported viewport already exceeds distinguishes nothing.` });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['gridGrammar', 'breakpointTokens', index], message: `The grid grammar breakpoint ${reference} resolves to ${width}px, which is not above ${narrower}px; a container that narrow already satisfies it, so the query transforms nothing.` });
       continue;
     }
     narrower = width;

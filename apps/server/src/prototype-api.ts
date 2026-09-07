@@ -6,7 +6,7 @@ import { declaresDarkScheme } from '@pwb/domain';
 import { RENDER_VIEWPORTS, readStateConditions } from '@pwb/render-hub';
 import {
   ClaudeInformationArchitect, ClaudeSectionComposer, ClaudeCritiqueRunner,
-  DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
+  FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
   PrototypeStage, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
 } from '@pwb/stage-prototype';
 import type { ProjectRepository } from './db/repository.js';
@@ -52,7 +52,6 @@ interface PrototypeRunRecord {
   runId: string;
   store: VersionStore;
   outcome: PrototypeStageOutcome;
-  rendered: Map<string, RenderedDocument>;
   decisions: IssueDecisionRecord[];
   approval?: Approval;
 }
@@ -61,7 +60,8 @@ export interface PrototypeRegistryOptions {
   repository: ProjectRepository;
   /** `fake` keeps CI and the fixture deterministic; `claude-code` runs the owner's local binary. */
   modelProvider?: string;
-  evidence?: EvidenceSource;
+  /** Where the deterministic gate's evidence is measured; the server always hands it the RenderHub. */
+  evidence: EvidenceSource;
   /** The revision a run starts from; tests inject a document with a known defect through it. */
   seed?: () => DesignIR;
 }
@@ -72,14 +72,18 @@ export interface PrototypeRegistryOptions {
  */
 export class PrototypeRunRegistry {
   private readonly runs = new Map<string, PrototypeRunRecord>();
+  /** Every version store this registry owns, registered before the stage runs so the RenderHub can read a revision mid-run. */
+  private readonly stores = new Map<string, VersionStore>();
+  private readonly rendered = new Map<string, RenderedDocument>();
 
   constructor(private readonly options: PrototypeRegistryOptions) {}
 
-  has(runId: string): boolean { return this.runs.has(runId); }
+  has(runId: string): boolean { return this.stores.has(runId); }
 
   async create(runId: string): Promise<Gate2Snapshot> {
-    if (this.runs.has(runId)) throw new Error(`Run ${runId} already exists.`);
+    if (this.stores.has(runId)) throw new Error(`Run ${runId} already exists.`);
     const store = new VersionStore();
+    this.stores.set(runId, store);
     const applier = new Applier(store, new PatchGate());
     const base = applier.createRoot((this.options.seed ?? createFixtureIR)());
     const claude = this.options.modelProvider === 'claude-code';
@@ -90,17 +94,14 @@ export class PrototypeRunRegistry {
       architect: claude ? new ClaudeInformationArchitect() : new FakeInformationArchitect(),
       composer: claude ? new ClaudeSectionComposer() : new FakeSectionComposer(),
       critique,
-      evidence: this.options.evidence ?? new DerivedEvidenceSource(),
+      evidence: this.options.evidence,
       brief: BRIEF,
       onEvent: (type, payload) => this.options.repository.appendEvent({ id: randomUUID(), runId, type, payload }),
     });
-    const outcome = await stage.run({ runId, baseVersionId: base.id });
-    const rendered = new Map<string, RenderedDocument>();
-    for (const versionId of new Set([outcome.baseVersionId, outcome.architectVersionId, outcome.compositionVersionId, outcome.versionId])) {
-      const version = store.get(versionId);
-      if (version) rendered.set(versionId, renderDesign(version.ir));
-    }
-    const record: PrototypeRunRecord = { runId, store, outcome, rendered, decisions: [] };
+    let outcome: PrototypeStageOutcome;
+    try { outcome = await stage.run({ runId, baseVersionId: base.id }); }
+    catch (error) { this.stores.delete(runId); throw error; }
+    const record: PrototypeRunRecord = { runId, store, outcome, decisions: [] };
     this.runs.set(runId, record);
     return this.snapshot(record);
   }
@@ -110,9 +111,20 @@ export class PrototypeRunRegistry {
     return record ? this.snapshot(record) : undefined;
   }
 
-  /** Serves both A and B of the comparison from the isolated preview origin. */
+  /**
+   * Serves both A and B of the comparison from the isolated preview origin, and every intermediate
+   * revision the deterministic gate measures while the stage is still running.
+   */
   preview(versionId: string): RenderedDocument | undefined {
-    for (const record of this.runs.values()) { const document = record.rendered.get(versionId); if (document) return document; }
+    const cached = this.rendered.get(versionId);
+    if (cached) return cached;
+    for (const store of this.stores.values()) {
+      const version = store.get(versionId);
+      if (!version) continue;
+      const document = renderDesign(version.ir);
+      this.rendered.set(versionId, document);
+      return document;
+    }
     return undefined;
   }
 

@@ -39,7 +39,7 @@ describe('deterministic renderer', () => {
     const query = containerQueries(renderDesign(ir).css).find((block) => block.selector === '[data-node-id="home-root"]')!;
 
     expect(query.minWidthPx).toBeGreaterThan(390);
-    expect(query.minWidthPx).toBeLessThanOrEqual(1024);
+    expect(query.minWidthPx).toBeLessThan(1024);
     expect(query.declarations).toContain('gap: var(--space-xl);');
   });
 

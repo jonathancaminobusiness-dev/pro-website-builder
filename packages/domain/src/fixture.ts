@@ -16,8 +16,8 @@ export function createFixtureIdentity(): IdentitySpec {
       xl: { $value: '6rem', $type: 'dimension' as const },
     },
     breakpoint: {
-      compact: { $value: '40rem', $type: 'dimension' as const },
-      expanded: { $value: '64rem', $type: 'dimension' as const },
+      compact: { $value: '44rem', $type: 'dimension' as const },
+      expanded: { $value: '60rem', $type: 'dimension' as const },
     },
     radius: { card: { $value: '1.25rem', $type: 'borderRadius' as const } },
     type: {

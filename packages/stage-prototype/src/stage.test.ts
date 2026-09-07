@@ -129,8 +129,8 @@ describe('prototype stage', () => {
     // Every responsive rule the composer declared is read back out as a container query.
     // The composer opens its breakpoints at the identity's own container widths, so a query really
     // separates a phone from a desktop instead of matching at every viewport.
-    expect(rendered.css).toContain('@container (min-width: 40rem)');
-    expect(rendered.css).toContain('@container (min-width: 64rem)');
+    expect(rendered.css).toContain('@container (min-width: 44rem)');
+    expect(rendered.css).toContain('@container (min-width: 60rem)');
     expect(rendered.css).toContain('[data-node-id="home-hero-root"] { padding-inline: var(--space-md); }');
   });
 

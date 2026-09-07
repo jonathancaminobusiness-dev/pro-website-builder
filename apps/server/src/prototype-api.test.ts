@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type DesignIR } from '@pwb/domain';
 import { FakeModelProvider } from '@pwb/providers';
+import { DerivedEvidenceSource } from '@pwb/stage-prototype';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
@@ -29,7 +30,8 @@ async function harness(options: { seed?: () => DesignIR } = {}): Promise<{ origi
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-'));
   const db = openDatabase(join(dir, 'gate2.sqlite'));
   const repository = new ProjectRepository(db);
-  const registry = new PrototypeRunRegistry({ repository, ...(options.seed ? { seed: options.seed } : {}) });
+  // Synthesized evidence keeps these unit tests browserless; the server itself only ever measures.
+  const registry = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), ...(options.seed ? { seed: options.seed } : {}) });
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs, prototypes: registry,
@@ -129,7 +131,7 @@ describe('Gate 2 API', () => {
     const db = openDatabase(join(dir, 'events.sqlite'));
     const repository = new ProjectRepository(db);
     try {
-      const registry = new PrototypeRunRegistry({ repository, seed: createOffRhythmControlIR });
+      const registry = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), seed: createOffRhythmControlIR });
       const snapshot = await registry.create('gate2-events');
       await registry.decide('gate2-events', { findingId: snapshot.issues[0]!.id, decision: 'accepted', rationale: 'Reparo causal aceito.' });
       await registry.settle('gate2-events', { decision: 'approved', rationale: 'Aprovado.' });

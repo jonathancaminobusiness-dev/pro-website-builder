@@ -71,11 +71,11 @@ function describePatch(patch: ProposedPatch | undefined): string {
 }
 
 /** Two revisions of the same route at the same width, scaled to whatever room the panel has. */
-function Compare(props: { mode: 'side' | 'overlay' | 'difference'; viewport: number; before: string; after: string; route: string; repaired: boolean }): ReactElement {
+function Compare(props: { mode: 'side' | 'overlay' | 'difference'; viewport: number; before: string; after: string; route: string }): ReactElement {
   const container = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   // Two narrow viewports fit next to each other; a wide one is only readable stacked.
-  const columns = props.mode === 'side' && props.repaired && props.viewport <= 768 ? 2 : 1;
+  const columns = props.mode === 'side' && props.viewport <= 768 ? 2 : 1;
 
   useLayoutEffect(() => {
     const element = container.current;
@@ -107,7 +107,7 @@ function Compare(props: { mode: 'side' | 'overlay' | 'difference'; viewport: num
   return (
     <div className={`compare compare-${props.mode}`} ref={container} data-columns={columns}>
       {frame(props.before, 'A', 'base')}
-      {props.repaired && frame(props.after, 'B', 'top')}
+      {frame(props.after, 'B', 'top')}
     </div>
   );
 }
@@ -189,16 +189,17 @@ export default function Gate2(): ReactElement {
               </label>
               <div className="gate2-modes" role="group" aria-label="Modo de comparação">
                 {([['side', 'lado a lado'], ['overlay', 'sobreposição'], ['difference', 'diferença']] as const).map(([id, label]) => (
-                  <button key={id} className={mode === id ? 'selected' : ''} disabled={!snapshot.repaired && id !== 'side'} onClick={() => setMode(id)}>{label}</button>
+                  <button key={id} className={mode === id ? 'selected' : ''} onClick={() => setMode(id)}>{label}</button>
                 ))}
               </div>
             </div>
           </div>
           <p className="gate2-versions">
             <strong>{snapshot.before.label}</strong> <code>{snapshot.before.versionId}</code>
-            {snapshot.repaired ? <> · <strong>{snapshot.after.label}</strong> <code>{snapshot.after.versionId}</code></> : <> · nenhum reparo foi aplicado nesta revisão</>}
+            {' · '}<strong>{snapshot.after.label}</strong> <code>{snapshot.after.versionId}</code>
+            {!snapshot.repaired && <> · nenhum reparo foi aplicado, então os dois lados são a mesma revisão e a diferença é vazia</>}
           </p>
-          <Compare mode={mode} viewport={viewport} before={snapshot.before.versionId} after={snapshot.after.versionId} route={route} repaired={snapshot.repaired} />
+          <Compare mode={mode} viewport={viewport} before={snapshot.before.versionId} after={snapshot.after.versionId} route={route} />
         </section>
 
         <section className="gate2-evidence">

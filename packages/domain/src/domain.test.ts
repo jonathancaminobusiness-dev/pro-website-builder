@@ -211,7 +211,7 @@ describe('domain contracts', () => {
     expect(widths).toHaveLength(2);
     // The content max width is 6rem here: a container query opening there matches every viewport.
     expect(() => identitySpecSchema.parse(grammar([identity.gridGrammar.maxWidthToken, '{breakpoint.expanded}']))).toThrow(/not above 320px/);
-    expect(() => identitySpecSchema.parse(grammar(['{breakpoint.expanded}', '{breakpoint.compact}']))).toThrow(/not above 1024px/);
+    expect(() => identitySpecSchema.parse(grammar(['{breakpoint.expanded}', '{breakpoint.compact}']))).toThrow(/not above 960px/);
     expect(() => identitySpecSchema.parse(grammar(['{breakpoint.compact}', '{type.body}']))).toThrow(/does not resolve to a dimension/);
     expect(() => identitySpecSchema.parse(grammar(['{breakpoint.compact}']))).toThrow();
   });

@@ -21,7 +21,6 @@
 .gate2-modes { display: inline-flex; gap: 4px; border: 1px solid #b9ac9f; border-radius: 999px; padding: 3px; background: #f8f5ef; }
 .gate2-modes button { border: 0; border-radius: 999px; padding: 6px 12px; color: #6f7c81; background: transparent; font-size: .74rem; }
 .gate2-modes button.selected { color: #f8f1e7; background: #18252d; }
-.gate2-modes button:disabled { opacity: .35; cursor: not-allowed; }
 .gate2-versions { margin: 14px 0 12px; color: #6f7c81; font-size: .74rem; }
 .gate2-versions code { color: #a84f37; font-size: .72rem; }
 

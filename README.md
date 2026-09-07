@@ -112,7 +112,9 @@ corepack pnpm run:prototype -- --render  # the real Playwright RenderHub
 
 Both bind an ephemeral port, so several checkouts can run them at the same time.
 
-The Gate 2 screen is at `http://127.0.0.1:5173/#/gate-2`. It compares the composed revision with the refined one on the same route at the same width, offers an overlay and a difference blend, keeps the deterministic gate and the critics' opinion in separate panels, and records accept, reject or defer with a reason for each issue before the captain settles the gate.
+The Gate 2 screen is at `http://127.0.0.1:5173/#/gate-2`. It compares the composed revision with the refined one on the same route at the same width, offers an overlay and a difference blend, keeps the deterministic gate and the critics' opinion in separate panels, and records accept, reject or defer with a reason for each issue before the captain settles the gate. Both sides are always shown: when the loop applied no repair the two are the same revision and the difference blend is empty, which is itself the answer.
+
+The server measures that verdict rather than assuming it. `startServer` hands the run registry a `RenderHubEvidenceSource` pointed at the isolated preview origin, so a Gate 2 run drives the real capture matrix through Playwright — contrast, focus, axe, overflow, clipping and stability are observed on a live page before any critic runs, and a Tier 0 veto blocks approval. The browser cache lives in `PWB_RENDER_CACHE` (default `.treehouse/render-cache`), so an unchanged revision is never recaptured. The synthesized `DerivedEvidenceSource` is a test-only stand-in; no server path can reach it.
 
 ## Real local Claude Code in the prototype stage
 
