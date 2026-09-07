@@ -510,8 +510,16 @@ export class IdentityStage {
     if (input.approverRole !== 'captain') throw new StageError('Only the captain can decide Gate 1 in v1.');
     const candidate = this.candidates.find((entry) => entry.directionId === input.directionId);
     if (!candidate) throw new StageError(`Direction ${input.directionId} is not one of this run's candidates.`);
+    const before = this.gateState();
+    if (before.state === 'closed') throw new StageError(`Gate 1 is already closed for ${before.record.directionId}; change the identity to reopen it before deciding again.`);
+    // Re-approval is what closes a gate that a token change reopened, and it can
+    // only confirm the direction that was already chosen: picking a different
+    // branch after the fact would leave the approved lineage behind.
+    if (before.state === 'reopened' && before.record.directionId !== input.directionId) {
+      throw new StageError(`Gate 1 was reopened for ${before.record.directionId}; a different direction cannot be approved onto that lineage.`);
+    }
     const blockers = [
-      ...candidate.lint.findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
+      ...lintDesign(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir).findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
       ...this.divergence.blockedPairs,
       ...candidate.blocking.map((finding) => `${finding.id}: ${finding.observation}`),
       ...candidate.imageryViolations,
@@ -519,7 +527,7 @@ export class IdentityStage {
     if (blockers.length > 0 && !(input.overrideRationale ?? '').trim()) {
       throw new StageError(`Gate 1 is blocked for ${input.directionId} and automatic selection is not allowed. Approve with a written override or send the direction back:\n- ${blockers.join('\n- ')}`);
     }
-    const version = this.branches.version(candidate.versionId);
+    const version = this.retireDivergence(candidate.directionId, before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId);
     const record: IdentityGateRecord = {
       runId: this.options.runId,
       directionId: candidate.directionId,
@@ -562,6 +570,31 @@ export class IdentityStage {
       }
     }
     return { record, assets, versionId, ...(input.overrideRationale ? { overrideRationale: input.overrideRationale } : {}) };
+  }
+
+  /**
+   * Approving ends the comparison. The chosen identity keeps `rejectedAlternatives`
+   * as the durable record of what it beat, but the live divergence matrix is
+   * retired: it described a fan-out that no longer exists, and leaving it in place
+   * would make DIV-030 police a set of one and block every later token change.
+   */
+  private retireDivergence(directionId: string, versionId: string): VersionRecord {
+    const current = this.branches.version(versionId);
+    if (!current.ir.identity.direction.divergence) return current;
+    const { divergence, ...direction } = current.ir.identity.direction;
+    const patch: Patch = {
+      operations: [{ op: 'remove', path: '/identity/direction/divergence' }],
+      baseVersionId: versionId,
+      touchedPaths: ['/identity/direction/divergence'],
+      rationale: `Gate 1 chose ${directionId}; the divergence matrix becomes history in rejectedAlternatives (${direction.rejectedAlternatives.map((entry) => entry.directionId).join(', ') || 'none'}).`,
+      confidence: 1,
+      stage: 'identity',
+      role: 'director',
+      idempotencyKey: hashJson({ retire: versionId, directionId }),
+    };
+    const settled = this.branches.applierFor(directionId).apply(patch, IDENTITY_ALLOWED_PATHS, versionId);
+    renderDesign(settled.ir);
+    return settled;
   }
 
   /**

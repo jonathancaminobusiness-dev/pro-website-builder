@@ -236,9 +236,14 @@ describe('gate 1', () => {
     const result = await stage.run();
     const chosen = result.candidates.find((candidate) => candidate.directionId === 'typographic-low-chroma')!;
     const approval = await stage.approve({ directionId: chosen.directionId, rationale: 'A direção tipográfica sustenta o argumento.', approverRole: 'captain' });
-    expect(approval.record.identityHash).toBe(identityHash(store.get(chosen.versionId)!.ir));
+    const approved = store.get(approval.record.versionId)!;
+    expect(approval.record.identityHash).toBe(identityHash(approved.ir));
     expect(approval.record.identityHash).not.toBe(identityHash(store.get(result.baseVersionId)!.ir));
     expect(stage.gateState().state).toBe('closed');
+    // The comparison is over: the matrix retires, the record of what it beat stays.
+    expect(approved.ir.identity.direction.divergence).toBeUndefined();
+    expect(approved.ir.identity.direction.rejectedAlternatives.map((entry) => entry.directionId).sort()).toEqual(['editorial-material', 'modular-technical']);
+    expect(approved.parentId).toBe(chosen.versionId);
   });
 
   it('reopens after a token change and names the renders the change made unreachable', async () => {
@@ -272,6 +277,21 @@ describe('gate 1', () => {
     const withNewPageTitle = { ...ir, pages: { routes: ir.pages.routes.map((page, index) => index === 0 ? { ...page, title: 'Outro título' } : page) } };
     expect(identityChangeImpact(ir, withNewPageTitle).reopensGate).toBe(false);
     expect(stage.gateState().state).toBe('closed');
+  });
+
+  it('refuses a second decision while the gate is closed, and accepts one after it reopens', async () => {
+    const { stage, store } = harness();
+    await stage.run();
+    await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
+    await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Mudei de ideia.', approverRole: 'captain' })).rejects.toThrow(/already closed/);
+
+    const changed = await stage.changeToken({ tokenPath: 'color.muted', value: { $value: '#5b6b62', $type: 'color' }, rationale: 'Anotação mais legível.' });
+    await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Outra direção.', approverRole: 'captain' })).rejects.toThrow(/cannot be approved onto that lineage/);
+
+    const reapproved = await stage.approve({ directionId: 'editorial-material', rationale: 'Novo token revisado e aprovado.', approverRole: 'captain' });
+    expect(stage.gateState().state).toBe('closed');
+    expect(reapproved.record.identityHash).toBe(identityHash(store.get(changed.versionId)!.ir));
+    expect(stage.handoff()?.stale).toBe(false);
   });
 
   it('refuses to change a token the approved identity does not define', async () => {
