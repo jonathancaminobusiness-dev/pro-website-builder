@@ -94,6 +94,20 @@ describe('domain contracts', () => {
     }
   });
 
+  it('holds a responsive rule to the same token contract as the props beside it', () => {
+    const raw = createFixtureIR();
+    raw.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{breakpoint.compact}', props: { gap: '1rem' } }];
+    expect(() => designIRSchema.parse(raw)).toThrow(/sets responsive \{breakpoint\.compact\} gap to 1rem, which is not a token reference/);
+
+    const undefinedToken = createFixtureIR();
+    undefinedToken.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{breakpoint.compact}', props: { gap: '{space.absent}' } }];
+    expect(() => designIRSchema.parse(undefinedToken)).toThrow(/which the identity does not define/);
+
+    const tokenised = createFixtureIR();
+    tokenised.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{breakpoint.compact}', props: { gap: '{space.lg}' } }];
+    expect(designIRSchema.parse(tokenised).pages.routes[0]!.nodes[0]!.responsive[0]!.props.gap).toBe('{space.lg}');
+  });
+
   it('refuses a document whose token aliases or prop references do not resolve, and keeps legal aliases', () => {
     const orphanAlias = createFixtureIR();
     (orphanAlias.identity.tokens as { color: Record<string, unknown> }).color.link = { $value: '{color.ausente}', $type: 'color' };

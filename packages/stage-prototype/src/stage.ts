@@ -16,7 +16,9 @@ import { DEFAULT_LOOP_BUDGET, decideNextCycle, summariseCycle, type CycleRecord,
 import { PrototypeRefiner } from './refiner.js';
 
 /** The paths the whole prototype stage may touch. The approved identity is never among them. */
-export const PROTOTYPE_ALLOWED_PATHS = [...stageWritablePaths.prototype];
+const PROTOTYPE_ALLOWED_PATHS = [...stageWritablePaths.prototype];
+/** One critic session's own deadline; the loop's tail is a whole number of waves of these. */
+export const CRITIC_DEADLINE_MS = 3 * 60_000;
 /** Every write this stage makes is scoped to the prototype stage and its one role. */
 export const PROTOTYPE_SCOPE: TaskScope = { stage: 'prototype', role: stageRoles.prototype, allowedPaths: PROTOTYPE_ALLOWED_PATHS };
 
@@ -210,7 +212,7 @@ export class PrototypeStage {
       id: `${input.runId}-critic-${definition.dimension}-c${cycle}`,
       attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'claude',
       baseVersionId: ir.meta.versionId, inputDigest: qa.issueHash, promptVersion: PROMPT_VERSION, modelAlias: 'claude-local',
-      deadlineMs: 3 * 60_000,
+      deadlineMs: CRITIC_DEADLINE_MS,
       allowedPaths: [],
       brief: this.options.brief,
       documentSlice: { '/identity': identity },

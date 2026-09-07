@@ -238,6 +238,32 @@ describe('prototype stage', () => {
       .rejects.toThrow(PrototypeStageError);
   });
 
+  it('refuses a responsive rule whose props leave the token system, before the renderer sees it', async () => {
+    const setup = harness();
+    const rawBreakpoint: ComposerProvider = {
+      compose: async (task, section, manifest, signal) => {
+        const composition = await new FakeSectionComposer().compose(task, section, manifest, signal);
+        const [root, ...rest] = composition.nodes;
+        const [rule, ...others] = root!.responsive;
+        return { ...composition, nodes: [{ ...root!, responsive: [{ ...rule!, props: { gap: '1rem' } }, ...others] }, ...rest] };
+      },
+    };
+    await expect(stageFor(setup, rawBreakpoint).run({ runId: 'run-raw-responsive', baseVersionId: setup.base.id }))
+      .rejects.toThrow(/responsive .* gap outside the token system/);
+  });
+
+  it('refuses a composition that answers a section other than the one its task named', async () => {
+    const setup = harness();
+    const confused: ComposerProvider = {
+      compose: async (task, section, manifest, signal) => {
+        const composition = await new FakeSectionComposer().compose(task, section, manifest, signal);
+        return section.id === 'home-hero' ? { ...composition, sectionId: 'home-proof' } : composition;
+      },
+    };
+    await expect(stageFor(setup, confused).run({ runId: 'run-wrong-section', baseVersionId: setup.base.id }))
+      .rejects.toThrow(/answers section home-hero; it declared home-proof/);
+  });
+
   it('stops at the cycle ceiling instead of iterating while the rubric keeps climbing', async () => {
     const props: ProposedPatch[] = [
       { operation: 'set_token', nodeId: 'home-hero-root', prop: 'padding', token: '{space.lg}' },

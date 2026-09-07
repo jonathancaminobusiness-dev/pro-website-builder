@@ -15,7 +15,7 @@ export function renderComposerPrompt(task: AgentTask, section: SectionPlan, mani
     `Approved identity contract, frozen and read-only:\n${JSON.stringify({ direction: identity.direction, tokenRoles: identity.tokenRoles, gridGrammar: identity.gridGrammar, iconography: identity.iconography, content: identity.content, do: identity.do, dont: identity.dont, forbiddenDefaults: identity.forbiddenDefaults })}`,
     `Available token references: ${Object.keys(resolveTokens(identity.tokens).values).map((path) => `{${path}}`).join(', ')}`,
     `A responsive rule may only open at one of the identity's breakpoints — ${identity.gridGrammar.breakpointTokens.join(' or ')} — never at the content max width, which is narrower than the smallest viewport this prototype has to survive.`,
-    `Return a SectionComposition holding exactly ${section.nodeIds.length} nodes, with these ids in this order: ${section.nodeIds.join(', ')}. The first id is the section root; every other id must be reachable from it through the slots you declare. A node may only carry these visual props: ${[...visualPropKeys].join(', ')}, plus text. Every visual prop must be a token reference such as {color.ink}; a raw value is refused. A node whose semantic is h1, h2, h3, p, link or button carries its own text and declares no children. A link and a button are always kind component. A link is a component node whose text is its label and whose href is one of the routes of this journey — ${manifest.routes.map((route) => route.route).join(', ')}; a button is a component node with a label and no href. The journey runs ${manifest.routes.map((route) => route.route).join(' then ')}; carry the visitor to the next route with a link, never with a raw URL in the copy.`,
+    `Return a SectionComposition holding exactly ${section.nodeIds.length} nodes, with these ids in this order: ${section.nodeIds.join(', ')}. The first id is the section root; every other id must be reachable from it through the slots you declare. A node may only carry these visual props: ${[...visualPropKeys].join(', ')}, plus text. Every visual prop must be a token reference such as {color.ink}, on the node and inside every responsive rule alike; a raw value is refused in both. A node whose semantic is h1, h2, h3, p, link or button carries its own text and declares no children. A link and a button are always kind component. A link is a component node whose text is its label and whose href is one of the routes of this journey — ${manifest.routes.map((route) => route.route).join(', ')}; a button is a component node with a label and no href. The journey runs ${manifest.routes.map((route) => route.route).join(' then ')}; carry the visitor to the next route with a link, never with a raw URL in the copy.`,
     `Write the copy in ${identity.meta.locale}, in the identity voice, and never use ${identity.content.forbiddenTerms.join(', ')}.`,
   ].join('\n\n');
 }
@@ -99,6 +99,7 @@ export class ClaudeSectionComposer implements ComposerProvider {
  */
 export function validateComposition(composition: SectionComposition, section: SectionPlan, manifest: RouteManifest, identity: IdentitySpec): string[] {
   const problems: string[] = [];
+  if (composition.sectionId !== section.id) problems.push(`This composition answers section ${section.id}; it declared ${composition.sectionId}.`);
   const declared = composition.nodes.map((node) => node.id);
   if (declared.length !== section.nodeIds.length || declared.some((id, index) => id !== section.nodeIds[index])) {
     problems.push(`Section ${section.id} must return exactly ${section.nodeIds.join(', ')} in that order; it returned ${declared.join(', ') || 'nothing'}.`);
@@ -126,15 +127,19 @@ export function validateComposition(composition: SectionComposition, section: Se
     if (node.semantic === 'link' && !journeyRoutes.has(String(node.props.href))) {
       problems.push(`Node ${node.id} links to ${String(node.props.href)}, which is not one of the routes this journey declares.`);
     }
+    const checkProps = (where: string, props: Record<string, unknown>): void => {
+      for (const [key, value] of Object.entries(props)) {
+        if (!visualPropKeys.has(key) || value === undefined) continue;
+        const reference = typeof value === 'string' ? /^\{([^}]+)\}$/.exec(value) : null;
+        if (!reference) { problems.push(`Node ${node.id} sets ${where}${key} outside the token system.`); continue; }
+        if (!tokens.has(reference[1]!)) problems.push(`Node ${node.id} points ${where}${key} at the undefined token ${String(value)}.`);
+      }
+    };
     for (const rule of node.responsive) {
       if (!breakpoints.has(rule.minWidth)) problems.push(`Node ${node.id} opens a breakpoint at ${rule.minWidth}, which the grid grammar does not declare as one of ${identity.gridGrammar.breakpointTokens.join(', ')}.`);
+      checkProps(`responsive ${rule.minWidth} `, rule.props);
     }
-    for (const [key, value] of Object.entries(node.props)) {
-      if (!visualPropKeys.has(key) || value === undefined) continue;
-      const reference = typeof value === 'string' ? /^\{([^}]+)\}$/.exec(value) : null;
-      if (!reference) { problems.push(`Node ${node.id} sets ${key} outside the token system.`); continue; }
-      if (!tokens.has(reference[1]!)) problems.push(`Node ${node.id} points ${key} at the undefined token ${String(value)}.`);
-    }
+    checkProps('', node.props);
     const text = node.props.text;
     if (typeof text === 'string') {
       const forbidden = identity.content.forbiddenTerms.find((term) => text.toLowerCase().includes(term.toLowerCase()));

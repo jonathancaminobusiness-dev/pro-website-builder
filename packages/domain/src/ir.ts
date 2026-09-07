@@ -127,10 +127,17 @@ export const designIRSchema = z.object({
   try { defined = resolveTokens(ir.identity.tokens).values; }
   catch (error) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['identity', 'tokens'], message: error instanceof Error ? error.message : `${documentRules.tokenReferences} Token aliases do not resolve.` }); return; }
   for (const issue of cssTokenIssues(defined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['identity', 'tokens'], message: issue.message });
-  for (const page of ir.pages.routes) for (const node of page.nodes) for (const [key, value] of Object.entries(node.props)) {
-    if (!visualPropKeys.has(key) || typeof value !== 'string') continue;
-    const path = value.slice(1, -1);
-    if (!(path in defined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pages', 'routes'], message: `${documentRules.tokenReferences} Node ${node.id} sets ${key} to ${value}, which the identity does not define.` });
+  const refuseUntokenised = (nodeId: string, where: string, props: Record<string, unknown>): void => {
+    for (const [key, value] of Object.entries(props)) {
+      if (!visualPropKeys.has(key) || value === undefined) continue;
+      const path = typeof value === 'string' ? /^\{([^}]+)\}$/.exec(value)?.[1] : undefined;
+      if (path === undefined) { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pages', 'routes'], message: `${documentRules.tokenReferences} Node ${nodeId} sets ${where}${key} to ${String(value)}, which is not a token reference.` }); continue; }
+      if (!(path in defined)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pages', 'routes'], message: `${documentRules.tokenReferences} Node ${nodeId} sets ${where}${key} to ${String(value)}, which the identity does not define.` });
+    }
+  };
+  for (const page of ir.pages.routes) for (const node of page.nodes) {
+    refuseUntokenised(node.id, '', node.props);
+    for (const rule of node.responsive) refuseUntokenised(node.id, `responsive ${rule.minWidth} `, rule.props);
   }
   const assetsById = new Map(ir.assets.items.map((asset) => [asset.id, asset]));
   for (const page of ir.pages.routes) for (const node of page.nodes) {

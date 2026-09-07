@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { agentTaskSchema, createFixtureIR, hashJson, stageRoles, type Approval, type DesignIR } from '@pwb/domain';
-import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
+import { Applier, DEFAULT_MAX_ACTIVE_CLAUDE, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { declaresDarkScheme } from '@pwb/domain';
 import { readStateConditions } from '@pwb/render-hub';
 import {
-  ClaudeInformationArchitect, ClaudeSectionComposer, ClaudeCritiqueRunner,
+  ClaudeInformationArchitect, ClaudeSectionComposer, ClaudeCritiqueRunner, criticRegistry, CRITIC_DEADLINE_MS,
   DEFAULT_LOOP_BUDGET, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
   PrototypeStage, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
 } from '@pwb/stage-prototype';
@@ -28,11 +28,14 @@ export interface IssueDecisionRecord {
 export type PrototypeRunStatus = 'queued' | 'running' | 'settled' | 'failed' | 'interrupted';
 
 /**
- * Headroom the scheduler deadline keeps over the loop's own budget. The loop reads its budget at a
- * cycle boundary, so without this slack the hard abort always fires first and the graceful
- * `budget_exhausted` stop — with everything the browser already measured — is thrown away.
+ * Headroom the scheduler deadline keeps over the loop's own budget. The loop reads its budget only at
+ * a cycle boundary, so the abort has to outlast everything one more cycle can spend after the last
+ * check: every wave of critics the claude lane admits, plus the capture matrix that precedes them.
+ * The matrix carries no deadline of its own, so this is generous headroom rather than a bound.
  */
-const STAGE_DEADLINE_SLACK_MS = 5 * 60_000;
+const CRITIC_WAVES = Math.ceil(criticRegistry.length / DEFAULT_MAX_ACTIVE_CLAUDE);
+const CAPTURE_MATRIX_HEADROOM_MS = 10 * 60_000;
+const STAGE_DEADLINE_SLACK_MS = CRITIC_WAVES * CRITIC_DEADLINE_MS + CAPTURE_MATRIX_HEADROOM_MS;
 
 /** Where a run is right now. A start request returns this immediately; the list endpoint returns only this. */
 export interface PrototypeRunProgress {
