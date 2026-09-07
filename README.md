@@ -168,9 +168,12 @@ violation counts rather than from a field a runner chose to set, and
 so no summary can hide a veto. A runner that did not run leaves no artifact, and
 the gate reports the gap as an escalation instead of treating silence as a pass.
 `PWB_RELEASE_ENGINES=chromium,webkit` narrows the engine set on a host where one
-browser cannot launch; on macOS 26 and later, Playwright's Firefox build may
-fail to start with a `sandbox_extension_issue_file_to_process` error, and the
-gate then reports Firefox as missing evidence.
+browser cannot launch. On the macOS 27.0 host this was developed on,
+Playwright's Firefox 153 build does not start — it times out after
+`sandbox_extension_issue_file_to_process ... Operation not permitted` — so the
+evidence there is Chromium and WebKit, and the gate says so by escalating
+"Nenhuma execução Playwright em firefox" rather than treating the absence as a
+pass.
 
 Lighthouse is a laboratory run. It measures one machine and one network, does
 not observe a visitor, and does not measure INP without interaction; the
