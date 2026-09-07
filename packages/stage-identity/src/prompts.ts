@@ -135,5 +135,3 @@ export function documentSliceOf(ir: DesignIR, allowedPaths: string[]): Record<st
   }
   return slice;
 }
-
-export const identityPromptVersion = IDENTITY_PROMPT_VERSION;

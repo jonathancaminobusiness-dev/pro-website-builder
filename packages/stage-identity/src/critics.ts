@@ -72,9 +72,3 @@ export const identityCritics: readonly IdentityCriticDefinition[] = [
     ],
   },
 ];
-
-export function criticFor(id: string): IdentityCriticDefinition {
-  const critic = identityCritics.find((entry) => entry.id === id);
-  if (!critic) throw new Error(`Unknown identity critic ${id}.`);
-  return critic;
-}

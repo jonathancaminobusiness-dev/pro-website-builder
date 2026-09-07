@@ -3,6 +3,8 @@ import {
   compareDirections,
   createFixtureIR,
   divergenceAxes,
+  identityColorValues,
+  measuredAxisSignals,
   paletteSignature,
   toOklch,
   type DirectionVector,
@@ -14,12 +16,12 @@ import { fakeIdentityFor } from './fake-identity-provider.js';
 function vectorFor(directionId: Parameters<typeof fakeIdentityFor>[0], overrides: Partial<DirectionVector> = {}): DirectionVector {
   const seat = identityAxisBrief(directionId);
   const identity = fakeIdentityFor(directionId);
-  const colors = Object.values(identity.tokens.color as Record<string, { $value: string }>).map((token) => token.$value);
+  const signals = measuredAxisSignals(identity);
   return {
     directionId,
     label: directionId,
-    axes: Object.fromEntries(divergenceAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: `${axis} descriptor for ${directionId}` }])) as DirectionVector['axes'],
-    paletteSignature: paletteSignature(colors),
+    axes: Object.fromEntries(divergenceAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: `${axis} descriptor for ${directionId}`, signal: signals[axis] }])) as DirectionVector['axes'],
+    paletteSignature: paletteSignature(identityColorValues(identity)),
     ...overrides,
   };
 }
@@ -54,7 +56,7 @@ describe('divergence axes and the hue rule', () => {
     const a = vectorFor('editorial-material');
     const hueTwin = vectorFor('editorial-material', {
       directionId: 'hue-twin',
-      axes: { ...a.axes, color: { key: 'saturated-signal', descriptor: 'O mesmo sistema com outro matiz.' } },
+      axes: { ...a.axes, color: { ...a.axes.color, key: 'saturated-signal', descriptor: 'O mesmo sistema com outro matiz.' } },
     });
     const comparison = compareDirections(a, hueTwin);
     expect(comparison.hueOnlyColor).toBe(true);
@@ -84,7 +86,7 @@ describe('DIV-030 through the linter registry', () => {
 
   it('blocks a matrix whose second direction only rotates the hue', () => {
     const base = vectorFor('editorial-material');
-    const twin = vectorFor('editorial-material', { directionId: 'hue-twin', label: 'hue twin', axes: { ...base.axes, color: { key: 'saturated-signal', descriptor: 'Mesmo sistema, outro matiz.' } } });
+    const twin = vectorFor('editorial-material', { directionId: 'hue-twin', label: 'hue twin', axes: { ...base.axes, color: { ...base.axes.color, key: 'saturated-signal', descriptor: 'Mesmo sistema, outro matiz.' } } });
     const findings = lintDesign(irWithMatrix([base, twin], 'editorial-material')).findings.filter((finding) => finding.id === 'DIV-030');
     expect(findings).toHaveLength(1);
     expect(findings[0]?.message).toMatch(/only the hue/i);

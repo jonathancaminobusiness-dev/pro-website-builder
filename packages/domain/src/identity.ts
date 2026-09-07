@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { decisionRecordSchema, divergenceSpecSchema, evidenceSchema, rejectedAlternativeSchema } from './divergence.js';
+import { paletteSignature } from './color.js';
+import { decisionRecordSchema, divergenceAxes, divergenceSpecSchema, evidenceSchema, rejectedAlternativeSchema, type DivergenceAxis } from './divergence.js';
 import { documentRules } from './rules.js';
 import { flattenTokens, resolveTokens, tokenGroupSchema } from './tokens.js';
 
@@ -88,3 +89,37 @@ export function declaresDarkScheme(identity: IdentitySpec): boolean {
 }
 
 export type IdentitySpec = z.infer<typeof identitySpecSchema>;
+
+/** The colour values an identity actually resolves to, which is what a palette fingerprint is measured from. */
+export function identityColorValues(identity: IdentitySpec): string[] {
+  const { values, types } = resolveTokens(identity.tokens);
+  return Object.entries(values)
+    .filter(([path, value]) => typeof value === 'string' && (types[path] === 'color' || path.startsWith('color.')))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, value]) => String(value));
+}
+
+/**
+ * What the document itself shows on each divergence axis, measured from the
+ * tokens and the contract rather than declared. Two directions whose seats
+ * demanded opposite strategies but whose documents carry the same grid, the
+ * same families, the same palette, the same imagery policy and the same motion
+ * are not divergent, and DIV-030 compares these signals to say so.
+ */
+export function measuredAxisSignals(identity: IdentitySpec): Record<DivergenceAxis, string> {
+  const { values } = resolveTokens(identity.tokens);
+  const group = (prefix: string): string => Object.entries(values)
+    .filter(([path]) => path.startsWith(`${prefix}.`))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([path, value]) => `${path}=${String(value)}`)
+    .join(' ');
+  const signals: Record<DivergenceAxis, string> = {
+    composition: `columns=${identity.gridGrammar.columns}`,
+    typography: group('type'),
+    materiality: `density=${identity.direction.density} ${group('radius')}`,
+    color: paletteSignature(identityColorValues(identity)).entries.join(' '),
+    imagery: `sources=${[...identity.imagery.allowedSources].sort().join(',')} treatment=${identity.imagery.treatment} focal=${identity.imagery.focalPolicy}`,
+    motion: group('motion'),
+  };
+  return Object.fromEntries(divergenceAxes.map((axis) => [axis, signals[axis] || `${axis}=unstated`])) as Record<DivergenceAxis, string>;
+}

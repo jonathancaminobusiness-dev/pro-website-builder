@@ -8,6 +8,7 @@ export const tokenTypeSchema = z.enum([
 ]);
 
 export const tokenValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+export type TokenValue = z.infer<typeof tokenValueSchema>;
 
 export const tokenSchema = z.object({
   $value: tokenValueSchema,
@@ -67,6 +68,30 @@ export function cssTokenIssues(values: Record<string, string | number | boolean>
     if (typeof value === 'string' && (/[<>;{}]/.test(value) || value.includes('/*') || value.includes('*/'))) issues.push({ path, message: `${documentRules.cssTokens} Token ${path} holds characters that cannot be emitted into CSS.` });
   }
   return issues;
+}
+
+const tokenValueShapes: Partial<Record<z.infer<typeof tokenTypeSchema>, { accepts: (value: TokenValue) => boolean; expects: string }>> = {
+  color: { accepts: (value) => typeof value === 'string' && (/^#[0-9a-fA-F]{3,8}$/.test(value) || /^(rgb|rgba|hsl|hsla|oklch|lab|color)\(/.test(value)), expects: 'a hex colour or a CSS colour function' },
+  dimension: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 2rem' },
+  borderRadius: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 0.25rem' },
+  fontSize: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 1.25rem' },
+  duration: { accepts: (value) => typeof value === 'string' && /^\d*\.?\d+(ms|s)$/.test(value), expects: 'a duration in ms or s, such as 220ms' },
+  number: { accepts: (value) => typeof value === 'number', expects: 'a number' },
+  fontWeight: { accepts: (value) => typeof value === 'number' || (typeof value === 'string' && value.trim().length > 0), expects: 'a numeric weight or a named weight' },
+  boolean: { accepts: (value) => typeof value === 'boolean', expects: 'true or false' },
+};
+
+/**
+ * Whether a value can stand in a token of this type. An alias is always
+ * accepted: it names another token, and the document rules already require that
+ * token to exist.
+ */
+export function tokenValueIssue(type: z.infer<typeof tokenTypeSchema> | undefined, value: TokenValue): string | undefined {
+  if (typeof value === 'string' && /^\{[^}]+\}$/.test(value)) return undefined;
+  if (!type) return typeof value === 'string' && value.trim().length === 0 ? 'An untyped token needs a value.' : undefined;
+  const shape = tokenValueShapes[type];
+  if (!shape) return typeof value === 'string' && value.trim().length > 0 ? undefined : `A ${type} token expects a non-empty value.`;
+  return shape.accepts(value) ? undefined : `A ${type} token expects ${shape.expects}, not ${JSON.stringify(value)}.`;
 }
 
 /**

@@ -1,12 +1,14 @@
 import {
   compareDivergenceMatrix,
+  divergenceAxes,
   flattenTokens,
   governedContractFields,
+  identityColorValues,
   isGroundedDecision,
+  measuredAxisSignals,
   MINIMUM_DISTINCT_AXES,
   paletteSignature,
   paletteSignaturesMatch,
-  resolveTokens,
   type DesignIR,
 } from '@pwb/domain';
 import type { LintIssue } from './rules.js';
@@ -61,19 +63,10 @@ export function identityEvidence(ir: DesignIR): LintIssue[] {
   return issues;
 }
 
-function identityColors(ir: DesignIR): string[] {
-  let resolved: ReturnType<typeof resolveTokens>;
-  try { resolved = resolveTokens(ir.identity.tokens); } catch { return []; }
-  const { values, types } = resolved;
-  return Object.entries(values)
-    .filter(([path, value]) => typeof value === 'string' && (types[path] === 'color' || path.startsWith('color.')))
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([, value]) => String(value));
-}
-
 /**
  * DIV-030 — the three directions of one fan-out must stand apart on at least
- * four axes, and a hue swap is not one of them.
+ * four axes, and neither a hue swap nor a strategy the document does not show
+ * is one of them.
  *
  * Each candidate carries the whole matrix, so linting any one document checks
  * the set it was produced with. A document with no divergence spec is not part
@@ -87,10 +80,19 @@ export function divergenceDistance(ir: DesignIR): LintIssue[] {
   const own = spec.matrix.find((vector) => vector.directionId === spec.directionId);
   if (!own) return [{ path: '/identity/direction/divergence/matrix', message: `The matrix does not contain the direction ${spec.directionId} it belongs to.` }];
 
-  const measured = paletteSignature(identityColors(ir));
-  if (!paletteSignaturesMatch(measured, own.paletteSignature)) {
-    issues.push({ path: '/identity/direction/divergence/matrix', message: `The palette signature recorded for ${spec.directionId} does not match the identity's colour tokens, so its divergence claim cannot be verified.` });
-  }
+  let measurable = true;
+  try {
+    const measured = paletteSignature(identityColorValues(ir.identity));
+    if (!paletteSignaturesMatch(measured, own.paletteSignature)) {
+      issues.push({ path: '/identity/direction/divergence/matrix', message: `The palette signature recorded for ${spec.directionId} does not match the identity's colour tokens, so its divergence claim cannot be verified.` });
+    }
+    const signals = measuredAxisSignals(ir.identity);
+    for (const axis of divergenceAxes) {
+      if (own.axes[axis].signal === signals[axis]) continue;
+      issues.push({ path: '/identity/direction/divergence/matrix', message: `The ${axis} signal recorded for ${spec.directionId} says "${own.axes[axis].signal}" but the document shows "${signals[axis]}", so its divergence claim cannot be verified.` });
+    }
+  } catch { measurable = false; }
+  if (!measurable) return issues;
 
   for (const pair of compareDivergenceMatrix(spec.matrix)) {
     if (pair.distinctAxes.length >= MINIMUM_DISTINCT_AXES) continue;

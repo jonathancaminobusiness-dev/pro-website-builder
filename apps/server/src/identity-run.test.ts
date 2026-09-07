@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { ModelProvider } from '@pwb/providers';
 import { FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
@@ -84,7 +85,7 @@ describe('identity run', () => {
     await run.initialize();
     await run.start();
     await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
-    const reopened = await run.changeToken({ tokenPath: 'color.accent', value: { $value: '#ff7a00', $type: 'color' }, rationale: 'Sinal mais quente.' });
+    const reopened = await run.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
     expect(reopened.status).toBe('reopened');
     expect(reopened.gate.state).toBe('reopened');
     if (reopened.gate.state !== 'reopened') throw new Error('unreachable');
@@ -100,7 +101,7 @@ describe('identity run', () => {
     const handed = run.snapshot().handoff!;
     expect(handed.stale).toBe(false);
     expect(handed.directionId).toBe('editorial-material');
-    const reopened = await run.changeToken({ tokenPath: 'color.paper', value: { $value: '#ffffff', $type: 'color' }, rationale: 'Papel mais claro.' });
+    const reopened = await run.changeToken({ tokenPath: 'color.paper', value: '#ffffff', rationale: 'Papel mais claro.' });
     expect(reopened.handoff?.stale).toBe(true);
   });
 
@@ -109,7 +110,7 @@ describe('identity run', () => {
     await run.initialize();
     await run.start();
     const first = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
-    await run.changeToken({ tokenPath: 'color.accent', value: { $value: '#ff7a00', $type: 'color' }, rationale: 'Sinal mais quente.' });
+    await run.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
     const reapproved = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Token revisado e aprovado.' });
     expect(reapproved.gate.state).toBe('closed');
 
@@ -123,21 +124,44 @@ describe('identity run', () => {
     expect(new Set(reapproved.approvals.map((approval) => approval.id)).size).toBe(2);
   });
 
+  it('shows every colour token on the card, including one a director nested', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-director-editorial-material' || !result.proposal) return result;
+        const identity = result.proposal.operations[0]!.value as { tokens: { color: Record<string, unknown> } };
+        const tokens = { ...identity.tokens, color: { ...identity.tokens.color, brand: { primary: { $value: '#b4552f', $type: 'color' } } } };
+        return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: { ...identity, tokens } }] } };
+      },
+    };
+    const run = new IdentityRun({ runId: 'nested-color', repository: new ProjectRepository(database), provider });
+    await run.initialize();
+    const started = await run.start();
+    const card = started.directions.find((direction) => direction.directionId === 'editorial-material')!;
+    expect(card.swatches.find((swatch) => swatch.path === 'color.brand.primary')?.value).toBe('#b4552f');
+    expect(card.swatches.every((swatch) => swatch.value !== 'undefined')).toBe(true);
+  });
+
   it('re-derives the chosen card from the version a token change produced', async () => {
     const run = newRun();
     await run.initialize();
     await run.start();
-    await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
-    const before = run.snapshot().directions.find((direction) => direction.directionId === 'editorial-material')!;
+    const approved = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
+    const before = approved.directions.find((direction) => direction.directionId === 'editorial-material')!;
+    if (approved.gate.state !== 'closed') throw new Error('unreachable');
+    // A closed gate already moved the chosen card onto the approved version.
+    expect(before.versionId).toBe(approved.gate.record.versionId);
+    expect(before.identityHash).toBe(approved.gate.record.identityHash);
 
-    const reopened = await run.changeToken({ tokenPath: 'color.accent', value: { $value: '#ff7a00', $type: 'color' }, rationale: 'Sinal mais quente.' });
+    const reopened = await run.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
     const chosen = reopened.directions.find((direction) => direction.directionId === 'editorial-material')!;
     expect(chosen.versionId).toBe(reopened.previewVersionId);
     expect(chosen.identityHash).not.toBe(before.identityHash);
     expect(chosen.swatches.find((swatch) => swatch.path === 'color.accent')?.value).toBe('#ff7a00');
 
     // The blocker the server will refuse the approval with is on the card first.
-    const withForbiddenFont = await run.changeToken({ tokenPath: 'type.display', value: { $value: 'Inter-only hero, Georgia, serif', $type: 'fontFamily' }, rationale: 'Testando a fonte proibida.' });
+    const withForbiddenFont = await run.changeToken({ tokenPath: 'type.display', value: 'Inter-only hero, Georgia, serif', rationale: 'Testando a fonte proibida.' });
     const blocked = withForbiddenFont.directions.find((direction) => direction.directionId === 'editorial-material')!;
     expect(blocked.lintErrors.map((finding) => finding.id)).toContain('DEF-010');
     await expect(run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Mesmo assim.' })).rejects.toThrow(/automatic selection is not allowed/);
@@ -146,6 +170,14 @@ describe('identity run', () => {
     const other = withForbiddenFont.directions.find((direction) => direction.directionId === 'modular-technical')!;
     expect(other.versionId).not.toBe(withForbiddenFont.previewVersionId);
     expect(other.lintErrors).toEqual([]);
+
+    // Re-approving closes the gate onto that same version, and the card follows it.
+    const reapproved = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Revisado.', overrideRationale: 'A fonte proibida é intencional neste teste.' });
+    if (reapproved.gate.state !== 'closed') throw new Error('unreachable');
+    const closed = reapproved.directions.find((direction) => direction.directionId === 'editorial-material')!;
+    expect(closed.versionId).toBe(reapproved.gate.record.versionId);
+    expect(closed.identityHash).toBe(reapproved.gate.record.identityHash);
+    expect(closed.swatches.find((swatch) => swatch.path === 'color.accent')?.value).toBe('#ff7a00');
   });
 
   it('reports only the render cache entries it actually removed', async () => {
@@ -153,7 +185,7 @@ describe('identity run', () => {
     await run.initialize();
     await run.start();
     await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
-    const reopened = await run.changeToken({ tokenPath: 'color.paper', value: { $value: '#ffffff', $type: 'color' }, rationale: 'Papel mais claro.' });
+    const reopened = await run.changeToken({ tokenPath: 'color.paper', value: '#ffffff', rationale: 'Papel mais claro.' });
     // Nothing was ever rendered for this run, so nothing was pruned; the count is
     // what left the cache, not how many keys were tried.
     expect(reopened.gate.state).toBe('reopened');
@@ -194,7 +226,7 @@ describe('identity api', () => {
       const approved = await post(origin, '/api/identity/runs/api-run/approve', { approverRole: 'captain', directionId: 'typographic-low-chroma', rationale: 'Aprovada.' });
       expect((await approved.json() as { gate: { state: string } }).gate.state).toBe('closed');
 
-      const reopened = await post(origin, '/api/identity/runs/api-run/token', { approverRole: 'captain', tokenPath: 'color.ink', value: { $value: '#111111', $type: 'color' }, rationale: 'Tinta mais escura.' });
+      const reopened = await post(origin, '/api/identity/runs/api-run/token', { approverRole: 'captain', tokenPath: 'color.ink', value: '#111111', rationale: 'Tinta mais escura.' });
       expect((await reopened.json() as { gate: { state: string } }).gate.state).toBe('reopened');
 
       const fetched = await fetch(`${origin}/api/identity/runs/api-run`, { headers: { origin: STUDIO_ORIGIN } });
@@ -223,12 +255,13 @@ describe('identity api', () => {
     });
   });
 
-  it('rejects a token change whose value is not a DTCG token', async () => {
+  it('rejects a token change that carries anything but a value', async () => {
     await withServer(async (origin) => {
       await post(origin, '/api/identity/runs', { runId: 'bad-token' });
       await post(origin, '/api/identity/runs/bad-token/start', { approverRole: 'captain' });
       await post(origin, '/api/identity/runs/bad-token/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
-      const response = await post(origin, '/api/identity/runs/bad-token/token', { approverRole: 'captain', tokenPath: 'color.ink', value: '#000000' });
+      // The caller does not get to declare the token's type; it sends the value the approved token takes.
+      const response = await post(origin, '/api/identity/runs/bad-token/token', { approverRole: 'captain', tokenPath: 'color.ink', value: { $value: '#000000', $type: 'dimension' } });
       expect(response.status).toBe(400);
     });
   });

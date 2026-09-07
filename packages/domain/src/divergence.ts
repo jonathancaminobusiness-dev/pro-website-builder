@@ -24,6 +24,8 @@ export const axisKeyVocabulary: Record<DivergenceAxis, readonly string[]> = {
 export const axisValueSchema = z.object({
   key: z.string().min(1),
   descriptor: z.string().min(8, 'An axis value must say what the strategy means for this direction.'),
+  /** What the document measurably shows on this axis; see `measuredAxisSignals` in `./identity.js`. */
+  signal: z.string().min(1),
 });
 export type AxisValue = z.infer<typeof axisValueSchema>;
 
@@ -106,20 +108,27 @@ export interface AxisComparison { axis: DivergenceAxis; distinct: boolean; reaso
 export interface DirectionComparison { a: string; b: string; comparisons: AxisComparison[]; distinctAxes: DivergenceAxis[]; hueOnlyColor: boolean; }
 
 /**
- * Compares two directions axis by axis. The colour axis is the one the plan
- * calls out by name: a different colour strategy only counts when the palettes
- * also differ once hue is removed, so swapping the hue never buys a direction.
+ * Compares two directions axis by axis. A declared strategy only counts when the
+ * documents also differ where the axis can be measured: the colour axis compares
+ * hue-free palette fingerprints, and every other axis compares the signal the
+ * document shows, so two directions that converged cannot claim divergence they
+ * did not produce.
  */
 export function compareDirections(a: DirectionVector, b: DirectionVector): DirectionComparison {
   const comparisons: AxisComparison[] = divergenceAxes.map((axis) => {
     const left = a.axes[axis];
     const right = b.axes[axis];
     if (left.key === right.key) return { axis, distinct: false, reason: `Both directions use the ${axis} strategy ${left.key}.` };
-    if (axis !== 'color') return { axis, distinct: true, reason: `${left.key} versus ${right.key}.` };
-    if (paletteSignaturesMatch(a.paletteSignature, b.paletteSignature)) {
-      return { axis, distinct: false, reason: `${left.key} versus ${right.key}, but the palettes share one lightness and chroma fingerprint: only the hue changed.` };
+    if (axis === 'color') {
+      if (paletteSignaturesMatch(a.paletteSignature, b.paletteSignature)) {
+        return { axis, distinct: false, reason: `${left.key} versus ${right.key}, but the palettes share one lightness and chroma fingerprint: only the hue changed.` };
+      }
+      return { axis, distinct: true, reason: `${left.key} versus ${right.key}, with different lightness and chroma.` };
     }
-    return { axis, distinct: true, reason: `${left.key} versus ${right.key}, with different lightness and chroma.` };
+    if (left.signal === right.signal) {
+      return { axis, distinct: false, reason: `${left.key} versus ${right.key}, but both documents show the same ${axis}: ${left.signal}.` };
+    }
+    return { axis, distinct: true, reason: `${left.key} versus ${right.key}.` };
   });
   const colorComparison = comparisons.find((entry) => entry.axis === 'color')!;
   return {

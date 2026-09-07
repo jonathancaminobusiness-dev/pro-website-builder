@@ -121,8 +121,3 @@ export const directionVectorDraftSchema = z.object({
   incompatibilities: z.array(z.object({ a: z.string().min(1), b: z.string().min(1), reason: z.string().min(1) })).default([]),
 }).strict();
 export type DirectionVectorDraft = z.infer<typeof directionVectorDraftSchema>;
-
-export const identityRoleIds = ['brief-curator', 'identity-director', 'brand-fit-critic', 'divergence-critic', 'system-a11y-critic', 'identity-refiner', 'image-art-director'] as const;
-export type IdentityRoleId = (typeof identityRoleIds)[number];
-
-export const identityAxisBriefIdSchema = z.enum(identityAxisBriefIds);

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { tokenSchema } from '@pwb/domain';
+import { tokenValueSchema } from '@pwb/domain';
 import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
 
 export interface IdentityApiOptions {
@@ -80,8 +80,8 @@ export async function handleIdentityRequest(
     case 'token': {
       if (!captain(input, send, 'change a token after')) return true;
       if (typeof input.tokenPath !== 'string') { send(400, { error: 'A tokenPath is required.' }); return true; }
-      const parsed = tokenSchema.safeParse(input.value);
-      if (!parsed.success) { send(400, { error: 'A token change must carry a DTCG token with $value.' }); return true; }
+      const parsed = tokenValueSchema.safeParse(input.value);
+      if (!parsed.success) { send(400, { error: 'A token change must carry a value the approved token can take.' }); return true; }
       snapshot = await run.changeToken({ tokenPath: input.tokenPath, value: parsed.data, rationale: typeof input.rationale === 'string' ? input.rationale : 'Mudança de token após o gate.' });
       break;
     }

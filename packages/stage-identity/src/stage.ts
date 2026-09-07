@@ -4,13 +4,15 @@ import {
   divergenceAxes,
   flattenTokens,
   hashJson,
+  identityColorValues,
   identitySpecSchema,
   idempotencyKey,
+  measuredAxisSignals,
   MINIMUM_DISTINCT_AXES,
   paletteSignature,
-  resolveTokens,
   stageRoles,
   stageWritablePaths,
+  tokenValueIssue,
   type AgentResult,
   type AgentTask,
   type DesignIR,
@@ -20,13 +22,14 @@ import {
   type IdentitySpec,
   type Patch,
   type Token,
+  type TokenValue,
 } from '@pwb/domain';
 import { lintDesign, type LintReport } from '@pwb/linter';
 import { Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider, RasterProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { generateApprovedImagery, imageryPolicyViolations, type IdentityAsset } from './art-director.js';
-import { identityAxisBrief, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
+import { identityAxisBrief, identityAxisBriefIds, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
 import { CandidateBranchStore, siblingsOf } from './branches.js';
 import {
   belowRubric,
@@ -254,9 +257,13 @@ export class IdentityStage {
       }
     }
     if (drafts.length < 2) throw new StageError(`The identity fan-out produced ${drafts.length} usable directions; a divergence matrix needs at least two.`);
+    // The directors answer in whatever order they finish; the set they form is
+    // ordered by seat, so the same three answers always produce the same matrix,
+    // the same version hashes and the same three cards.
+    drafts.sort((a, b) => identityAxisBriefIds.indexOf(a.seatId) - identityAxisBriefIds.indexOf(b.seatId));
 
     // Deterministic fan-in: the matrix is a fact about the set, so the stage
-    // builds it from assigned keys, model descriptors and measured palettes.
+    // builds it from assigned keys, model descriptors and measured documents.
     const matrix = drafts.map((entry) => this.vectorOf(entry.seatId, entry.draft, entry.identity));
     const constants = [...new Set(drafts.flatMap((entry) => entry.draft.constants))].sort();
     const incompatibilities = drafts.flatMap((entry) => entry.draft.incompatibilities);
@@ -306,18 +313,19 @@ export class IdentityStage {
     return identitySpecSchema.parse(operation.value);
   }
 
+  /**
+   * The seat assigns the strategy the director had to argue; the document says
+   * what it actually built. Both travel on the vector, so DIV-030 can refuse a
+   * pair that converged even though their seats were opposed.
+   */
   private vectorOf(seatId: IdentityAxisBriefId, draft: DirectionVectorDraft, identity: IdentitySpec): DirectionVector {
     const seat = identityAxisBrief(seatId);
-    const { values, types } = resolveTokens(identity.tokens);
-    const colors = Object.entries(values)
-      .filter(([path, value]) => typeof value === 'string' && (types[path] === 'color' || path.startsWith('color.')))
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([, value]) => String(value));
+    const signals = measuredAxisSignals(identity);
     return {
       directionId: seatId,
       label: draft.label,
-      axes: Object.fromEntries(divergenceAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: draft.descriptors[axis] }])) as DirectionVector['axes'],
-      paletteSignature: paletteSignature(colors),
+      axes: Object.fromEntries(divergenceAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: draft.descriptors[axis], signal: signals[axis] }])) as DirectionVector['axes'],
+      paletteSignature: paletteSignature(identityColorValues(identity)),
     };
   }
 
@@ -663,21 +671,27 @@ export class IdentityStage {
    * `reopened` and names the renders the change made unreachable. No new
    * subsystem is involved — the approval record is the only bookkeeping.
    */
-  async changeToken(input: { tokenPath: string; value: Token; rationale: string }): Promise<{ versionId: string; gate: IdentityGateState }> {
+  async changeToken(input: { tokenPath: string; value: TokenValue; rationale: string }): Promise<{ versionId: string; gate: IdentityGateState }> {
     if (!this.gateRecord) throw new StageError('There is no approved identity to change yet.');
     const baseId = this.approvedVersionId!;
     const base = this.branches.version(baseId);
     const pointer = `/identity/tokens/${input.tokenPath.split('.').join('/')}`;
-    if (!flattenTokens(base.ir.identity.tokens).has(input.tokenPath)) throw new StageError(`Token ${input.tokenPath} is not defined by the approved identity.`);
+    const before = flattenTokens(base.ir.identity.tokens).get(input.tokenPath);
+    if (!before) throw new StageError(`Token ${input.tokenPath} is not defined by the approved identity.`);
+    // The approved token keeps its type: a change moves what a token means, never
+    // what kind of thing it is.
+    const problem = tokenValueIssue(before.$type, input.value);
+    if (problem) throw new StageError(`Token ${input.tokenPath} cannot take this value. ${problem}`);
+    const token: Token = { ...before, $value: input.value };
     const patch: Patch = {
-      operations: [{ op: 'replace', path: pointer, value: input.value }],
+      operations: [{ op: 'replace', path: pointer, value: token }],
       baseVersionId: baseId,
       touchedPaths: [pointer],
       rationale: input.rationale,
       confidence: 1,
       stage: 'identity',
       role: stageRoles.identity,
-      idempotencyKey: hashJson({ base: baseId, pointer, value: input.value }),
+      idempotencyKey: hashJson({ base: baseId, pointer, value: token }),
     };
     const version = this.branches.applierFor(this.gateRecord.directionId).apply(patch, IDENTITY_TASK_SCOPE, baseId);
     renderDesign(version.ir);

@@ -30,9 +30,6 @@ export class CandidateBranchStore {
     if (!record) throw new Error(`Version ${versionId} is not in the store.`);
     return record;
   }
-
-  /** Every branch opened so far, in the order the directions were registered. */
-  get directionIds(): string[] { return [...this.appliers.keys()]; }
 }
 
 export function siblingsOf(store: VersionStore, versionIds: string[]): { parentId: string | undefined; siblings: VersionRecord[] } {

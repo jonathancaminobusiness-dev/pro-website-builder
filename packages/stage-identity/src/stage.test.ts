@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR, type AgentResult, type AgentTask } from '@pwb/domain';
+import { createFixtureIR, flattenTokens, type AgentResult, type AgentTask } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
 import { IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
 import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
+import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
 import { identityAxisBriefs } from './axes.js';
 import { imageryPolicyViolations } from './art-director.js';
@@ -65,6 +66,49 @@ describe('identity stage fan-out', () => {
       expect(candidate.lint.findings.filter((finding) => finding.severity === 'error')).toEqual([]);
       expect(renderDesign(store.get(candidate.versionId)!.ir).routes).toHaveLength(3);
     }
+  });
+
+  it('blocks DIV-030 when two directions converge on what they actually built', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        const mine = task.id === 'identity-director-modular-technical' || task.id === 'identity-refiner-modular-technical';
+        if (!mine || !result.proposal) return result;
+        // The modular seat argues its own strategy but ships the editorial document, and keeps shipping it after the repair.
+        const converged = { ...fakeIdentityFor('editorial-material'), meta: fakeIdentityFor('modular-technical').meta, direction: fakeIdentityFor('modular-technical').direction };
+        return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: converged }] } };
+      },
+    };
+    const { stage, store } = harness({ provider });
+    const result = await stage.run();
+    expect(result.divergence.passed).toBe(false);
+    expect(result.divergence.blockedPairs.join(' ')).toMatch(/editorial-material and modular-technical/);
+    // The rule reads the same way from the document the captain would approve.
+    const modular = result.candidates.find((candidate) => candidate.directionId === 'modular-technical')!;
+    expect(lintDesign(store.get(modular.versionId)!.ir).findings.some((finding) => finding.id === 'DIV-030')).toBe(true);
+    await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Aprovada.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
+  });
+
+  it('builds the same matrix whatever order the directors answer in', async () => {
+    const runWith = async (delays: Record<string, number>) => {
+      const inner = new FakeIdentityProvider();
+      const provider: ModelProvider = {
+        async propose(task, signal) {
+          const delay = delays[task.id];
+          if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+          return inner.propose(task, signal);
+        },
+      };
+      return (await harness({ provider }).stage.run()).candidates;
+    };
+    const inOrder = await runWith({ 'identity-director-typographic-low-chroma': 12 });
+    const reversed = await runWith({ 'identity-director-editorial-material': 12, 'identity-director-modular-technical': 6 });
+    expect(inOrder.map((candidate) => candidate.directionId)).toEqual(identityAxisBriefs.map((seat) => seat.id));
+    expect(reversed.map((candidate) => candidate.directionId)).toEqual(identityAxisBriefs.map((seat) => seat.id));
+    // Byte-identical answers produce the same versions whichever director returns first.
+    expect(reversed.map((candidate) => candidate.identityHash)).toEqual(inOrder.map((candidate) => candidate.identityHash));
+    expect(reversed.map((candidate) => candidate.versionId)).toEqual(inOrder.map((candidate) => candidate.versionId));
   });
 
   it('holds the fan-out to the scheduler lane limit instead of starting every director at once', async () => {
@@ -442,7 +486,7 @@ describe('gate 1', () => {
     await stage.approve({ directionId: chosen.directionId, rationale: 'Aprovada.', approverRole: 'captain' });
     const approvedIr = store.get(chosen.versionId)!.ir;
 
-    const changed = await stage.changeToken({ tokenPath: 'color.accent', value: { $value: '#ff5c00', $type: 'color' }, rationale: 'O capitão pediu um sinal mais quente.' });
+    const changed = await stage.changeToken({ tokenPath: 'color.accent', value: '#ff5c00', rationale: 'O capitão pediu um sinal mais quente.' });
     expect(changed.gate.state).toBe('reopened');
     if (changed.gate.state !== 'reopened') throw new Error('unreachable');
     expect(changed.gate.impact.changedTokenPaths).toEqual(['color.accent']);
@@ -474,7 +518,7 @@ describe('gate 1', () => {
     await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
     await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Mudei de ideia.', approverRole: 'captain' })).rejects.toThrow(/already closed/);
 
-    const changed = await stage.changeToken({ tokenPath: 'color.muted', value: { $value: '#5b6b62', $type: 'color' }, rationale: 'Anotação mais legível.' });
+    const changed = await stage.changeToken({ tokenPath: 'color.muted', value: '#5b6b62', rationale: 'Anotação mais legível.' });
     await expect(stage.approve({ directionId: 'modular-technical', rationale: 'Outra direção.', approverRole: 'captain' })).rejects.toThrow(/cannot be approved onto that lineage/);
 
     const reapproved = await stage.approve({ directionId: 'editorial-material', rationale: 'Novo token revisado e aprovado.', approverRole: 'captain' });
@@ -487,14 +531,27 @@ describe('gate 1', () => {
     const { stage } = harness();
     await stage.run();
     await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
-    await expect(stage.changeToken({ tokenPath: 'color.ghost', value: { $value: '#000000', $type: 'color' }, rationale: 'x' })).rejects.toThrow(/is not defined/);
+    await expect(stage.changeToken({ tokenPath: 'color.ghost', value: '#000000', rationale: 'x' })).rejects.toThrow(/is not defined/);
+  });
+
+  it('keeps the approved token type and refuses a value that type cannot take', async () => {
+    const { stage, store } = harness();
+    await stage.run();
+    const approval = await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
+    await expect(stage.changeToken({ tokenPath: 'space.md', value: '#ff7a00', rationale: 'x' })).rejects.toThrow(/dimension token expects/);
+
+    const changed = await stage.changeToken({ tokenPath: 'space.md', value: '2rem', rationale: 'Ritmo mais largo.' });
+    const before = flattenTokens(store.get(approval.versionId)!.ir.identity.tokens).get('space.md')!;
+    const after = flattenTokens(store.get(changed.versionId)!.ir.identity.tokens).get('space.md')!;
+    expect(after).toEqual({ ...before, $value: '2rem' });
+    expect(after.$type).toBe('dimension');
   });
 
   it('refuses to replace a whole token group with a single token', async () => {
     const { stage, store } = harness();
     await stage.run();
     const approval = await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
-    await expect(stage.changeToken({ tokenPath: 'motion', value: { $value: '1ms', $type: 'duration' }, rationale: 'x' })).rejects.toThrow(/is not defined/);
+    await expect(stage.changeToken({ tokenPath: 'motion', value: '1ms', rationale: 'x' })).rejects.toThrow(/is not defined/);
     expect(store.get(approval.versionId)!.ir.identity.tokens.motion).toEqual({ quick: { $value: '220ms', $type: 'duration' } });
     expect(stage.gateState().state).toBe('closed');
   });

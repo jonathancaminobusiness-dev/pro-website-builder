@@ -50,7 +50,7 @@ describe('handoff to the next stage', () => {
     const before = stage.handoff()!;
     const beforeDigest = new RunPlanner(store).plan('run-handoff', before.versionId, 'briefing').tasks.find((task) => task.stage === 'prototype')!.inputDigest;
 
-    await stage.changeToken({ tokenPath: 'color.paper', value: { $value: '#ffffff', $type: 'color' }, rationale: 'Papel mais claro.' });
+    await stage.changeToken({ tokenPath: 'color.paper', value: '#ffffff', rationale: 'Papel mais claro.' });
     const after = stage.handoff()!;
     expect(after.stale).toBe(true);
     expect(after.versionId).not.toBe(before.versionId);
@@ -69,7 +69,7 @@ describe('render invalidation', () => {
     await stage.approve({ directionId: 'modular-technical', rationale: 'Aprovada.', approverRole: 'captain' });
     const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-render-cache-'));
     try {
-      const changed = await stage.changeToken({ tokenPath: 'color.accent', value: { $value: '#00a37a', $type: 'color' }, rationale: 'Outro sinal.' });
+      const changed = await stage.changeToken({ tokenPath: 'color.accent', value: '#00a37a', rationale: 'Outro sinal.' });
       if (changed.gate.state !== 'reopened') throw new Error('the gate should have reopened');
       const keys = changed.gate.impact.staleRenderKeys;
       expect(keys.length).toBeGreaterThan(0);

@@ -5,9 +5,10 @@ export type IdentityAxisBriefId = (typeof identityAxisBriefIds)[number];
 
 /**
  * The three seats of the identity fan-out. Each director is handed one seat and
- * is told which axis keys the other two already hold, so divergence is a
- * constraint on the input rather than a hope about the output. The seats are
- * opposed on every axis: no two of them share a key.
+ * is told which axis keys the other two already hold, so divergence is
+ * constrained on the input. The seats are opposed on every axis — no two of them
+ * share a key — but a seat is a demand, not a measurement: DIV-030 compares the
+ * signals the produced documents actually show.
  */
 export interface IdentityAxisBrief {
   id: IdentityAxisBriefId;

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createFixtureIR, type Approval, type Token } from '@pwb/domain';
+import { createFixtureIR, flattenTokens, type Approval, type TokenValue } from '@pwb/domain';
 import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
@@ -159,7 +159,7 @@ export class IdentityRun {
   }
 
   /** Applies a token change to the approved identity, which is what reopens Gate 1. */
-  async changeToken(input: { tokenPath: string; value: Token; rationale: string }): Promise<IdentityRunSnapshot> {
+  async changeToken(input: { tokenPath: string; value: TokenValue; rationale: string }): Promise<IdentityRunSnapshot> {
     const changed = await this.stage.changeToken(input);
     const version = this.store.get(changed.versionId)!;
     await ignoringDuplicate(this.options.repository.saveVersion({ id: version.id, projectId: this.projectId, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir }));
@@ -181,9 +181,10 @@ export class IdentityRun {
   snapshot(): IdentityRunSnapshot {
     const gate = this.stage.gateState();
     const handoff = this.stage.handoff(gate);
-    // A reopened gate is decided on the version the token change produced, so the
-    // chosen card describes that version and not the candidate it started as.
-    const reopened = gate.state === 'reopened' ? gate.record.directionId : undefined;
+    // Once the captain has decided, the chosen card describes the version the
+    // decision lives on — the approval retires the matrix and a token change
+    // moves it forward — and not the candidate it started as.
+    const decided = gate.state === 'open' ? undefined : gate.record.directionId;
     return {
       runId: this.options.runId,
       projectId: this.projectId,
@@ -191,7 +192,7 @@ export class IdentityRun {
       baseVersionId: this.root.id,
       briefing: this.options.briefing ?? IDENTITY_BRIEFING,
       ...(this.result ? { brief: this.result.brief } : {}),
-      directions: this.result ? this.result.candidates.map((candidate) => this.viewOf(candidate, reopened === candidate.directionId ? this.store.get(this.stage.approvedVersionId!) : undefined)) : [],
+      directions: this.result ? this.result.candidates.map((candidate) => this.viewOf(candidate, decided === candidate.directionId ? this.store.get(this.stage.approvedVersionId!) : undefined)) : [],
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),
       critiques: this.result?.critiques ?? [],
       failures: this.result?.failures ?? [],
@@ -225,7 +226,9 @@ export class IdentityRun {
   private viewOf(candidate: IdentityCandidate, current?: VersionRecord): IdentityDirectionView {
     const identity = current?.ir.identity ?? candidate.identity;
     const lint = current ? lintDesign(current.ir) : candidate.lint;
-    const swatches = Object.entries(identity.tokens.color as Record<string, { $value: string | number | boolean }>).map(([name, token]) => ({ path: `color.${name}`, value: String(token.$value) }));
+    const swatches = [...flattenTokens(identity.tokens)]
+      .filter(([path]) => path.startsWith('color.'))
+      .map(([path, token]) => ({ path, value: String(token.$value) }));
     return {
       directionId: candidate.directionId,
       label: candidate.label,
