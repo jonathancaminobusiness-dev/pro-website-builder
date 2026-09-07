@@ -6,7 +6,7 @@ export function createFixtureIdentity(): IdentitySpec {
     color: {
       ink: { $value: '#18252d', $type: 'color' as const },
       paper: { $value: '#f4efe6', $type: 'color' as const },
-      accent: { $value: '#d86445', $type: 'color' as const },
+      accent: { $value: '#e07a5f', $type: 'color' as const },
       muted: { $value: '#607078', $type: 'color' as const },
     },
     space: {

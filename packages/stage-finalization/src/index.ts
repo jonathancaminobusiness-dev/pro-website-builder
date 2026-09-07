@@ -4,6 +4,7 @@ export * from './evidence.js';
 export * from './gate.js';
 export * from './parity.js';
 export * from './refiner.js';
+export * from './serve.js';
 export * from './stage.js';
 export * from './summarizer.js';
 export * from './veto-catalog.js';

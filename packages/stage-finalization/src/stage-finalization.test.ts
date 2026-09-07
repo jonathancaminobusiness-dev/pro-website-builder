@@ -10,6 +10,7 @@ import {
   aggregateVetoes, checkPreviewReleaseParity, ClaudeReleaseCriticProvider, criticTasks, DeterministicReleaseSummarizer,
   evaluateReleaseGate, evidenceCoverage, evidenceVetoes, FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage,
   PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, VETO_CATALOG, writeEvidenceArtifact,
+  type ReleaseCriticProvider,
 } from './index.js';
 
 const COMPILER_OPTIONS = { siteUrl: 'https://oficina.example', siteName: 'Oficina' };
@@ -283,7 +284,7 @@ describe('Gate 3', () => {
 });
 
 describe('the finalization stage end to end with the deterministic providers', () => {
-  function stageFor(evidence: EvidenceArtifact[], scheduler?: Scheduler, criticProvider = new FakeReleaseCriticProvider()) {
+  function stageFor(evidence: EvidenceArtifact[], scheduler?: Scheduler, criticProvider: ReleaseCriticProvider = new FakeReleaseCriticProvider()) {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());

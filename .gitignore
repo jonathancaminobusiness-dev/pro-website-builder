@@ -14,3 +14,5 @@ test-results/
 *.sqlite-shm
 exports/
 .vite/
+releases/
+artifacts/
