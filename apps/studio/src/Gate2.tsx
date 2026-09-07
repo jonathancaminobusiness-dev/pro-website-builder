@@ -21,7 +21,7 @@ interface Report {
 }
 
 interface Progress {
-  runId: string; status: 'running' | 'settled' | 'failed'; step: string; detail: string;
+  runId: string; status: 'queued' | 'running' | 'settled' | 'failed' | 'interrupted'; step: string; detail: string;
   startedAt: string; updatedAt: string; error?: string;
 }
 
@@ -69,8 +69,10 @@ const dimensionCopy: Record<string, string> = {
 };
 const decisionCopy: Record<IssueDecision, string> = { accepted: 'Aceito', rejected: 'Rejeitado', deferred: 'Adiado' };
 const statusCopy: Record<Progress['status'], string> = {
-  running: 'Medindo o protótipo no navegador…', settled: 'Pronto para a decisão do capitão', failed: 'A execução falhou',
+  queued: 'Na fila da medição…', running: 'Medindo o protótipo no navegador…', settled: 'Pronto para a decisão do capitão',
+  failed: 'A execução falhou', interrupted: 'A execução foi interrompida',
 };
+const isActive = (status: Progress['status']): boolean => status === 'queued' || status === 'running';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_ORIGIN}${path}`, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
@@ -176,7 +178,7 @@ export default function Gate2(): ReactElement {
         if (!live) return;
         adopt(next);
         setError(next.error ?? '');
-        if (next.status === 'running') timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
+        if (isActive(next.status)) timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
       } catch (cause) {
         if (live) setError(cause instanceof Error ? cause.message : 'Erro desconhecido.');
       }
@@ -185,9 +187,21 @@ export default function Gate2(): ReactElement {
     return () => { live = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [runId, adopt]);
 
+  // The entry screen keeps watching the queue, because a run holds the only measuring slot there is.
   useEffect(() => {
     if (runId) return;
-    void request<{ runs: Progress[] }>('/api/prototype/runs').then((payload) => setRecent(payload.runs)).catch(() => setRecent([]));
+    let live = true;
+    let timer: number | undefined;
+    const poll = async (): Promise<void> => {
+      try {
+        const payload = await request<{ runs: Progress[] }>('/api/prototype/runs');
+        if (!live) return;
+        setRecent(payload.runs);
+        if (payload.runs.some((entry) => isActive(entry.status))) timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
+      } catch { if (live) setRecent([]); }
+    };
+    void poll();
+    return () => { live = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [runId]);
 
   const start = async (): Promise<void> => {
@@ -211,6 +225,7 @@ export default function Gate2(): ReactElement {
   const vetoes = result?.qa.filter((check) => check.severity === 'veto') ?? [];
 
   if (!snapshot) {
+    const active = recent.find((entry) => isActive(entry.status));
     return (
       <div className="gate2-shell">
         <header className="gate2-top">
@@ -219,8 +234,9 @@ export default function Gate2(): ReactElement {
         </header>
         <section className="gate2-intro">
           <p>O protótipo é composto por agentes em paralelo sobre a identidade congelada, verificado por checagens determinísticas antes de qualquer modelo, e criticado por quatro sessões separadas. Nada roda até você pedir.</p>
-          <p>A etapa mede cada revisão num navegador real, então leva minutos. A execução fica no endereço desta página: recarregar não perde a revisão.</p>
-          <button className="primary" onClick={() => void start()} disabled={busy}>{busy ? 'Abrindo a execução…' : 'Executar a etapa de protótipo'}</button>
+          <p>A etapa mede cada revisão num navegador real, então leva minutos. A execução fica no endereço desta página: recarregar não perde a revisão, e reiniciar o servidor também não.</p>
+          <button className="primary" onClick={() => void start()} disabled={busy || active !== undefined}>{busy ? 'Abrindo a execução…' : active ? 'Uma execução já está em andamento' : 'Executar a etapa de protótipo'}</button>
+          {active && <p className="gate2-note">O servidor mede uma revisão por vez. <a href={`${GATE2_ROUTE}/${encodeURIComponent(active.runId)}`}>Acompanhe {active.runId}</a>.</p>}
           {recent.length > 0 && (
             <div className="gate2-runs">
               <p className="eyebrow">Execuções desta sessão</p>
@@ -252,7 +268,8 @@ export default function Gate2(): ReactElement {
           <p role="status">{snapshot.detail}</p>
           <p className="gate2-note">Passo atual: <code>{snapshot.step}</code> · início {new Date(snapshot.startedAt).toLocaleTimeString('pt-BR')}</p>
           <p>Cada revisão é capturada num navegador real em 390, 768 e 1440 px, em cada estado declarado, antes que qualquer crítico opine. Esta página acompanha sozinha; o endereço guarda a execução.</p>
-          {snapshot.status === 'failed' && <p className="error-banner" role="alert">{snapshot.error ?? snapshot.detail}</p>}
+          {(snapshot.status === 'failed' || snapshot.status === 'interrupted') && <p className="error-banner" role="alert">{snapshot.error ?? snapshot.detail}</p>}
+          {snapshot.status !== 'running' && snapshot.status !== 'queued' && <p><a href={GATE2_ROUTE}>← voltar às execuções</a></p>}
           {error && <p className="error-banner" role="alert">{error}</p>}
         </section>
       </div>

@@ -45,6 +45,8 @@ export interface PrototypeStageOutcome {
   compositionVersionId: string;
   versionId: string;
   cycles: CycleRecord[];
+  /** The container widths this run really captured, ascending; the review may not claim any other. */
+  measuredViewports: number[];
   stopReason: StopReason;
   stopDetail: string;
   reports: CritiqueReport[];
@@ -90,12 +92,14 @@ export class PrototypeStage {
     const cycles: CycleRecord[] = [];
     const rejectedRepairs: RejectedRepairRecord[] = [];
     let reports: CritiqueReport[] = [];
-    let qa = await this.gateReport(current, input.signal);
+    const measured = new Set<number>();
+    let qa = await this.gateReport(current, measured, input.signal);
     let decision = { proceed: qa.vetoes.length === 0, reason: 'tier0_veto' as StopReason, detail: 'O QA determinístico vetou a revisão antes de qualquer modelo.' };
 
     while (decision.proceed) {
       const cycle = cycles.length + 1;
       const bundle = await this.options.evidence.collect({ ir: current.ir, versionId: current.id, ...(input.signal ? { signal: input.signal } : {}) });
+      for (const entry of bundle.evidence) measured.add(entry.context.viewport);
       qa = runQa({ ir: current.ir, evidence: bundle.evidence });
       if (qa.vetoes.length > 0) {
         cycles.push(summariseCycle({ cycle, versionId: current.id, qaIssueHash: qa.issueHash, vetoes: qa.vetoes.length, reports: [], plan: { accepted: [], rejected: [] } }));
@@ -121,7 +125,7 @@ export class PrototypeStage {
       await this.record('prototype.cycle.decided', { runId: input.runId, cycle, reason: decision.reason, proceed: decision.proceed });
     }
 
-    const finalQa = qa.vetoes.length > 0 ? qa : await this.gateReport(current, input.signal);
+    const finalQa = qa.vetoes.length > 0 ? qa : await this.gateReport(current, measured, input.signal);
     const outcome: PrototypeStageOutcome = {
       runId: input.runId,
       manifest,
@@ -130,6 +134,7 @@ export class PrototypeStage {
       compositionVersionId: compositionVersion.id,
       versionId: current.id,
       cycles,
+      measuredViewports: [...measured].sort((a, b) => a - b),
       stopReason: decision.reason,
       stopDetail: decision.detail,
       reports,
@@ -247,8 +252,9 @@ export class PrototypeStage {
    * stops the stage before a single model call; the Tier 1 observations ride along because they come
    * from the same evidence and the human gate needs to see them.
    */
-  private async gateReport(version: VersionRecord, signal?: AbortSignal): Promise<QaReport> {
+  private async gateReport(version: VersionRecord, measured: Set<number>, signal?: AbortSignal): Promise<QaReport> {
     const bundle = await this.options.evidence.collect({ ir: version.ir, versionId: version.id, ...(signal ? { signal } : {}) });
+    for (const entry of bundle.evidence) measured.add(entry.context.viewport);
     const report = runQa({ ir: version.ir, evidence: bundle.evidence });
     await this.record('prototype.qa.gate', { versionId: version.id, passed: report.passed, vetoes: report.vetoes.map((check) => check.id), observations: report.checks.length - report.vetoes.length });
     return report;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
-import { conditionFor, createRenderMatrix, createRepresentativeMatrix, readStateConditions, renderColorSchemes, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS } from './index.js';
+import { conditionFor, createRenderMatrix, readStateConditions, renderColorSchemes, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS } from './index.js';
 
 describe('render matrix', () => {
   it('covers every route at the six agreed widths for every declared state', () => {
@@ -13,9 +13,11 @@ describe('render matrix', () => {
     expect(cases.filter((entry) => entry.state === 'reduced').every((entry) => entry.reducedMotion)).toBe(true);
   });
 
-  it('narrows the Tier 1 loop to three representative widths', () => {
-    const cases = createRepresentativeMatrix(createFixtureIR(), { routes: ['/'] });
-    expect(new Set(cases.map((entry) => entry.width))).toEqual(new Set(REPRESENTATIVE_VIEWPORTS));
+  it('measures one route at the three representative widths, in every declared state', () => {
+    const cases = createRenderMatrix(createFixtureIR(), { routes: ['/'], viewports: REPRESENTATIVE_VIEWPORTS });
+    // One route, three widths, the fixture's two state fixtures, one colour scheme.
+    expect(cases).toHaveLength(6);
+    expect(new Set(cases.map((entry) => entry.width))).toEqual(new Set([390, 768, 1440]));
     expect(cases.every((entry) => entry.route === '/')).toBe(true);
   });
 

@@ -75,7 +75,7 @@ async function settled(origin: string, runId: string): Promise<Gate2Snapshot> {
   const deadline = Date.now() + 240_000;
   while (Date.now() < deadline) {
     const snapshot = await (await fetch(`${origin}/api/prototype/runs/${runId}`)).json() as Gate2Snapshot;
-    if (snapshot.status !== 'running') return snapshot;
+    if (snapshot.status !== 'running' && snapshot.status !== 'queued') return snapshot;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(`Run ${runId} never settled.`);
@@ -89,7 +89,7 @@ test.describe('Gate 2 runs on measured evidence', () => {
     try {
       const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'measured-clean' });
       expect(created.status).toBe(201);
-      expect(created.payload.status).toBe('running');
+      expect(created.payload.status).toBe('queued');
 
       const result = (await settled(api.origin, 'measured-clean')).result!;
       expect(result.qa.filter((check) => check.severity === 'veto')).toEqual([]);
@@ -100,6 +100,8 @@ test.describe('Gate 2 runs on measured evidence', () => {
       // route, and nothing wider, which is what a revision under review is worth.
       const screenshots = (await readdir(api.cacheDir)).filter((entry) => entry.endsWith('.evidence.png'));
       expect(screenshots).toHaveLength(result.routes.length * 3 * result.states.length);
+      // The review offers exactly those widths, so the captain never compares where nothing was measured.
+      expect(result.viewports).toEqual([390, 768, 1440]);
     } finally { await api.close(); }
   });
 

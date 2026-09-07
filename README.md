@@ -39,7 +39,7 @@ corepack pnpm build
 corepack pnpm test:e2e
 ```
 
-Playwright ships no browser of its own and `pnpm install` does not fetch one. The Gate 2 gate measures every revision in a real browser, so the server refuses to start without that binary and says which command installs it.
+Playwright ships no browser of its own and `pnpm install` does not fetch one. Every measured path opens its browser through `RenderHub`, which refuses without that binary and names the command that installs it — the server, the fixture CLI and the e2e harnesses all get the same sentence.
 
 Run the deterministic fixture without starting the UI:
 
@@ -122,7 +122,11 @@ The server measures that verdict rather than assuming it. `startServer` hands th
 
 Both deterministic tiers measure every declared route, state and colour scheme at the three representative widths — 390, 768 and 1440 — because a revision under review is not worth six widths of browser time. The full `RENDER_VIEWPORTS` sweep (320/360/390/768/1024/1440) is for a finalist and is asked for explicitly: `corepack pnpm run:prototype -- --render --full-matrix`.
 
-Measuring takes minutes, so a run is asynchronous and recoverable. `POST /api/prototype/runs` records the run and answers at once with its id and status; the stage keeps working and every step it reaches is persisted as an event. `GET /api/prototype/runs/<id>` returns that progress and, once the stage settles, the whole review; `GET /api/prototype/runs` lists every run this server holds. The Studio keeps the id in the address (`#/gate-2/<runId>`) and polls it, so a reload — or a tab closed in the middle of a measurement — finds the same review instead of starting a second one.
+Measuring takes minutes, so a run is asynchronous and recoverable. `POST /api/prototype/runs` records the run and answers at once with its id and a `queued` status; the stage then executes as one `Scheduler` task on the raster lane, which gives it the stage deadline and the abort signal that enforces it. Only one browser matrix runs at a time — a second request queues behind the first and says so — and the Studio's start button stays disabled while any run is queued or measuring. `GET /api/prototype/runs/<id>` returns that progress and, once the stage settles, the whole review; `GET /api/prototype/runs` lists every run this server holds.
+
+Each transition is written to a `prototype_runs` row together with the outcome and the two revisions the review compares, and `startServer` reads them back, so a settled review survives a restart and can be reopened without measuring anything again; a run that was still measuring when the process stopped comes back marked `interrupted` instead of disappearing. The Studio keeps the id in the address (`#/gate-2/<runId>`) and polls it, so a reload, a closed tab or a restart all find the same review.
+
+The review only offers what the run measured: `result.viewports` is the set of widths the evidence actually carried, so the A/B comparison cannot be opened at a width the deterministic gate never looked at.
 
 ## Real local Claude Code in the prototype stage
 

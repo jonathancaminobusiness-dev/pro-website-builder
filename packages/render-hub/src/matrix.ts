@@ -60,11 +60,6 @@ export function createRenderMatrix(ir: DesignIR, options: RenderMatrixOptions = 
   })))));
 }
 
-/** The measured subset: the same routes, states and schemes on the three representative widths. */
-export function createRepresentativeMatrix(ir: DesignIR, options: Omit<RenderMatrixOptions, 'viewports'> = {}): RenderCase[] {
-  return createRenderMatrix(ir, { ...options, viewports: REPRESENTATIVE_VIEWPORTS });
-}
-
 export function conditionFor(ir: DesignIR, state: string): StateCondition {
   const condition = readStateConditions(ir).find((candidate) => candidate.state === state);
   if (!condition) throw new Error(`The document declares no state fixture named ${state}.`);

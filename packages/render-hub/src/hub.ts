@@ -42,8 +42,7 @@ interface AxeResult { violations: Array<{ id: string; impact: string | null; hel
 
 /**
  * Playwright ships no browser of its own, so the binary is fetched by a separate install step. Every
- * measured path depends on it, and this says so in one sentence instead of letting `chromium.launch()`
- * fail deep inside a capture.
+ * measured path opens its browser here, so the sentence that names the install command is written once.
  */
 export function assertBrowserInstalled(executablePath: string = chromium.executablePath()): void {
   if (existsSync(executablePath)) return;
@@ -185,6 +184,7 @@ export class RenderHub {
 
   private async withBrowser<T>(work: (browser: Browser) => Promise<T>): Promise<T> {
     await mkdir(this.options.cacheDir, { recursive: true });
+    if (!this.options.browser) assertBrowserInstalled();
     const browser = this.options.browser ?? await chromium.launch({ headless: true });
     try { return await work(browser); }
     finally { if (!this.options.browser) await browser.close(); }

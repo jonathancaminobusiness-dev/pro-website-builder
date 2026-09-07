@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { assertBrowserInstalled, RenderHub } from '@pwb/render-hub';
+import { RenderHub } from '@pwb/render-hub';
 import { RenderHubEvidenceSource } from '@pwb/stage-prototype';
 import { createApiServer, RunConflictError } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
@@ -17,8 +17,6 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   await mkdir(join(dbPath, '..'), { recursive: true });
   await mkdir(exportRoot, { recursive: true });
   await mkdir(renderCacheDir, { recursive: true });
-  // The Gate 2 verdict is measured, so the browser is a prerequisite of starting at all.
-  assertBrowserInstalled();
   const provider = createModelProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
@@ -36,6 +34,8 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
       previewPrefix: (versionId) => `/preview/${versionId}`,
     }),
   });
+  // A review the captain already paid minutes of browser time for survives a restart.
+  await prototypes.restore();
   const api = createApiServer({
     runs,
     prototypes,

@@ -72,8 +72,9 @@ test.describe('Gate 2 review screen', () => {
 
     // The start request answers at once with the run id, which the URL keeps while the stage measures.
     await expect(page).toHaveURL(/#\/gate-2\/gate2-\d+$/, { timeout: 30_000 });
-    await expect(page.getByRole('status')).not.toBeEmpty();
     const reviewUrl = page.url();
+    const runId = reviewUrl.split('/').pop()!;
+    await expect(page.locator('.eyebrow').first()).toContainText(runId);
 
     const compare = page.locator('.compare');
     // The run measures every declared state at the representative widths in a real browser.

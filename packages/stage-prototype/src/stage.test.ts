@@ -5,7 +5,7 @@ import { renderDesign } from '@pwb/renderer';
 import {
   DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
   PrototypeStage, PrototypeStageError, criticRegistry,
-  type ComposerProvider, type CritiqueProvider, type CritiqueReport, type CritiqueTask, type ProposedPatch,
+  type ComposerProvider, type CritiqueProvider, type CritiqueReport, type CritiqueTask, type EvidenceSource, type ProposedPatch,
   type PrototypeStageOutcome, type RouteManifest, type SectionComposition, type SectionPlan,
 } from './index.js';
 
@@ -98,6 +98,26 @@ describe('prototype stage', () => {
     expect(outcome.reports.map((report) => report.dimension).sort()).toEqual(['a11y-interaction', 'coherence', 'narrative', 'responsiveness']);
     expect(outcome.reports.every((report) => report.projection.verdict === 'pass')).toBe(true);
     expect(outcome.cycles).toHaveLength(1);
+    // The outcome reports the widths the evidence really carried, so the review cannot claim another.
+    expect(outcome.measuredViewports).toEqual([390, 768, 1440]);
+  });
+
+  it('reports only the widths its evidence source measured', async () => {
+    const setup = harness();
+    const narrow: EvidenceSource = {
+      collect: async (request) => {
+        const bundle = await new DerivedEvidenceSource().collect(request);
+        return { evidence: bundle.evidence.filter((entry) => entry.context.viewport === 768), captures: bundle.captures };
+      },
+    };
+    const stage = new PrototypeStage({
+      store: setup.store, applier: setup.applier, scheduler: new Scheduler({ maxActiveClaude: 3 }),
+      architect: new FakeInformationArchitect(), composer: new FakeSectionComposer(),
+      critique: new FakeCritiqueProvider(), evidence: narrow,
+      brief: 'Uma largura só.',
+    });
+    const outcome = await stage.run({ runId: 'run-narrow', baseVersionId: setup.base.id });
+    expect(outcome.measuredViewports).toEqual([768]);
   });
 
   it('writes every version through the applier and keeps the base revision for the A/B gate', async () => {

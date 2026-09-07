@@ -52,14 +52,25 @@ async function post(origin: string, path: string, body: Record<string, unknown>,
   return { status: response.status, payload: await response.json() as Gate2Snapshot & { error?: string } };
 }
 
-/** The screen polls a run until it settles; so does every test that needs the review. */
-async function settled(origin: string, runId: string): Promise<Gate2Snapshot> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+async function until(origin: string, runId: string, ready: (snapshot: Gate2Snapshot) => boolean): Promise<Gate2Snapshot> {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     const snapshot = await (await fetch(`${origin}/api/prototype/runs/${runId}`)).json() as Gate2Snapshot;
-    if (snapshot.status !== 'running') return snapshot;
+    if (ready(snapshot)) return snapshot;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`Run ${runId} never settled.`);
+  throw new Error(`Run ${runId} never reached the expected state.`);
+}
+
+/** The screen polls a run until it leaves the queue and settles; so does every test that needs the review. */
+async function settled(origin: string, runId: string): Promise<Gate2Snapshot> {
+  return until(origin, runId, (snapshot) => snapshot.status !== 'running' && snapshot.status !== 'queued');
+}
+
+/** An evidence source the test holds open, so a run can be observed while it is still measuring. */
+function blockingEvidence(): { evidence: EvidenceSource; release: () => void } {
+  let release = (): void => {};
+  const measuring = new Promise<void>((resolve) => { release = resolve; });
+  return { evidence: { collect: async (request) => { await measuring; return new DerivedEvidenceSource().collect(request); } }, release: () => release() };
 }
 
 describe('Gate 2 API', () => {
@@ -74,7 +85,7 @@ describe('Gate 2 API', () => {
       const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run' });
       expect(created.status).toBe(201);
       expect(created.payload.runId).toBe('gate2-run');
-      expect(created.payload.status).toBe('running');
+      expect(created.payload.status).toBe('queued');
       expect(created.payload.result).toBeUndefined();
 
       const duplicate = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run' });
@@ -85,7 +96,8 @@ describe('Gate 2 API', () => {
       expect(snapshot.status).toBe('settled');
       const result = snapshot.result!;
       expect(result.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
-      expect(result.viewports).toEqual([320, 360, 390, 768, 1024, 1440]);
+      // The review offers exactly the widths the gate measured, never one it did not look at.
+      expect(result.viewports).toEqual([390, 768, 1440]);
       expect(result.states).toEqual(['default', 'empty', 'error', 'focus', 'loading', 'reduced']);
       expect(result.gate).toBe('needs_review');
       expect(result.qa.filter((check) => check.severity === 'veto')).toEqual([]);
@@ -97,14 +109,13 @@ describe('Gate 2 API', () => {
 
   it('keeps a run reachable by id and in the list while it measures, so a closed tab does not lose it', async () => {
     // The measurement is held open, so the run is observed mid-flight instead of by racing it.
-    let release = (): void => {};
-    const measuring = new Promise<void>((resolve) => { release = resolve; });
-    const slow: EvidenceSource = { collect: async (request) => { await measuring; return new DerivedEvidenceSource().collect(request); } };
-    const api = await harness({ evidence: slow });
+    const held = blockingEvidence();
+    const api = await harness({ evidence: held.evidence });
     try {
       const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-recover' });
-      expect(created.payload.status).toBe('running');
+      expect(created.payload.status).toBe('queued');
       expect(created.payload.result).toBeUndefined();
+      await until(api.origin, 'gate2-recover', (snapshot) => snapshot.status === 'running');
 
       // Nothing can be decided until the stage has actually produced a revision.
       const early = await post(api.origin, '/api/prototype/runs/gate2-recover/gate', { approverRole: 'captain', decision: 'approved', rationale: 'cedo demais' });
@@ -115,11 +126,31 @@ describe('Gate 2 API', () => {
         ((await (await fetch(`${api.origin}/api/prototype/runs`)).json()) as { runs: Array<{ runId: string; status: string; detail: string }> }).runs;
       expect(await listing()).toMatchObject([{ runId: 'gate2-recover', status: 'running' }]);
 
-      release();
+      held.release();
       expect((await settled(api.origin, 'gate2-recover')).status).toBe('settled');
       const listed = await listing();
       expect(listed).toMatchObject([{ runId: 'gate2-recover', status: 'settled' }]);
       expect(listed.every((entry) => entry.detail !== '')).toBe(true);
+    } finally { await api.close(); }
+  });
+
+  it('measures one revision at a time and queues the next behind it', async () => {
+    const held = blockingEvidence();
+    const api = await harness({ evidence: held.evidence });
+    try {
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-first' });
+      await until(api.origin, 'gate2-first', (snapshot) => snapshot.status === 'running');
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-second' });
+
+      // The second run holds no browser: it waits for the only measuring slot the server has.
+      for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      const queued = await (await fetch(`${api.origin}/api/prototype/runs/gate2-second`)).json() as Gate2Snapshot;
+      expect(queued.status).toBe('queued');
+      expect((await (await fetch(`${api.origin}/api/prototype/runs/gate2-first`)).json() as Gate2Snapshot).status).toBe('running');
+
+      held.release();
+      expect((await settled(api.origin, 'gate2-first')).status).toBe('settled');
+      expect((await settled(api.origin, 'gate2-second')).status).toBe('settled');
     } finally { await api.close(); }
   });
 
@@ -168,6 +199,50 @@ describe('Gate 2 API', () => {
       expect(approved.status).toBe(200);
       expect(approved.payload.result!.approval).toMatchObject({ decision: 'approved', versionId: created.result!.after.versionId, approverRole: 'captain', stage: 'prototype' });
     } finally { await api.close(); }
+  });
+
+  it('serves a settled review again after a restart, and marks an unfinished run interrupted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-restart-'));
+    const db = openDatabase(join(dir, 'restart.sqlite'));
+    const repository = new ProjectRepository(db);
+    const held = blockingEvidence();
+    try {
+      const first = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), seed: createOffRhythmControlIR });
+      await first.create('gate2-restart');
+      let before = first.get('gate2-restart')!;
+      for (let attempt = 0; attempt < 400 && (before.status === 'running' || before.status === 'queued'); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        before = first.get('gate2-restart')!;
+      }
+      await first.decide('gate2-restart', { findingId: before.result!.issues[0]!.id, decision: 'accepted', rationale: 'Reparo causal aceito.' });
+
+      // A run that never finished measuring when the process stopped.
+      const stopped = new PrototypeRunRegistry({ repository, evidence: held.evidence });
+      await stopped.create('gate2-interrupted');
+
+      // A new process reads the same database and serves the review without measuring anything again.
+      const restarted = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource() });
+      await restarted.restore();
+
+      const recovered = restarted.get('gate2-restart')!;
+      expect(recovered.status).toBe('settled');
+      expect(recovered.result!.stopReason).toBe(before.result!.stopReason);
+      expect(recovered.result!.viewports).toEqual([390, 768, 1440]);
+      expect(recovered.result!.decisions).toHaveLength(1);
+      // Both sides of the comparison still render, so the preview origin can serve A and B.
+      for (const versionId of [recovered.result!.before.versionId, recovered.result!.after.versionId]) {
+        expect(restarted.preview(versionId)?.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
+      }
+
+      const interrupted = restarted.get('gate2-interrupted')!;
+      expect(interrupted.status).toBe('interrupted');
+      expect(interrupted.result).toBeUndefined();
+      expect(restarted.list().map((entry) => entry.runId).sort()).toEqual(['gate2-interrupted', 'gate2-restart']);
+    } finally {
+      held.release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      db.sqlite.close();
+    }
   });
 
   it('writes the gate history to the event log without leaking a credential', async () => {

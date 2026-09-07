@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { createFixtureIR, type Approval, type DesignIR } from '@pwb/domain';
-import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
+import { agentTaskSchema, createFixtureIR, hashJson, stageRoles, type Approval, type DesignIR } from '@pwb/domain';
+import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { declaresDarkScheme } from '@pwb/domain';
-import { RENDER_VIEWPORTS, readStateConditions } from '@pwb/render-hub';
+import { readStateConditions } from '@pwb/render-hub';
 import {
   ClaudeInformationArchitect, ClaudeSectionComposer, ClaudeCritiqueRunner,
-  FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
+  DEFAULT_LOOP_BUDGET, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
   PrototypeStage, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
 } from '@pwb/stage-prototype';
 import type { ProjectRepository } from './db/repository.js';
@@ -25,7 +25,7 @@ export interface IssueDecisionRecord {
   createdAt: string;
 }
 
-export type PrototypeRunStatus = 'running' | 'settled' | 'failed';
+export type PrototypeRunStatus = 'queued' | 'running' | 'settled' | 'failed' | 'interrupted';
 
 /** Where a run is right now. A start request returns this immediately; the list endpoint returns only this. */
 export interface PrototypeRunProgress {
@@ -49,6 +49,7 @@ export interface Gate2Result {
   after: { versionId: string; label: string };
   repaired: boolean;
   routes: Array<{ route: string; title: string }>;
+  /** The widths this run measured; the screen compares A with B only where the gate looked. */
   viewports: number[];
   states: string[];
   colorSchemes: Array<'light' | 'dark'>;
@@ -73,6 +74,14 @@ interface PrototypeRunRecord {
   outcome?: PrototypeStageOutcome;
   decisions: IssueDecisionRecord[];
   approval?: Approval;
+}
+
+/** What a run needs from disk to be reviewed again after a restart: its outcome and the two revisions it compares. */
+interface PersistedRun {
+  outcome?: PrototypeStageOutcome;
+  decisions: IssueDecisionRecord[];
+  approval?: Approval;
+  versions: VersionRecord[];
 }
 
 /** One sentence per stage event, so a run that takes minutes says what it is doing. */
@@ -106,14 +115,18 @@ export interface PrototypeRegistryOptions {
 export class PrototypeRunRegistry {
   private readonly runs = new Map<string, PrototypeRunRecord>();
   private readonly rendered = new Map<string, RenderedDocument>();
+  /** One browser matrix at a time: the next run waits on the one before it. */
+  private lane: Promise<void> = Promise.resolve();
+  private readonly scheduler = new Scheduler();
 
   constructor(private readonly options: PrototypeRegistryOptions) {}
 
   has(runId: string): boolean { return this.runs.has(runId); }
 
   /**
-   * Starts a run and answers at once with its id and progress. Measuring the capture matrix takes
-   * minutes, so the stage runs on its own and the screen polls it; a reload never loses the run.
+   * Accepts a run and answers at once with its id and progress. Measuring the capture matrix takes
+   * minutes, so the stage runs behind the scheduler and the screen polls it; a reload never loses it,
+   * and neither does a restart.
    */
   async create(runId: string): Promise<Gate2Snapshot> {
     if (this.runs.has(runId)) throw new Error(`Run ${runId} already exists.`);
@@ -123,28 +136,44 @@ export class PrototypeRunRegistry {
     const startedAt = new Date().toISOString();
     const record: PrototypeRunRecord = {
       runId, store, decisions: [],
-      progress: { runId, status: 'running', step: 'prototype.run.started', detail: 'Execução aceita; compondo o protótipo.', startedAt, updatedAt: startedAt },
+      progress: { runId, status: 'queued', step: 'prototype.run.queued', detail: 'Na fila: o servidor mede uma revisão por vez.', startedAt, updatedAt: startedAt },
     };
     this.runs.set(runId, record);
-
-    const claude = this.options.modelProvider === 'claude-code';
-    const critique: CritiqueProvider = claude ? new ClaudeCritiqueRunner() : new FakeCritiqueProvider();
-    const stage = new PrototypeStage({
-      store, applier,
-      scheduler: new Scheduler(),
-      architect: claude ? new ClaudeInformationArchitect() : new FakeInformationArchitect(),
-      composer: claude ? new ClaudeSectionComposer() : new FakeSectionComposer(),
-      critique,
-      evidence: this.options.evidence,
-      brief: BRIEF,
-      onEvent: (type, payload) => {
-        record.progress = { ...record.progress, step: type, detail: describeStep(type, payload), updatedAt: new Date().toISOString() };
-        return this.options.repository.appendEvent({ id: randomUUID(), runId, type, payload });
-      },
-    });
-    await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.started', payload: { runId, baseVersionId: base.id } });
-    void this.execute(record, stage, base.id);
+    await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.queued', payload: { runId, baseVersionId: base.id } });
+    await this.persist(record);
+    this.lane = this.lane.then(() => this.execute(record, applier, base.id));
     return this.snapshot(record);
+  }
+
+  /**
+   * Reads back the runs a previous process left behind. A run that was still measuring when the server
+   * stopped is marked interrupted rather than dropped, so the captain sees what happened to it.
+   */
+  async restore(): Promise<void> {
+    for (const row of this.options.repository.listPrototypeRuns()) {
+      if (this.runs.has(row.id)) continue;
+      const persisted = row.payload as unknown as PersistedRun;
+      const store = new VersionStore();
+      for (const version of persisted.versions ?? []) store.save(version);
+      const unfinished = row.status === 'queued' || row.status === 'running';
+      const record: PrototypeRunRecord = {
+        runId: row.id, store, decisions: persisted.decisions ?? [],
+        ...(persisted.outcome ? { outcome: persisted.outcome } : {}),
+        ...(persisted.approval ? { approval: persisted.approval } : {}),
+        progress: {
+          runId: row.id,
+          status: unfinished ? 'interrupted' : row.status as PrototypeRunStatus,
+          step: unfinished ? 'prototype.run.interrupted' : row.step,
+          detail: unfinished ? 'O servidor parou no meio da medição; peça outra execução.' : row.detail,
+          startedAt: row.startedAt,
+          updatedAt: unfinished ? new Date().toISOString() : row.updatedAt,
+          ...(row.error === undefined ? {} : { error: row.error }),
+          ...(unfinished ? { error: 'A execução foi interrompida quando o servidor parou.' } : {}),
+        },
+      };
+      this.runs.set(row.id, record);
+      if (unfinished) await this.persist(record);
+    }
   }
 
   get(runId: string): Gate2Snapshot | undefined {
@@ -174,15 +203,72 @@ export class PrototypeRunRegistry {
     return undefined;
   }
 
-  private async execute(record: PrototypeRunRecord, stage: PrototypeStage, baseVersionId: string): Promise<void> {
-    try {
-      record.outcome = await stage.run({ runId: record.runId, baseVersionId });
-      record.progress = { ...record.progress, status: 'settled', detail: record.outcome.stopDetail, updatedAt: new Date().toISOString() };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'A etapa de protótipo falhou.';
+  /**
+   * Runs the stage as one scheduler task on the raster lane, so the browser matrix obeys the same
+   * deadline, abort signal and single-slot limit every other measured job in this orchestrator does.
+   */
+  private async execute(record: PrototypeRunRecord, applier: Applier, baseVersionId: string): Promise<void> {
+    const { runId } = record;
+    const identity = record.store.get(baseVersionId)!.ir.identity;
+    const claude = this.options.modelProvider === 'claude-code';
+    const stage = new PrototypeStage({
+      store: record.store, applier,
+      scheduler: new Scheduler(),
+      architect: claude ? new ClaudeInformationArchitect() : new FakeInformationArchitect(),
+      composer: claude ? new ClaudeSectionComposer() : new FakeSectionComposer(),
+      critique: claude ? new ClaudeCritiqueRunner() : new FakeCritiqueProvider(),
+      evidence: this.options.evidence,
+      brief: BRIEF,
+      onEvent: async (type, payload) => {
+        record.progress = { ...record.progress, step: type, detail: describeStep(type, payload), updatedAt: new Date().toISOString() };
+        await this.options.repository.appendEvent({ id: randomUUID(), runId, type, payload });
+        await this.persist(record);
+      },
+    });
+    const task = agentTaskSchema.parse({
+      id: `${runId}-prototype`, attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'raster',
+      baseVersionId, inputDigest: hashJson([BRIEF, baseVersionId]), promptVersion: 'gate2-run-v1',
+      modelAlias: claude ? 'claude-local' : 'fake', deadlineMs: DEFAULT_LOOP_BUDGET.deadlineMs,
+      allowedPaths: [], brief: BRIEF, documentSlice: { '/identity': identity },
+    });
+
+    record.progress = { ...record.progress, status: 'running', step: 'prototype.run.started', detail: 'Medindo o protótipo no navegador.', updatedAt: new Date().toISOString() };
+    await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.started', payload: { runId, baseVersionId } }).catch(() => undefined);
+    await this.persist(record).catch(() => undefined);
+
+    const result = await this.scheduler.run([task], (queued, signal) => stage.run({ runId, baseVersionId, signal }));
+    const entry = result.results[0];
+    if (entry?.state === 'succeeded' && entry.value) {
+      record.outcome = entry.value;
+      record.progress = { ...record.progress, status: 'settled', detail: entry.value.stopDetail, updatedAt: new Date().toISOString() };
+    } else {
+      const message = entry?.error instanceof Error ? entry.error.message : 'A etapa de protótipo não produziu uma revisão.';
       record.progress = { ...record.progress, status: 'failed', step: 'prototype.run.failed', detail: message, error: message, updatedAt: new Date().toISOString() };
-      await this.options.repository.appendEvent({ id: randomUUID(), runId: record.runId, type: 'prototype.run.failed', payload: { error: message } }).catch(() => undefined);
+      await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.failed', payload: { error: message } }).catch(() => undefined);
     }
+    await this.persist(record).catch(() => undefined);
+  }
+
+  /** The whole run, so the next process can serve this review without measuring anything again. */
+  private async persist(record: PrototypeRunRecord): Promise<void> {
+    const reviewed = record.outcome ? [record.outcome.compositionVersionId, record.outcome.versionId] : [];
+    const versions = [...new Set(reviewed)].flatMap((versionId) => record.store.get(versionId) ?? []);
+    const payload: PersistedRun = {
+      ...(record.outcome ? { outcome: record.outcome } : {}),
+      decisions: record.decisions,
+      ...(record.approval ? { approval: record.approval } : {}),
+      versions,
+    };
+    await this.options.repository.savePrototypeRun({
+      id: record.runId,
+      status: record.progress.status,
+      step: record.progress.step,
+      detail: record.progress.detail,
+      ...(record.progress.error === undefined ? {} : { error: record.progress.error }),
+      startedAt: record.progress.startedAt,
+      updatedAt: record.progress.updatedAt,
+      payload: payload as unknown as Record<string, unknown>,
+    });
   }
 
   async decide(runId: string, input: { findingId: string; decision: IssueDecision; rationale: string }): Promise<Gate2Snapshot> {
@@ -195,6 +281,7 @@ export class PrototypeRunRegistry {
     };
     record.decisions = [...record.decisions.filter((entry) => entry.findingId !== input.findingId), decision];
     await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'gate2.issue.decided', payload: { ...decision } });
+    await this.persist(record);
     return this.snapshot(record);
   }
 
@@ -210,6 +297,7 @@ export class PrototypeRunRegistry {
     };
     record.approval = approval;
     await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'gate2.decided', payload: { decision: approval.decision, versionId: approval.versionId, rationale: approval.rationale } });
+    await this.persist(record);
     return this.snapshot(record);
   }
 
@@ -246,7 +334,7 @@ export class PrototypeRunRegistry {
       after: { versionId: outcome.versionId, label: repaired ? 'B · após o reparo' : 'B · sem reparo aplicado' },
       repaired,
       routes: ir.pages.routes.map((page) => ({ route: page.route, title: page.title })),
-      viewports: [...RENDER_VIEWPORTS],
+      viewports: outcome.measuredViewports,
       states: readStateConditions(ir).map((condition) => condition.state),
       colorSchemes: declaresDarkScheme(ir.identity) ? ['light', 'dark'] : ['light'],
       qa: outcome.qa.checks.map((check) => ({ id: check.id, tier: check.tier, severity: check.severity, title: check.title, message: check.message, nodeIds: check.nodeIds })),

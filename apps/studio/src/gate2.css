@@ -94,7 +94,8 @@
 .gate2-runs li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .gate2-runs code { color: #a84f37; font-size: .74rem; }
 .gate2-runs small { color: #7b878c; font-size: .74rem; }
-.status-running { color: #6b5a2c; border-color: #ddc98e; background: #f6efd8; }
+.status-queued, .status-running { color: #6b5a2c; border-color: #ddc98e; background: #f6efd8; }
+.status-interrupted { color: #8c3a2c; border-color: #c98d7c; background: #f8dfd3; }
 .status-settled { color: #35624a; border-color: #a9c7b3; background: #e6efe7; }
 .status-failed { color: #8c3a2c; border-color: #c98d7c; background: #f8dfd3; }
 .gate2-checks { scrollbar-width: thin; }

@@ -6,7 +6,7 @@ import { expect, test } from '@playwright/test';
 import { createFixtureIR } from '../../packages/domain/src/index.js';
 import { Applier, PatchGate, Scheduler, VersionStore } from '../../packages/orchestrator/src/index.js';
 import { runQa, runTier0 } from '../../packages/qa-deterministic/src/index.js';
-import { RenderHub, createRepresentativeMatrix } from '../../packages/render-hub/src/index.js';
+import { RenderHub } from '../../packages/render-hub/src/index.js';
 import { renderDesign } from '../../packages/renderer/src/index.js';
 import {
   DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
@@ -39,9 +39,10 @@ test.describe('render hub evidence', () => {
     try {
       const hub = new RenderHub({ cacheDir, maxConcurrency: 3 });
       const source = new RenderHubEvidenceSource({ hub, baseUrl: `http://127.0.0.1:${port}`, previewPrefix: (versionId) => `/preview/${versionId}` });
-      const bundle = await source.collect({ ir: version.ir, versionId: version.id, tier: 1, routes: ['/'] });
+      const bundle = await source.collect({ ir: version.ir, versionId: version.id, routes: ['/'] });
 
-      expect(bundle.evidence).toHaveLength(createRepresentativeMatrix(version.ir, { routes: ['/'] }).length);
+      // One route, the three representative widths, the six states the architect declares.
+      expect(bundle.evidence).toHaveLength(18);
       const widths = new Set(bundle.evidence.map((entry) => entry.context.viewport));
       expect(widths).toEqual(new Set([390, 768, 1440]));
       expect(new Set(bundle.evidence.map((entry) => entry.context.state))).toEqual(new Set(['default', 'empty', 'error', 'focus', 'loading', 'reduced']));
@@ -72,7 +73,7 @@ test.describe('render hub evidence', () => {
       expect(runTier0({ ir: version.ir, evidence: bundle.evidence }).vetoes).toEqual([]);
       expect(runQa({ ir: version.ir, evidence: bundle.evidence }).checks.filter((check) => check.severity === 'veto')).toEqual([]);
 
-      const cached = await source.collect({ ir: version.ir, versionId: version.id, tier: 1, routes: ['/'] });
+      const cached = await source.collect({ ir: version.ir, versionId: version.id, routes: ['/'] });
       expect(cached.evidence.map((entry) => entry.screenshotPath)).toEqual(bundle.evidence.map((entry) => entry.screenshotPath));
       expect(cached.evidence[0]!.domHash).toBe(bundle.evidence[0]!.domHash);
     } finally {
