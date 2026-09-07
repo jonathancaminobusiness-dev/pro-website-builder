@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTaskSchema, createFixtureIR, hashJson, type AgentTask, type DesignIR } from '@pwb/domain';
+import { agentTaskSchema, createFixtureIR, documentPathSchemas, hashJson, stageResultJsonSchemas, type AgentTask, type DesignIR } from '@pwb/domain';
 import { FakeModelProvider } from '@pwb/providers';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, VersionStore } from './index.js';
 
@@ -71,6 +71,35 @@ describe('orchestrator', () => {
     expect(() => gate.validate({ ...base, idempotencyKey: 'a', operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'approved' }] }, context)).toThrow(/not allowed/i);
     expect(() => gate.validate({ ...base, idempotencyKey: 'b', operations: [{ op: 'add' as const, path: '/__proto__/polluted', value: true }] }, context)).toThrow(/not allowed/i);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it('rejects a wrong-shaped stage value at the gate, before the applier reads the document', () => {
+    const gate = new PatchGate();
+    const context = { currentVersionId: 'v0', allowedPaths: ALLOWED };
+    const base = { baseVersionId: 'v0', touchedPaths: ['/reviewRecord'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const };
+    const wrongShape = { ...base, idempotencyKey: 'wrong-shape', operations: [{ op: 'replace' as const, path: '/reviewRecord', value: { findings: [{ note: 'objeto' }], approvals: [] } }] };
+    expect(() => gate.validate(wrongShape, context)).toThrow();
+    const outsideStage = { ...base, idempotencyKey: 'outside-stage', touchedPaths: ['/pages/routes'], operations: [{ op: 'replace' as const, path: '/pages/routes', value: [] }] };
+    expect(() => gate.validate(outsideStage, context)).toThrow();
+    const rightShape = { ...base, idempotencyKey: 'right-shape', operations: [{ op: 'replace' as const, path: '/reviewRecord', value: { findings: ['texto'], approvals: [] } }] };
+    expect(gate.validate(rightShape, context).ok).toBe(true);
+    const deeper = { ...base, idempotencyKey: 'deeper', touchedPaths: ['/identity/meta/status'], operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'draft' }] };
+    expect(gate.validate(deeper, context).ok).toBe(true);
+  });
+
+  it('hands each stage a self-contained result schema with no unresolvable pointers', () => {
+    const pointers = (node: unknown, found: string[] = []): string[] => {
+      if (Array.isArray(node)) { for (const item of node) pointers(item, found); return found; }
+      if (!node || typeof node !== 'object') return found;
+      for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+        if (key === '$ref') found.push(String(value)); else pointers(value, found);
+      }
+      return found;
+    };
+    for (const schema of Object.values(stageResultJsonSchemas)) expect(pointers(schema)).toEqual([]);
+    for (const schema of Object.values(documentPathSchemas)) expect(pointers(schema)).toEqual([]);
+    const identity = stageResultJsonSchemas.identity as { properties: { proposal: { properties: { operations: { items: { anyOf: Array<{ properties: { path: { const?: string } } }> } } } } } };
+    expect(identity.properties.proposal.properties.operations.items.anyOf.map((item) => item.properties.path.const).filter(Boolean)).toEqual(['/identity', '/reviewRecord']);
   });
 
   it('keeps the base version re-runnable when applying a patch fails', () => {

@@ -1,4 +1,4 @@
-import { patchSchema, type Patch } from '@pwb/domain';
+import { patchSchema, stagePatchSchemas, type Patch } from '@pwb/domain';
 
 const unsafeSegments = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -23,6 +23,7 @@ export class PatchGate {
       if (!context.allowedPaths.some((allowed) => overlaps(path, allowed))) throw new Error(`Patch path is not allowed: ${path}`);
       if (records.some((record) => record.paths.some((other) => overlaps(path, other)))) throw new Error(`Patch overlap at ${path}.`);
     }
+    stagePatchSchemas[parsed.stage].parse(parsed);
     return { ok: true, idempotencyKey: key, paths };
   }
 

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
-import { agentResultSchema, documentPathSchemas, idempotencyKey, schemaJson, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
+import { agentResultSchema, documentPathSchemas, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
@@ -30,7 +30,7 @@ export class ClaudeRunner implements ModelProvider {
           correction ? 'Correct the previous schema violation and return only JSON matching the supplied schema.' : '',
         ].filter(Boolean).join('\n');
         const { stdout } = await execFileAsync(this.options.executable, [
-          '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(schemaJson.AgentResult),
+          '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(stageResultJsonSchemas[task.stage]),
           '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.options.maxTurns),
           '--disallowed-tools', deniedTools,
         ], { shell: false, timeout: this.options.timeoutMs, signal, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });

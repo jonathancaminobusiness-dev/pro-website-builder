@@ -7,7 +7,6 @@ import {
   createFixtureIR,
   hashJson,
   resolveTokens,
-  schemaJson,
 } from './index.js';
 
 describe('domain contracts', () => {
