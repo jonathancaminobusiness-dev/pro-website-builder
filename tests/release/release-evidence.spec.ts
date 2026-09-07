@@ -7,12 +7,28 @@ import type { EvidenceArtifact } from '../../packages/domain/src/index.js';
 const EVIDENCE_DIR = process.env.PWB_EVIDENCE_DIR ?? join(process.cwd(), 'artifacts', 'release');
 const WIDTHS = [360, 768, 1440] as const;
 
-/** The harness publishes its ephemeral origin here; see tests/release/global-setup.ts. */
-function origin(): string {
-  const value = process.env.PWB_RELEASE_ORIGIN;
-  if (!value) throw new Error('PWB_RELEASE_ORIGIN is unset; the release harness did not start.');
+/** The harness publishes its ephemeral origin and the release it serves here; see tests/release/global-setup.ts. */
+function fromEnvironment(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is unset; the release harness did not start.`);
   return value;
 }
+
+function origin(): string { return fromEnvironment('PWB_RELEASE_ORIGIN'); }
+
+/**
+ * What the running measurement still owes.
+ *
+ * Gate 3 reads artifacts and nothing else, so a run the per-test timeout aborts
+ * has to leave one saying so: the artifacts already written would otherwise read
+ * as full coverage of routes and widths no browser ever finished measuring. A
+ * body that never started leaves nothing, because an engine that could not
+ * launch on this host is a missing engine the captain accepts in writing, not a
+ * failed measurement.
+ */
+const progress: { started: boolean; completed: boolean; scope: string; pending: string[] } = { started: false, completed: false, scope: 'render', pending: [] };
+
+function begin(scope: string): void { progress.started = true; progress.completed = false; progress.scope = scope; progress.pending = []; }
 
 interface Harness { digest: string; irHash: string; routes: Array<{ route: string; title: string; releasePath: string; previewPath: string }> }
 
@@ -33,9 +49,31 @@ function watch(page: Page): { consoleErrors: string[]; requestFailures: string[]
 }
 
 test.describe('release evidence', () => {
+  test.afterEach(async ({}, testInfo) => {
+    if (!progress.started || progress.completed) return;
+    const engine = testInfo.project.name as EvidenceArtifact['engine'];
+    const reason = (testInfo.error?.message ?? 'a execução foi interrompida antes de medir tudo').replaceAll(/\u001b\[\d+m/g, '');
+    await writeEvidenceArtifact(EVIDENCE_DIR, {
+      id: `playwright-${engine}-${progress.scope}-incomplete`,
+      runner: 'playwright', engine,
+      releaseDigest: fromEnvironment('PWB_RELEASE_DIGEST'), irHash: fromEnvironment('PWB_RELEASE_IR_HASH'),
+      route: '/', state: `${progress.scope}-incomplete`,
+      status: 'failed',
+      path: 'tests/release/release-evidence.spec.ts',
+      hash: artifactHash(progress.pending),
+      metrics: { pending: progress.pending.length },
+      notes: [
+        `A medição ${progress.scope} não chegou ao fim no ${engine} (${testInfo.status ?? 'interrompida'}): ${reason}`,
+        ...(progress.pending.length > 0 ? [`Sem medição: ${progress.pending.join(', ')}`] : []),
+      ],
+    });
+  });
+
   test('renders every route at every width with no console error, no failed request and no horizontal overflow', async ({ page }, testInfo) => {
+    begin('render');
     const { routes, digest, irHash } = await harness(page);
     const engine = testInfo.project.name as EvidenceArtifact['engine'];
+    progress.pending = routes.flatMap((route) => WIDTHS.map((width) => `${route.route} @${width}px`));
     for (const route of routes) {
       for (const width of WIDTHS) {
         const observed = watch(page);
@@ -65,6 +103,7 @@ test.describe('release evidence', () => {
           hash: artifactHash({ metrics, notes }),
           metrics: { scrollWidth: metrics.scrollWidth, clientWidth: metrics.clientWidth, nodes: metrics.nodes }, notes,
         });
+        progress.pending = progress.pending.filter((entry) => entry !== `${route.route} @${width}px`);
         expect(observed.consoleErrors, `${route.route} at ${width}px must log no console error`).toEqual([]);
         expect(observed.requestFailures, `${route.route} at ${width}px must have no failed request`).toEqual([]);
         expect(overflow, `${route.route} at ${width}px must not scroll horizontally`).toBe(false);
@@ -74,13 +113,17 @@ test.describe('release evidence', () => {
         expect(metrics.nodes).toBeGreaterThan(0);
       }
     }
+    progress.completed = true;
   });
 
   test('scans every critical state with axe and records what it found', async ({ page }, testInfo) => {
+    begin('axe');
     const { routes, digest, irHash } = await harness(page);
     const engine = testInfo.project.name as EvidenceArtifact['engine'];
+    const states = [{ name: 'default', width: 1440, reducedMotion: 'no-preference' as const }, { name: 'reduced-motion', width: 1440, reducedMotion: 'reduce' as const }, { name: 'narrow', width: 360, reducedMotion: 'no-preference' as const }];
+    progress.pending = routes.flatMap((route) => states.map((state) => `${route.route} (${state.name})`));
     for (const route of routes) {
-      for (const state of [{ name: 'default', width: 1440, reducedMotion: 'no-preference' as const }, { name: 'reduced-motion', width: 1440, reducedMotion: 'reduce' as const }, { name: 'narrow', width: 360, reducedMotion: 'no-preference' as const }]) {
+      for (const state of states) {
         await page.emulateMedia({ reducedMotion: state.reducedMotion });
         await page.setViewportSize({ width: state.width, height: 900 });
         await page.goto(`${origin()}${route.releasePath}`, { waitUntil: 'load' });
@@ -104,7 +147,9 @@ test.describe('release evidence', () => {
             `axe returned ${results.incomplete.length} incomplete check(s) that need a human review.`,
           ],
         });
+        progress.pending = progress.pending.filter((entry) => entry !== `${route.route} (${state.name})`);
       }
     }
+    progress.completed = true;
   });
 });

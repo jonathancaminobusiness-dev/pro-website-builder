@@ -37,9 +37,12 @@ function origin(): string { return fromEnvironment('PWB_RELEASE_ORIGIN'); }
  * The artifact is written from the teardown rather than the test body, because
  * the run that most needs to leave a trace is the one that never finishes: a
  * page that never loads takes the body down with the per-test timeout, and Gate
- * 3 reads artifacts and nothing else.
+ * 3 reads artifacts and nothing else. A comparison that never started is a
+ * different thing — an engine that could not launch on this host measured
+ * nothing, which the gate reports as a missing engine for the captain to accept,
+ * not as a release that diverges — so it leaves no artifact at all.
  */
-const measured: { routes: number; faces: number; differences: string[]; completed: boolean } = { routes: 0, faces: 0, differences: [], completed: false };
+const measured: { started: boolean; routes: number; faces: number; differences: string[]; completed: boolean } = { started: false, routes: 0, faces: 0, differences: [], completed: false };
 
 /** What the engine actually resolved for the faces the document declares. */
 async function loadedFaces(page: Page, families: Harness['fonts']): Promise<{ declared: string[]; usable: Record<string, boolean> }> {
@@ -79,6 +82,7 @@ function styleDifferences(route: string, preview: Record<string, Record<string, 
 }
 
 test.afterEach(async ({}, testInfo) => {
+  if (!measured.started) return;
   const engine = testInfo.project.name as EvidenceArtifact['engine'];
   const reason = (testInfo.error?.message ?? 'a execução foi interrompida antes de comparar todas as rotas').replaceAll(/\u001b\[\d+m/g, '');
   const differences = measured.completed
@@ -103,6 +107,7 @@ test.afterEach(async ({}, testInfo) => {
 });
 
 test('the release resolves the same styles, text and faces as the preview the captain reviewed', async ({ page }) => {
+  measured.started = true;
   try {
     const response = await page.request.get(`${origin()}/harness.json`);
     if (!response.ok()) throw new Error(`O harness respondeu ${response.status()} em /harness.json.`);

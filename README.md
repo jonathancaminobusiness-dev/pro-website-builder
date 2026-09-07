@@ -290,10 +290,12 @@ toolchain produce byte-identical bundles. Parity is proven twice: Vitest fixture
 read the compiled stylesheet back with a parser that shares no code with the
 compiler that wrote it, and `tests/release/parity.spec.ts` compares computed
 styles, text and the faces each side actually loaded, between the preview and the
-release in every engine. That runner writes its own typed artifact like every
-other one — from its teardown, so a run the per-test timeout aborts still leaves
-one — and a divergence a browser sees reaches Gate 3 as a failed measurement, a
-`BUILD_FAILED` veto, instead of only turning a test red.
+release in every engine. Both release runners write their typed artifacts from
+their teardown, so a run the per-test timeout aborts still leaves one — naming
+the routes and widths it never measured — and a divergence a browser sees
+reaches Gate 3 as a failed measurement, a `BUILD_FAILED` veto, instead of only
+turning a test red. An engine that never launches still leaves no artifact at
+all, so it stays the missing engine the captain accepts in writing.
 
 **Gate 3.** The studio panel shows the digest, the standing vetoes, the rubric
 each critic gave on the 0–4 scale with a minimum of 3, parity per route, which
