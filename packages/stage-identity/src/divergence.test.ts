@@ -100,6 +100,17 @@ describe('DIV-030 through the linter registry', () => {
     expect(findings.some((finding) => /palette signature recorded/i.test(finding.message))).toBe(true);
   });
 
+  it('states a stale colour measurement once instead of twice', () => {
+    const matrix = identityAxisBriefs.map((seat) => vectorFor(seat.id));
+    const black = paletteSignature(['#000000']);
+    const stale = matrix.map((vector) => vector.directionId === 'editorial-material'
+      ? { ...vector, paletteSignature: black, axes: { ...vector.axes, color: { ...vector.axes.color, signal: black.entries.join(' ') } } }
+      : vector);
+    const findings = lintDesign(irWithMatrix(stale, 'editorial-material')).findings.filter((finding) => finding.id === 'DIV-030');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toMatch(/palette signature recorded/i);
+  });
+
   it('stays silent for an identity that is not part of a fan-out', () => {
     expect(lintDesign(createFixtureIR()).findings.filter((finding) => finding.id === 'DIV-030')).toEqual([]);
   });

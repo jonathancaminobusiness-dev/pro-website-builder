@@ -22,8 +22,12 @@ test('captain compares three directions and decides Gate 1, and a token change r
     await expect(card.getByText(/geração só após aprovação/)).toBeVisible();
   }
 
+  // Nothing is marked until the server records a decision.
+  await expect(page.locator('.direction-card.selected')).toHaveCount(0);
+
   await page.getByLabel(/Motivo da decisão/).fill('A direção modular declara a medida, que é a prova deste briefing.');
   await page.locator('.direction-card', { hasText: 'modular-technical' }).getByRole('button', { name: 'Aprovar esta direção' }).click();
+  await expect(page.locator('.direction-card.selected')).toHaveCount(1);
 
   const record = page.locator('.gate-record');
   await expect(record).toContainText('Decisão registrada.');

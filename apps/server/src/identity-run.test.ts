@@ -266,6 +266,17 @@ describe('identity api', () => {
     });
   });
 
+  it('refuses a value the approved token cannot take with a 400 and the reason', async () => {
+    await withServer(async (origin) => {
+      await post(origin, '/api/identity/runs', { runId: 'typed-token' });
+      await post(origin, '/api/identity/runs/typed-token/start', { approverRole: 'captain' });
+      await post(origin, '/api/identity/runs/typed-token/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
+      const response = await post(origin, '/api/identity/runs/typed-token/token', { approverRole: 'captain', tokenPath: 'space.md', value: '#ff7a00' });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toMatch(/dimension token expects/);
+    });
+  });
+
   it('answers 404 for an unknown identity run', async () => {
     await withServer(async (origin) => {
       const response = await fetch(`${origin}/api/identity/runs/ghost`, { headers: { origin: STUDIO_ORIGIN } });

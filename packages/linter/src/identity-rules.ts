@@ -88,7 +88,8 @@ export function divergenceDistance(ir: DesignIR): LintIssue[] {
     }
     const signals = measuredAxisSignals(ir.identity);
     for (const axis of divergenceAxes) {
-      if (own.axes[axis].signal === signals[axis]) continue;
+      // The palette fingerprint above is the colour measurement; the signal recorded for that axis is the same fact.
+      if (axis === 'color' || own.axes[axis].signal === signals[axis]) continue;
       issues.push({ path: '/identity/direction/divergence/matrix', message: `The ${axis} signal recorded for ${spec.directionId} says "${own.axes[axis].signal}" but the document shows "${signals[axis]}", so its divergence claim cannot be verified.` });
     }
   } catch { measurable = false; }

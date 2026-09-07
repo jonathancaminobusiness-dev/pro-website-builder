@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useState, type ReactElement } from 'react';
 
 export interface IdentityDirectionView {
   directionId: string;
@@ -60,7 +60,6 @@ export interface IdentityGateProps {
 
 export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const { snapshot } = props;
-  const [selected, setSelected] = useState<string | null>(null);
   const [rationale, setRationale] = useState('');
   const [override, setOverride] = useState('');
   const [tokenPath, setTokenPath] = useState('color.accent');
@@ -78,8 +77,9 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const closed = snapshot?.gate.state === 'closed';
   const decided = closed || snapshot?.gate.state === 'reopened';
   const record = decided ? (snapshot.gate as { record: GateRecord }).record : undefined;
-  // Nothing is pre-selected: the captain's choice is the only thing that marks a card.
-  const chosen = useMemo(() => record?.directionId ?? selected, [record, selected]);
+  // Only a decision the server recorded marks a card: an approval it refused
+  // leaves the captain's choice unmade.
+  const chosen = record?.directionId;
 
   return <section className="gate-panel" aria-labelledby="gate1-title">
     <div className="section-heading">
@@ -179,7 +179,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
 
             <div className="actions">
               <button className="secondary" onClick={() => props.onReject(direction.directionId, rationale || 'Direção devolvida para revisão.')} disabled={props.busy || closed}>Devolver</button>
-              <button className="primary" onClick={() => { setSelected(direction.directionId); props.onApprove(direction.directionId, rationale || `Gate 1: ${direction.label}.`, override || undefined); }} disabled={props.busy || closed}>
+              <button className="primary" onClick={() => props.onApprove(direction.directionId, rationale || `Gate 1: ${direction.label}.`, override || undefined)} disabled={props.busy || closed}>
                 Aprovar esta direção
               </button>
             </div>

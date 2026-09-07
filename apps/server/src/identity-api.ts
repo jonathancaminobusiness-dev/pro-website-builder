@@ -82,7 +82,12 @@ export async function handleIdentityRequest(
       if (typeof input.tokenPath !== 'string') { send(400, { error: 'A tokenPath is required.' }); return true; }
       const parsed = tokenValueSchema.safeParse(input.value);
       if (!parsed.success) { send(400, { error: 'A token change must carry a value the approved token can take.' }); return true; }
-      snapshot = await run.changeToken({ tokenPath: input.tokenPath, value: parsed.data, rationale: typeof input.rationale === 'string' ? input.rationale : 'Mudança de token após o gate.' });
+      try {
+        snapshot = await run.changeToken({ tokenPath: input.tokenPath, value: parsed.data, rationale: typeof input.rationale === 'string' ? input.rationale : 'Mudança de token após o gate.' });
+      } catch (error) {
+        send(400, { error: error instanceof Error ? error.message : 'The approved identity cannot take this token change.' });
+        return true;
+      }
       break;
     }
     default:
