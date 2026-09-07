@@ -1,4 +1,4 @@
-import { hashJson, stageWritablePaths, type AgentTask, type DesignIR } from '@pwb/domain';
+import { hashJson, stageRoles, stageWritablePaths, type AgentTask, type DesignIR } from '@pwb/domain';
 import type { VersionStore } from './applier.js';
 
 export interface RunPlan { runId: string; tasks: AgentTask[]; edges: [string, string][]; }
@@ -22,13 +22,13 @@ export class RunPlanner {
     if (!base) throw new Error(`Cannot plan run ${runId}; version ${baseVersionId} is not in the store.`);
     const documentSlice: Record<string, unknown> = { '/identity': base.ir.identity };
     for (const path of readablePaths) documentSlice[path] = valueAt(base.ir, path);
-    const stages: Array<{ stage: AgentTask['stage']; role: AgentTask['role']; deadlineMs: number }> = [
-      { stage: 'identity', role: 'director', deadlineMs: 5 * 60_000 },
-      { stage: 'prototype', role: 'composer', deadlineMs: 5 * 60_000 },
-      { stage: 'finalization', role: 'compiler', deadlineMs: 8 * 60_000 },
+    const stages: Array<{ stage: AgentTask['stage']; deadlineMs: number }> = [
+      { stage: 'identity', deadlineMs: 5 * 60_000 },
+      { stage: 'prototype', deadlineMs: 5 * 60_000 },
+      { stage: 'finalization', deadlineMs: 8 * 60_000 },
     ];
     const inputDigest = hashJson({ runId, brief, documentSlice });
-    const tasks = stages.map((item) => ({ id: `task-${item.stage}`, ...item, attempt: 1, state: 'queued' as const, lane: 'claude' as const, baseVersionId, inputDigest, promptVersion: 'phase0-v1', modelAlias: 'claude-local', allowedPaths: stageWritablePaths[item.stage], documentSlice, brief }));
+    const tasks = stages.map((item) => ({ id: `task-${item.stage}`, ...item, role: stageRoles[item.stage], attempt: 1, state: 'queued' as const, lane: 'claude' as const, baseVersionId, inputDigest, promptVersion: 'phase0-v1', modelAlias: 'claude-local', allowedPaths: stageWritablePaths[item.stage], documentSlice, brief }));
     return { runId, tasks, edges: [['task-identity', 'task-prototype'], ['task-prototype', 'task-finalization']] };
   }
 }

@@ -17,7 +17,10 @@ describe('render hub', () => {
   it('uses a content-addressed render cache key and deterministic QA checks', () => {
     const ir = createFixtureIR();
     const rendered = renderDesign(ir);
-    expect(cacheKey(rendered, createRenderCases(ir)[0]!)).toHaveLength(64);
+    const renderCase = createRenderCases(ir)[0]!;
+    expect(cacheKey(rendered, renderCase)).toHaveLength(64);
+    expect(cacheKey({ ...rendered, css: `${rendered.css}\nbody { container-type: inline-size; }` }, renderCase)).not.toBe(cacheKey(rendered, renderCase));
+    expect(cacheKey({ ...rendered }, renderCase)).toBe(cacheKey(rendered, renderCase));
     expect(evaluateQa({ scrollWidth: 100, clientWidth: 100, status: 200, consoleErrors: [], networkErrors: [] }).passed).toBe(true);
     expect(evaluateQa({ scrollWidth: 120, clientWidth: 100, status: 200, consoleErrors: ['boom'], networkErrors: [] }).passed).toBe(false);
     expect(evaluateQa({ scrollWidth: 100, clientWidth: 100, status: 404, consoleErrors: [], networkErrors: [] }).passed).toBe(false);

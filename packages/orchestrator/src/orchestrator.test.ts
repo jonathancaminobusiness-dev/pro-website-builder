@@ -100,12 +100,37 @@ describe('orchestrator', () => {
     const root = applier.createRoot(createFixtureIR());
     const identityTask = { allowedPaths: ['/identity', '/reviewRecord'], stage: 'identity' as const, role: 'director' as const };
     const bumpVersion = { operations: [{ op: 'replace' as const, path: '/identity/meta/version', value: '1.1.0' }], baseVersionId: root.id, touchedPaths: ['/identity/meta/version'], rationale: 'bump the identity version', confidence: 1, idempotencyKey: 'bump' };
-    expect(() => applier.dryRun({ ...bumpVersion, stage: 'prototype', role: 'composer' }, identityTask, root.id)).toThrow(/declares prototype\/composer; the task is identity\/director/);
+    expect(() => applier.dryRun({ ...bumpVersion, stage: 'prototype', role: 'composer' }, identityTask, root.id)).toThrow(/identity stage worked by the director/);
     expect(applier.dryRun({ ...bumpVersion, stage: 'identity', role: 'director' }, identityTask, root.id).next.identity.meta.version).toBe('1.1.0');
     const compilerTask = { allowedPaths: ['/pages', '/assets', '/reviewRecord'], stage: 'finalization' as const, role: 'compiler' as const };
     const note = { operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['pronto'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'record the release note', confidence: 1, idempotencyKey: 'note' };
-    expect(() => applier.dryRun({ ...note, stage: 'prototype', role: 'composer' }, compilerTask, root.id)).toThrow(/the task is finalization\/compiler/);
+    expect(() => applier.dryRun({ ...note, stage: 'prototype', role: 'composer' }, compilerTask, root.id)).toThrow(/finalization stage worked by the compiler/);
     expect(applier.dryRun({ ...note, stage: 'finalization', role: 'compiler' }, compilerTask, root.id).next.reviewRecord.findings).toEqual(['pronto']);
+  });
+
+  it('publishes the stage and role it enforces as constants in the schema the worker is handed', () => {
+    const declared = (stage: 'identity' | 'prototype' | 'finalization'): Array<string | undefined> => {
+      const schema = stageResultJsonSchemas[stage] as { properties: { proposal: { properties: Record<string, { const?: string }> } } };
+      return [schema.properties.proposal.properties.stage?.const, schema.properties.proposal.properties.role?.const];
+    };
+    expect(declared('identity')).toEqual(['identity', 'director']);
+    expect(declared('prototype')).toEqual(['prototype', 'composer']);
+    expect(declared('finalization')).toEqual(['finalization', 'compiler']);
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const plan = new RunPlanner(store).plan('run-roles', root.id, 'brief');
+    expect(plan.tasks.map((task) => [task.stage, task.role])).toEqual(plan.tasks.map((task) => declared(task.stage)));
+  });
+
+  it('refuses a phrasing node that carries other nodes, at the gate', () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const root = applier.createRoot(createFixtureIR());
+    const composer = { allowedPaths: ['/pages', '/assets', '/reviewRecord'], stage: 'prototype' as const, role: 'composer' as const };
+    const routes = createFixtureIR().pages.routes;
+    routes[0]!.nodes[0]!.semantic = 'p';
+    const patch = { operations: [{ op: 'replace' as const, path: '/pages', value: { routes } }], baseVersionId: root.id, touchedPaths: ['/pages'], rationale: 'wrap the page in a paragraph', confidence: 1, stage: 'prototype' as const, role: 'composer' as const, idempotencyKey: 'phrasing-parent' };
+    expect(() => applier.dryRun(patch, composer, root.id)).toThrow(/home-root renders as p/);
   });
 
   it('rejects a wrong-shaped stage value at the gate, before the applier reads the document', () => {

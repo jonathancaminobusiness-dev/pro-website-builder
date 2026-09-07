@@ -17,6 +17,7 @@ export const routeSchema = z.string()
   .refine((route) => route.split('/').every((segment) => segment !== '.' && segment !== '..'), 'Route segments must not traverse directories.');
 
 export const semanticSchema = z.enum(['h1', 'h2', 'h3', 'p', 'section', 'figure', 'div']);
+export const phrasingSemantics = new Set<string>(['h1', 'h2', 'h3', 'p']);
 
 export const pageNodeSchema = z.object({
   id: z.string(),
@@ -26,6 +27,7 @@ export const pageNodeSchema = z.object({
   slots: z.record(z.array(z.string())).default({}),
 }).superRefine((node, ctx) => {
   if ((node.kind === 'media') !== (node.semantic === 'figure')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `A media node renders as figure and only a media node does, so ${node.kind} cannot be ${node.semantic}.` });
+  if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['slots'], message: `Node ${node.id} renders as ${node.semantic}, which carries text and cannot contain other nodes.` });
 });
 
 export function slotChildIds(node: { slots: Record<string, string[]> }): string[] {

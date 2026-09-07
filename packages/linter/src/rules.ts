@@ -1,4 +1,4 @@
-import { cssTokenIssues, flattenTokens, resolveTokens, visualPropKeys, type DesignIR } from '@pwb/domain';
+import { cssTokenIssues, flattenTokens, phrasingSemantics, resolveTokens, slotChildIds, visualPropKeys, type DesignIR } from '@pwb/domain';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export interface LintIssue { path: string; message: string; suggestedPatch?: unknown; }
@@ -18,6 +18,14 @@ function tokenOnly(ir: DesignIR): LintIssue[] {
   for (const { path, value } of visualProps(ir)) {
     const isRef = typeof value === 'string' && /^\{[^}]+\}$/.test(value);
     if (!isRef) issues.push({ path, message: 'Visual values must resolve from a token.' });
+  }
+  return issues;
+}
+
+function phrasingLeaves(ir: DesignIR): LintIssue[] {
+  const issues: LintIssue[] = [];
+  for (const page of ir.pages.routes) for (const node of page.nodes) {
+    if (phrasingSemantics.has(node.semantic) && slotChildIds(node).length > 0) issues.push({ path: `/pages/routes/${page.id}/nodes/${node.id}/slots`, message: `Node ${node.id} renders as ${node.semantic}, which carries text and cannot contain other nodes.` });
   }
   return issues;
 }
@@ -66,6 +74,7 @@ export const ruleRegistry: LintRule[] = [
   { id: 'TOK-003', stage: 'identity', severity: 'error', detect: identityTokenRoles },
   { id: 'TOK-004', stage: 'identity', severity: 'error', detect: emittableTokens },
   { id: 'DEF-010', stage: 'prototype', severity: 'error', detect: forbiddenDefaults },
+  { id: 'DOC-020', stage: 'prototype', severity: 'error', detect: phrasingLeaves },
 ];
 
 export function lintDesign(ir: DesignIR): LintReport {

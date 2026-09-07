@@ -45,6 +45,15 @@ describe('identity linter', () => {
     expect(lintDesign(injected).findings.some((item) => item.id === 'TOK-004' && /cannot be emitted into CSS/.test(item.message))).toBe(true);
   });
 
+  it('names the phrasing node that was given children', () => {
+    const ir = createFixtureIR();
+    ir.pages.routes[0]!.nodes[1]!.slots = { children: ['home-proof'] };
+    const finding = lintDesign(ir).findings.find((item) => item.id === 'DOC-020');
+    expect(finding).toMatchObject({ path: '/pages/routes/page-home/nodes/home-title/slots', severity: 'error' });
+    expect(finding?.message).toMatch(/home-title renders as h1/);
+    expect(lintDesign(createFixtureIR()).findings.filter((item) => item.id === 'DOC-020')).toEqual([]);
+  });
+
   it('does not lint page prose as if it were a visual value', () => {
     const ir = createFixtureIR();
     ir.pages.routes[0]!.nodes[1]!.props.text = 'Trocamos a Inter-only hero por uma fonte autoral, sem {nome do cliente}.';

@@ -9,7 +9,7 @@ export function createRenderCases(ir: DesignIR): RenderCase[] {
     Object.entries(ir.stateFixtures).map(([state, fixture]) => ({ route: page.route, width, state, reducedMotion: fixture.values.motion === 'reduced' }))));
 }
 
-export function cacheKey(rendered: RenderedDocument, renderCase: RenderCase): string { return hashJson({ irHash: rendered.irHash, rendererVersion: rendered.rendererVersion, renderCase }); }
+export function cacheKey(rendered: RenderedDocument, renderCase: RenderCase): string { return hashJson({ rendered, renderCase }); }
 
 export function evaluateQa(input: { scrollWidth: number; clientWidth: number; status: number | null; consoleErrors: string[]; networkErrors: string[] }): QaResult {
   const overflow = input.scrollWidth > input.clientWidth;

@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { agentResultSchema, patchOperationSchema, patchSchema, stageSchema } from './agent.js';
+import { agentResultSchema, patchOperationSchema, patchSchema, stageSchema, taskRoleSchema } from './agent.js';
 import { assetsSchema, pagesSchema, reviewRecordSchema } from './ir.js';
 import { identitySpecSchema } from './identity.js';
 
 type Stage = z.infer<typeof stageSchema>;
+type Role = z.infer<typeof taskRoleSchema>;
 
 function withoutUnionTypes(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(withoutUnionTypes);
@@ -26,6 +27,8 @@ const pathValueSchemas = {
   '/reviewRecord': reviewRecordSchema,
 } as const;
 
+export const stageRoles: Record<Stage, Role> = { identity: 'director', prototype: 'composer', finalization: 'compiler' };
+
 export const stageWritablePaths: Record<Stage, Array<keyof typeof pathValueSchemas>> = {
   identity: ['/identity', '/reviewRecord'],
   prototype: ['/pages', '/assets', '/reviewRecord'],
@@ -44,10 +47,15 @@ function stageOperationSchema(stage: Stage): z.ZodTypeAny {
   return z.union(alternatives);
 }
 
+function stagePatchSchema(stage: Stage): z.ZodTypeAny {
+  const declared = { errorMap: () => ({ message: `This task is the ${stage} stage worked by the ${stageRoles[stage]}; a proposal must declare exactly that stage and role.` }) };
+  return patchSchema.extend({ stage: z.literal(stage, declared), role: z.literal(stageRoles[stage], declared), operations: z.array(stageOperationSchema(stage)).min(1) });
+}
+
 export const stagePatchSchemas: Record<Stage, z.ZodTypeAny> = {
-  identity: patchSchema.extend({ operations: z.array(stageOperationSchema('identity')).min(1) }),
-  prototype: patchSchema.extend({ operations: z.array(stageOperationSchema('prototype')).min(1) }),
-  finalization: patchSchema.extend({ operations: z.array(stageOperationSchema('finalization')).min(1) }),
+  identity: stagePatchSchema('identity'),
+  prototype: stagePatchSchema('prototype'),
+  finalization: stagePatchSchema('finalization'),
 };
 
 export const stageResultJsonSchemas: Record<Stage, unknown> = {

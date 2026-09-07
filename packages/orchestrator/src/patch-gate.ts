@@ -12,7 +12,6 @@ export class PatchGate {
 
   validate(patch: Patch, context: { currentVersionId: string } & Pick<AgentTask, 'allowedPaths' | 'stage' | 'role'>): GateDecision {
     const parsed = patchSchema.parse(patch);
-    if (parsed.stage !== context.stage || parsed.role !== context.role) throw new Error(`Proposal declares ${parsed.stage}/${parsed.role}; the task is ${context.stage}/${context.role}.`);
     if (parsed.baseVersionId !== context.currentVersionId) throw new Error(`Stale patch base ${parsed.baseVersionId}; current version is ${context.currentVersionId}.`);
     const key = parsed.idempotencyKey;
     if (!key) throw new Error('Patch is missing the idempotency key its producer must derive from the task.');
