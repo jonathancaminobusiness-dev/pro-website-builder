@@ -79,7 +79,7 @@ Two 2026-09-06 runs failed at the identity stage. Before the task carried its `d
 
 A 2026-09-07 run against the closed `semantic` vocabulary failed at the prototype stage: the composer proposed `semantic: 'section'` on a `grid` node and on a `component` node, and a per-kind rule that pinned every non-`type` kind to `div` rejected it. The renderer emits whatever `semantic` declares, so that rule refused a document it would have rendered exactly as written; only `figure` is tied to a kind, because that is the one branch the renderer hard-codes. The rule was narrowed to that, and the command was run again. A later change pinned each stage's `stage` and `role` as constants in the schema and made a phrasing node (`h1`, `h2`, `h3`, `p`) a leaf, and the command was run once more against that contract.
 
-The last complete 2026-09-07 run of that command was against that contract, before the structural rules below were added to the prompt. Claude produced a proposal for each of the three stages, all three passed the patch gate and the applier's dry run on attempt 1, and the captain gate approved each one: the event log holds `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization`, with no `task.failed`, and ends at `run.finished` carrying the export digest. The database holds 3 patches, 3 tasks, 3 approvals and 4 versions (root plus one per stage), each task at attempt 1, and each patch declares the stage and role of the task that produced it (`identity/director`, `prototype/composer`, `finalization/compiler`). The command exited 0 and wrote `index.html`, `proof/index.html`, `contact/index.html` and `manifest.json` under `exports/<digest>/`. That run's identity stage replaced `/reviewRecord`, the prototype stage replaced `/pages` as a whole subtree, and the finalization stage appended a node at `/pages/routes/0/nodes/-`.
+The last complete 2026-09-07 run of that command was against that contract, before the structural rules below were added to the prompt. It predates the finalization stage: at that commit `run:fixture` still wrote a static export of its own. Claude produced a proposal for each of the three stages, all three passed the patch gate and the applier's dry run on attempt 1, and the captain gate approved each one: the event log holds `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization`, with no `task.failed`, and ends at `run.finished` carrying the export digest. The database holds 3 patches, 3 tasks, 3 approvals and 4 versions (root plus one per stage), each task at attempt 1, and each patch declares the stage and role of the task that produced it (`identity/director`, `prototype/composer`, `finalization/compiler`). The command exited 0 and wrote `index.html`, `proof/index.html`, `contact/index.html` and `manifest.json` under `exports/<digest>/`. That run's identity stage replaced `/reviewRecord`, the prototype stage replaced `/pages` as a whole subtree, and the finalization stage appended a node at `/pages/routes/0/nodes/-`.
 
 `zod-to-json-schema` cannot express a `superRefine`, so the structural rules in `documentRules` — the media/figure pairing, the phrasing leaf rule, page-graph reachability and node id uniqueness, page id/route uniqueness, the token role and CSS-emittable token rules, the rule that every token alias and every visual prop reference names a token path the identity defines, and the asset rules (only a media node declares `assetId`, it names an asset the document lists, and a ready asset carries alt text and a `data:` URI) — reach the worker as prompt text built from that same object the gate quotes in its rejection messages. The one visual-prop rule a JSON Schema can carry is machine-enforced instead: a node prop is typed as a token reference (`"type": "string"` with `"pattern": "^\\{[^}]+\\}$"`), so the constraint now travels to the binary in the schema itself rather than only as prose, and the gate refuses a raw literal such as `700` or `#d86445` quoting that same rule. What the binary does with a `pattern` while decoding has not been observed here and is not claimed; the run recorded below says what was seen. Three runs of the command on 2026-09-07 after that line was added were aborted by the then 5-minute per-stage deadline rather than reaching a gate: the first after the identity stage was approved and while the prototype stage was running, the other two during the identity stage, each leaving `task.started` as the last event and no patch committed. The cause was local, not the contract: `claude -p 'Reply with the single word: ok' --output-format json --max-turns 1` reported `duration_ms: 3390` for the API call and took 1m47s of wall clock, so roughly 100s of per-invocation process overhead was consuming the budget. The stage deadlines were then sized to hold two full runner invocations (15/15/20 minutes against a 7-minute runner timeout).
 
@@ -94,6 +94,8 @@ PWB_MODEL_PROVIDER=claude-code corepack pnpm run:fixture
 It completed the whole journey and exited 0, printing `"status": "succeeded"` with the route list `/`, `/proof`, `/contact`; wall clock was 11m43s (18:48:24Z to 19:00:07Z), split 1m58s for identity, 6m54s for prototype and 2m50s for finalization, all inside the 15/15/20-minute stage deadlines. Every stage passed on attempt 1: the database holds 3 tasks each at attempt 1, 3 patches, 3 approvals and 4 versions, and the 22-event log runs `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization` with no `task.failed`, ending at `run.finished`. Each patch declared its own task's stage and role — `identity/director` touching `/reviewRecord`, `prototype/composer` and `finalization/compiler` touching `/pages`, `/assets` and `/reviewRecord`. The export under `exports/1cc32d2d.../` carries `index.html`, `proof/index.html`, `contact/index.html` and `manifest.json`.
 
 That run is what the `pattern` claim rests on, and no more: the binary's strict schema validator accepted the per-stage schema carrying it (all sixteen visual props emitted as `"type": "string"` with `"pattern": "^\{[^}]+\}$"`), and the approved document holds 174 visual props, every one of them a token reference, so the gate had no raw literal to refuse. Whether the API constrained decoding by that `pattern` or the worker simply followed the contract was not distinguished; no run has been observed in which the two disagree.
+
+Those runs are records of the commits they were made at, and `exports/<digest>/` is where that version of the command wrote. Neither directory nor exit code is what the command produces now: there is one publish path, it writes the content-addressed bundle under `PWB_RELEASE_ROOT` (default `releases/`), and `run:fixture` stops at Gate 3 and exits non-zero whenever the report carries a veto or an open escalation — which it does until the evidence runners have measured that exact bundle.
 
 Higgsfield is an optional asynchronous raster boundary, delivered as `HiggsfieldMcpProvider` in `packages/providers`: when its MCP is not configured, `submit` returns a `not_configured` job whose provenance records `pending provider terms` and a placeholder note, and it never requests or persists credentials. Phase 0 does not submit a raster job from the three-stage journey — `RunPlanner` emits three `claude`-lane tasks and nothing writes an asset from a `RasterJob` — so a fixture run's asset ledger is the same whether or not Higgsfield is configured. Wiring the raster lane into the run is later-phase work.
 
@@ -148,8 +150,9 @@ corepack pnpm run:lighthouse       # only the Lighthouse artifacts
 Everything binds an ephemeral port the operating system chooses, so an evidence
 run never contends with the studio on `5173`, the preview on `4311`, or another
 worktree. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site name the
-canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT` and
-`PWB_EVIDENCE_DIR` move the bundle and the artifacts. Preparing a release writes
+canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT`,
+`PWB_EVIDENCE_DIR` and `PWB_FONTS_DIR` move the bundle, the artifacts and the
+fonts. Preparing a release writes
 the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and every
 runner reads it back from there. With no run to read, the fixture stands in.
 
@@ -193,6 +196,31 @@ idempotency key; it escalates instead. A model session that fails — the refine
 the summarizer — escalates and the report still reaches the captain with every
 veto and every artifact already computed.
 
+**Self-hosted fonts.** The compiler never downloads a face. The owner puts the
+files in the project's fonts directory (`PWB_FONTS_DIR`, default `fonts/`) with a
+`manifest.json` beside them that names each one and the terms it came with:
+
+```json
+{
+  "faces": [{
+    "family": "Iosevka Etoile", "weight": "400", "style": "normal",
+    "format": "woff2", "file": "iosevka-etoile-400.woff2",
+    "license": "ofl-1.1", "licenseUrl": "https://openfontlicense.org",
+    "source": "https://typeof.net/Iosevka/", "author": "Renzhi Li", "date": "2026-09-07"
+  }]
+}
+```
+
+A face is self-hosted only when its licence clearly permits redistributing the
+file with the site (`OFL-1.1`, `Apache-2.0`, `MIT`, `CC0-1.0`, `UFL-1.0`,
+`CC-BY-4.0`); anything else stays unhosted and the stack falls back, so an
+ambiguous licence degrades the typography instead of shipping a file the owner
+may not redistribute. Either way the decision and its reason land in
+`licenses.json`. No manifest means no self-hosted face, which is the default.
+Every compile site reads the same directory — the studio's Gate 3, `run:release`,
+`run:evidence`, `run:lighthouse` and the release harness — so the evidence
+runners measure the bundle the gate credits.
+
 **Release vetoes.** Eight objective stop conditions, catalogued in
 `packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
 XSS or `javascript:` URL, unsanitized HTML, a bundled asset without a licence, a
@@ -206,8 +234,10 @@ tasks carry no writable path, and its findings have no veto severity.
 
 **Independent evidence.** Four runners that do not know what the gate wants to
 hear write typed artifacts into `artifacts/release/`, and the gate reads those
-files. `evidenceVetoes` derives an accessibility regression from axe's raw
-violation counts rather than from a field a runner chose to set, and
+files. `evidenceVetoes` derives every veto the evidence can raise from what the
+runners measured — axe's raw violation counts, a failed Vitest or Playwright run
+— and never from a field a runner chose to set, because an artifact has no such
+field to set; and
 `sealSummary` overwrites the summarizer's veto count with the authoritative one,
 so no summary can hide a veto. What the gate did — each refinement cycle, a
 critic or a model session that failed, the verdict itself — is written to the

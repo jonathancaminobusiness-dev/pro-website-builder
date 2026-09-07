@@ -66,14 +66,13 @@ export class FakeReleaseCriticProvider implements ReleaseCriticProvider {
 
     if (definition.dimension === 'accessibility' || definition.dimension === 'visual-regression') {
       for (const artifact of evidence) {
-        if (artifact.status === 'passed' && artifact.vetoes.length === 0) continue;
-        const severity: ReleaseFinding['severity'] = artifact.vetoes.length > 0 || artifact.status === 'failed' ? 'error' : 'warning';
+        if (artifact.status === 'passed') continue;
         push({
           id: `${definition.dimension}:${artifact.id}`,
-          severity,
+          severity: 'error',
           route: artifact.route,
           evidenceRef: artifact.id,
-          cause: artifact.vetoes[0]?.detail ?? artifact.notes[0] ?? `O artefato ${artifact.id} do runner ${artifact.runner} falhou em ${artifact.engine}.`,
+          cause: artifact.notes[0] ?? `O artefato ${artifact.id} do runner ${artifact.runner} falhou em ${artifact.engine}.`,
           suggestion: { kind: definition.dimension === 'accessibility' ? 'token' : 'constraint', path: '/pages', note: 'Corrigir a causa apontada pela evidência antes de reabrir o gate.' },
         });
       }

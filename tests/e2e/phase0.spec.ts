@@ -16,7 +16,10 @@ test('captain can drive the fixture through all three gates', async ({ page }) =
 
   await gate.getByRole('button', { name: 'Preparar release' }).click();
   await expect(gate.locator('.verdict')).toBeVisible({ timeout: 30_000 });
-  await gate.locator('.acceptance textarea').fill('Aceito publicar com a evidência que este ambiente produziu.');
+  // Publishing over an open escalation takes a written reason; a report with
+  // nothing open is published as it stands.
+  const acceptance = gate.locator('.acceptance textarea');
+  if (await acceptance.count() > 0) await acceptance.fill('Aceito publicar com a evidência que este ambiente produziu.');
   await gate.getByRole('button', { name: 'Publicar bundle e aprovar o gate' }).click();
 
   // Publishing is the finalization approval, so the pipeline closes with it.

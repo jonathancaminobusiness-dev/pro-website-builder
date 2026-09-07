@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,7 +44,7 @@ function pageEditingProvider(text: string): ModelProvider {
   };
 }
 
-async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider } = {}) {
+async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-release-api-'));
   const evidenceDir = join(dir, 'evidence');
   const releaseRoot = join(dir, 'releases');
@@ -53,7 +53,7 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs,
-    createRun: async (id) => { const run = new FixtureRun({ repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, modelProvider: 'fake' } }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, modelProvider: 'fake', ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -90,8 +90,8 @@ describe('Gate 3 over the local API', () => {
   it('prepares a release, reports it, and publishes the exact bundle the captain saw', async () => {
     const { origin, runId, releaseRoot, events, run } = await harness({
       evidence: [
-        { id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'passed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 0, serious: 0 }, notes: [] },
-        { id: 'vitest', runner: 'vitest', engine: 'node', route: '/', state: 'unit', status: 'passed', path: 'p', hash: 'h', vetoes: [], metrics: {}, notes: [] },
+        { id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'passed', path: 'p', hash: 'h', metrics: { critical: 0, serious: 0 }, notes: [] },
+        { id: 'vitest', runner: 'vitest', engine: 'node', route: '/', state: 'unit', status: 'passed', path: 'p', hash: 'h', metrics: {}, notes: [] },
       ],
     });
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
@@ -149,6 +149,40 @@ describe('Gate 3 over the local API', () => {
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
   });
 
+  it('ships the faces the project offers, and the release record carries their terms', async () => {
+    const bytes = Buffer.from([119, 79, 70, 50, 9, 8, 7, 6]);
+    const fontsDir = await mkdtemp(join(tmpdir(), 'pwb-run-fonts-'));
+    cleanups.push(async () => { await rm(fontsDir, { recursive: true, force: true }); });
+    await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), bytes);
+    await writeFile(join(fontsDir, 'manifest.json'), JSON.stringify({
+      faces: [
+        { family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07' },
+        { family: 'Foundry Grotesk', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'Foundry desktop licence', source: 'invoice 42', author: 'Foundry', date: '2026-09-07' },
+      ],
+    }), 'utf8');
+
+    const { origin, runId, releaseRoot } = await harness({ fontsDir });
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(prepared.report.blocked).toBe(false);
+    const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(published.status).toBe(200);
+
+    // The bundle is a public artifact: the face it may redistribute is in it,
+    // the one it may not is named in the inventory and left out of the bytes.
+    const bundle = join(releaseRoot, prepared.digest);
+    const manifest = JSON.parse(await readFile(join(bundle, 'manifest.json'), 'utf8')) as { stylesheetPath: string; fonts: Array<{ family: string; selfHosted: boolean; path?: string }> };
+    const hosted = manifest.fonts.find((font) => font.family === 'Fixture Sans')!;
+    expect(hosted.selfHosted).toBe(true);
+    expect(await readFile(join(bundle, hosted.path!))).toEqual(bytes);
+    expect(await readFile(join(bundle, manifest.stylesheetPath), 'utf8')).toContain(`src:url("${hosted.path!.replace('assets/', '')}")`);
+    expect(manifest.fonts.find((font) => font.family === 'Foundry Grotesk')?.selfHosted).toBe(false);
+    const licenses = JSON.parse(await readFile(join(bundle, 'licenses.json'), 'utf8')) as Array<{ id: string; kind: string; license: string; bundled: boolean }>;
+    expect(licenses.filter((entry) => entry.kind === 'font')).toEqual([
+      expect.objectContaining({ id: 'font:Fixture Sans:400:normal', license: 'ofl-1.1', bundled: true }),
+      expect.objectContaining({ id: 'font:Foundry Grotesk:400:normal', license: 'Foundry desktop licence', bundled: false }),
+    ]);
+  });
+
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {
     const { origin, runId, releaseRoot } = await harness({ approveGates: false });
     const refused = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
@@ -161,7 +195,7 @@ describe('Gate 3 over the local API', () => {
 
   it('compiles the finalization-stage version, keeps the refinement retrievable, and refines only once', async () => {
     const { origin, runId, evidenceDir, stageVersionId, events } = await harness({
-      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
     });
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(prepared.report.approvedVersionId).toBe(stageVersionId);
@@ -188,7 +222,7 @@ describe('Gate 3 over the local API', () => {
     // critic finding — so the refiner mints a new version — without a veto.
     const { origin, runId, releaseRoot, run, stageVersionId } = await harness({
       provider: pageEditingProvider(edited),
-      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 0, serious: 0 }, notes: ['um ponto a revisar'] }],
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', metrics: { critical: 0, serious: 0 }, notes: ['um ponto a revisar'] }],
     });
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(prepared.report.blocked).toBe(false);
@@ -211,7 +245,7 @@ describe('Gate 3 over the local API', () => {
 
   it('has no approve route that could close the finalization gate beside Gate 3', async () => {
     const { origin, runId, releaseRoot, run } = await harness({
-      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
     });
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(prepared.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
@@ -228,7 +262,7 @@ describe('Gate 3 over the local API', () => {
 
   it('rewinds the rejected finalization proposal even after Gate 3 refined it', async () => {
     const { origin, runId, run, stageVersionId } = await harness({
-      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', metrics: { critical: 1, serious: 0 }, notes: ['contraste'] }],
     });
     const prototype = run.snapshot().approvals.find((entry) => entry.stage === 'prototype' && entry.decision === 'approved')!;
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
@@ -245,7 +279,7 @@ describe('Gate 3 over the local API', () => {
     // An axe run that failed without a critical or serious violation raises a
     // critic finding, so the refiner writes the review record without a veto.
     const { origin, runId, run, stageVersionId } = await harness({
-      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 0, serious: 0 }, notes: ['um ponto a revisar'] }],
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', metrics: { critical: 0, serious: 0 }, notes: ['um ponto a revisar'] }],
     });
     const first = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(first.report.refinementCycles).toBe(1);
@@ -266,7 +300,7 @@ describe('Gate 3 over the local API', () => {
   it('refuses to publish a release prepared for the proposal the captain rejected', async () => {
     const { origin, runId, run, releaseRoot } = await harness({
       provider: pageEditingProvider('Prova reescrita na finalização.'),
-      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'passed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 0, serious: 0 }, notes: [] }],
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'passed', path: 'p', hash: 'h', metrics: { critical: 0, serious: 0 }, notes: [] }],
     });
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(prepared.report.blocked).toBe(false);
@@ -329,7 +363,7 @@ describe('Gate 3 over the local API', () => {
 
   it('refuses to publish while a veto stands, and leaves nothing on disk', async () => {
     const { origin, runId, releaseRoot } = await harness({
-      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 1, serious: 0 }, notes: ['contrast'] }],
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', metrics: { critical: 1, serious: 0 }, notes: ['contrast'] }],
     });
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(prepared.report.blocked).toBe(true);

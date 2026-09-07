@@ -28,9 +28,16 @@ test('the captain reads the release report on Gate 3 and publishes the bundle', 
     await expect(publish).toBeDisabled();
     return;
   }
-  // An open escalation does not block, but publishing over it takes a written reason.
-  await expect(publish).toBeDisabled();
-  await gate.locator('.acceptance textarea').fill('Aceito publicar com a evidência que este ambiente produziu.');
+  // An open escalation does not block, but publishing over it takes a written
+  // reason; with nothing open the captain publishes straight away.
+  const acceptance = gate.locator('.acceptance textarea');
+  if (await acceptance.count() > 0) {
+    await expect(publish).toBeDisabled();
+    await acceptance.fill('Aceito publicar com a evidência que este ambiente produziu.');
+  } else {
+    await expect(gate.getByText('Nada em aberto além da própria decisão')).toBeVisible();
+  }
+  await expect(publish).toBeEnabled();
   await publish.click();
   await expect(gate.getByRole('button', { name: 'Bundle publicado' })).toBeVisible({ timeout: 30_000 });
   await expect(gate.getByText('Bundle imutável escrito em', { exact: false })).toBeVisible();

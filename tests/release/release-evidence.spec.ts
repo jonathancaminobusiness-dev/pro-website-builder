@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { writeEvidenceArtifact, artifactHash } from '../../packages/stage-finalization/src/index.js';
-import type { EvidenceArtifact, ReleaseVeto } from '../../packages/domain/src/index.js';
+import type { EvidenceArtifact } from '../../packages/domain/src/index.js';
 
 const EVIDENCE_DIR = process.env.PWB_EVIDENCE_DIR ?? join(process.cwd(), 'artifacts', 'release');
 const WIDTHS = [360, 768, 1440] as const;
@@ -57,14 +57,13 @@ test.describe('release evidence', () => {
           ...observed.requestFailures.map((failure) => `request: ${failure}`),
           ...(overflow ? [`overflow: scrollWidth ${metrics.scrollWidth} exceeds clientWidth ${metrics.clientWidth}`] : []),
         ];
-        const vetoes: ReleaseVeto[] = [];
         await writeEvidenceArtifact(EVIDENCE_DIR, {
           id: `playwright-${engine}-${route.route === '/' ? 'home' : route.route.slice(1)}-${width}`,
           runner: 'playwright', engine, releaseDigest: digest, irHash, route: route.route, state: `width-${width}`,
           status: notes.length === 0 ? 'passed' : 'failed',
           path: route.releasePath,
           hash: artifactHash({ metrics, notes }),
-          vetoes, metrics: { scrollWidth: metrics.scrollWidth, clientWidth: metrics.clientWidth, nodes: metrics.nodes }, notes,
+          metrics: { scrollWidth: metrics.scrollWidth, clientWidth: metrics.clientWidth, nodes: metrics.nodes }, notes,
         });
         expect(observed.consoleErrors, `${route.route} at ${width}px must log no console error`).toEqual([]);
         expect(observed.requestFailures, `${route.route} at ${width}px must have no failed request`).toEqual([]);
@@ -97,7 +96,6 @@ test.describe('release evidence', () => {
           status: counts.critical + counts.serious > 0 ? 'failed' : 'passed',
           path: route.releasePath,
           hash: artifactHash(results.violations.map((violation) => [violation.id, violation.impact, violation.nodes.length])),
-          vetoes: [],
           metrics: counts,
           // axe finds part of what WCAG requires and returns `incomplete` where a
           // human must look: the artifact says so instead of implying a clean bill.

@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { evidenceArtifactSchema, type EvidenceArtifact, type ReleaseVeto } from '@pwb/domain';
-import { vetoDefinition } from './veto-catalog.js';
 
 /**
  * Evidence is produced by runners that do not know what the gate wants to hear:
@@ -107,21 +106,8 @@ function runnerFailure(artifact: EvidenceArtifact): ReleaseVeto[] {
  * chose to set, so a runner that forgets to declare a veto still cannot hide
  * one, and no later summary can subtract from this list.
  */
-/**
- * An artifact is written by a runner, so its `detector` field is untrusted input.
- * A veto the catalogue does not let the evidence raise is not discarded and does
- * not crash the gate: it becomes a build failure that names the original id, so
- * a veto-shaped measurement always blocks.
- */
-function declared(artifact: EvidenceArtifact): ReleaseVeto[] {
-  return artifact.vetoes.map((veto) => {
-    if (vetoDefinition(veto.id).detectors.includes('evidence')) return { ...veto, detector: 'evidence' as const };
-    return { id: 'BUILD_FAILED' as const, detector: 'evidence' as const, where: veto.where, detail: `O artefato ${artifact.id} reportou ${veto.id}, que a evidência não pode levantar: ${veto.detail}` };
-  });
-}
-
 export function evidenceVetoes(artifacts: EvidenceArtifact[]): ReleaseVeto[] {
-  return artifacts.flatMap((artifact) => [...declared(artifact), ...accessibilityRegression(artifact), ...runnerFailure(artifact)]);
+  return artifacts.flatMap((artifact) => [...accessibilityRegression(artifact), ...runnerFailure(artifact)]);
 }
 
 export interface EvidenceCoverage {

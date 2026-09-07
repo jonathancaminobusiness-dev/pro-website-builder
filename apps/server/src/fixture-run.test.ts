@@ -23,7 +23,7 @@ function releaseOptions(root: string) {
 async function completeEvidence(run: FixtureRun, evidenceDir: string): Promise<void> {
   const { current } = run.releaseContext();
   const compiled = compileRelease(renderDesign(current.ir), current.ir, { siteUrl: 'https://site.invalid', siteName: 'pro-website-builder' });
-  const base = { releaseDigest: compiled.digest, irHash: compiled.irHash, route: '/', status: 'passed' as const, path: 'p', hash: 'h', vetoes: [], metrics: {}, notes: [] };
+  const base = { releaseDigest: compiled.digest, irHash: compiled.irHash, route: '/', status: 'passed' as const, path: 'p', hash: 'h', metrics: {}, notes: [] };
   const artifacts: EvidenceArtifact[] = [
     { ...base, id: 'vitest', runner: 'vitest', engine: 'node', state: 'unit' },
     { ...base, id: 'pw-chromium', runner: 'playwright', engine: 'chromium', state: 'width-1440' },

@@ -15,12 +15,13 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { compileRelease } from '../packages/export/src/index.js';
+import { compileRelease, loadFontSources } from '../packages/export/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 import { artifactHash, loadReleaseDocument, writeEvidenceArtifact } from '../packages/stage-finalization/src/index.js';
 
 const execFileAsync = promisify(execFile);
 const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(process.cwd(), 'artifacts', 'release');
+const fontsDir = process.env.PWB_FONTS_DIR ?? join(process.cwd(), 'fonts');
 
 interface RunnerOutcome { name: string; ok: boolean; detail: string }
 
@@ -49,7 +50,7 @@ async function vitestEvidence(release: { digest: string; irHash: string }): Prom
     await writeEvidenceArtifact(evidenceDir, {
       id: 'vitest-node', runner: 'vitest', engine: 'node', releaseDigest: release.digest, irHash: release.irHash, route: '/', state: 'unit',
       status: metrics.failed === 0 && (report.success ?? ok) ? 'passed' : 'failed',
-      path: 'vitest', hash: artifactHash(metrics), vetoes: [], metrics,
+      path: 'vitest', hash: artifactHash(metrics), metrics,
       notes: metrics.failed === 0 ? ['A suíte determinística passou; ela não prova layout, fonte nem acessibilidade de interação.'] : [`${metrics.failed} teste(s) falharam.`],
     });
     return { name: 'vitest', ok: metrics.failed === 0, detail: `${metrics.passed}/${metrics.total} passed` };
@@ -62,9 +63,11 @@ async function main(): Promise<void> {
   // Every runner measures the same release, so every artifact names it and the
   // gate can tell this run's evidence from what an earlier run left behind.
   const ir = await loadReleaseDocument(evidenceDir);
+  const fonts = await loadFontSources(fontsDir);
   const compiled = compileRelease(renderDesign(ir), ir, {
     siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid',
     siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder',
+    ...(fonts.length > 0 ? { fonts } : {}),
   });
   const outcomes: RunnerOutcome[] = [
     await vitestEvidence({ digest: compiled.digest, irHash: compiled.irHash }),

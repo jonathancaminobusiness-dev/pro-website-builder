@@ -86,7 +86,6 @@ export const evidenceArtifactSchema = z.object({
   status: z.enum(['passed', 'failed']),
   path: z.string(),
   hash: z.string(),
-  vetoes: z.array(releaseVetoSchema),
   metrics: z.record(z.number()),
   notes: z.array(z.string()),
 });

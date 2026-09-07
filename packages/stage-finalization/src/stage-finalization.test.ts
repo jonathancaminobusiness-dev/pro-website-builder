@@ -33,7 +33,7 @@ function compiledFixture(mutate?: (ir: DesignIR) => void) {
 
 function artifact(overrides: Partial<EvidenceArtifact> & Pick<EvidenceArtifact, 'id' | 'runner' | 'engine'>): EvidenceArtifact {
   return {
-    route: '/', state: 'default', status: 'passed', path: `${overrides.id}.json`, hash: 'hash', vetoes: [], metrics: {}, notes: [],
+    route: '/', state: 'default', status: 'passed', path: `${overrides.id}.json`, hash: 'hash', metrics: {}, notes: [],
     releaseDigest: STAGE_RELEASE.digest, irHash: STAGE_RELEASE.irHash, ...overrides,
   };
 }
@@ -71,18 +71,6 @@ describe('independent evidence', () => {
   it('treats a failed browser or unit run as a build failure', () => {
     expect(evidenceVetoes([artifact({ id: 'pw-webkit', runner: 'playwright', engine: 'webkit', status: 'failed', notes: ['overflow at 360px'] })])[0])
       .toMatchObject({ id: 'BUILD_FAILED', detector: 'evidence', detail: 'overflow at 360px' });
-  });
-
-  it('blocks on a veto an artifact mislabelled instead of crashing the gate', () => {
-    const vetoes = evidenceVetoes([artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', vetoes: [{ id: 'CRITICAL_AA_REGRESSION', detector: 'compiler', where: '/', detail: 'contraste' }] })]);
-    expect(vetoes).toHaveLength(1);
-    expect(vetoes[0]).toMatchObject({ id: 'CRITICAL_AA_REGRESSION', detector: 'evidence' });
-  });
-
-  it('turns a veto the evidence may not raise into a build failure rather than dropping it', () => {
-    const vetoes = evidenceVetoes([artifact({ id: 'lh-home', runner: 'lighthouse', engine: 'chromium', vetoes: [{ id: 'SECRET_IN_BUNDLE', detector: 'evidence', where: '/', detail: 'chave no bundle' }] })]);
-    expect(vetoes[0]).toMatchObject({ id: 'BUILD_FAILED', detector: 'evidence' });
-    expect(vetoes[0]!.detail).toContain('SECRET_IN_BUNDLE');
   });
 
   it('keeps a clean run clean', () => {

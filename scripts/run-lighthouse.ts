@@ -11,7 +11,7 @@
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
-import { compileRelease } from '../packages/export/src/index.js';
+import { compileRelease, loadFontSources } from '../packages/export/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 import { artifactHash, createReleaseHarness, loadReleaseDocument, writeEvidenceArtifact } from '../packages/stage-finalization/src/index.js';
 
@@ -19,6 +19,7 @@ interface LighthouseResult { lhr: { categories: Record<string, { score: number |
 type LighthouseFn = (url: string, flags: Record<string, unknown>) => Promise<LighthouseResult | undefined>;
 
 const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(process.cwd(), 'artifacts', 'release');
+const fontsDir = process.env.PWB_FONTS_DIR ?? join(process.cwd(), 'fonts');
 
 /** Asks the operating system for a free port instead of claiming a developer port. */
 function freePort(): Promise<number> {
@@ -42,7 +43,8 @@ const FORM_FACTORS = [
 async function main(): Promise<void> {
   const ir = await loadReleaseDocument(evidenceDir);
   const rendered = renderDesign(ir);
-  const compiled = compileRelease(rendered, ir, { siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid', siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder' });
+  const fonts = await loadFontSources(fontsDir);
+  const compiled = compileRelease(rendered, ir, { siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid', siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder', ...(fonts.length > 0 ? { fonts } : {}) });
   const harness = createReleaseHarness(compiled, rendered, 0);
   const origin = await harness.start();
   const debuggingPort = await freePort();
@@ -82,7 +84,6 @@ async function main(): Promise<void> {
           status: lhr.runtimeError ? 'failed' : 'passed',
           path: route.path,
           hash: artifactHash(metrics),
-          vetoes: [],
           metrics,
           notes: [
             'Lighthouse is a laboratory run: it measures this machine and this network, not a real visitor.',

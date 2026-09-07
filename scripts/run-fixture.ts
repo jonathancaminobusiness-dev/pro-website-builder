@@ -13,6 +13,7 @@ const root = process.cwd();
 const databasePath = process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'cli-fixture.sqlite');
 const releaseRoot = process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
 const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
+const fontsDir = process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
 const renderCacheDir = process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
 
 async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSummary> {
@@ -49,7 +50,7 @@ async function main(): Promise<void> {
     const run = new FixtureRun({
       repository: new ProjectRepository(database),
       provider: createModelProvider(process.env.PWB_MODEL_PROVIDER),
-      release: { releaseRoot, evidenceDir, ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
+      release: { releaseRoot, evidenceDir, fontsDir, ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
     });
     await run.initialize('cli-fixture');
     let snapshot = await run.runAll();
