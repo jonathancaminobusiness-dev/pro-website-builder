@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createFixtureIR, type AgentTask, type Approval } from '@pwb/domain';
-import { compileRelease, writeReleaseBundle, type ReleaseManifest } from '@pwb/export';
+import { appendReleasePublication, compileRelease, writeReleaseBundle, type ReleaseManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type ScheduleResult, type VersionRecord, VersionStore } from '@pwb/orchestrator';
 import type { ReleaseContext } from './release-run.js';
@@ -140,7 +140,7 @@ export class FixtureRun {
     this.status = 'queued';
     let manifest: ReleaseManifest | undefined;
     try {
-      manifest = stage === 'finalization' ? await this.writeRelease(approved) : undefined;
+      manifest = stage === 'finalization' ? await this.writeRelease(approved, rationale) : undefined;
       await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
       await this.record('approval.recorded', { stage, decision: 'approved', versionId: approval.versionId });
     } catch (error) { this.status = previousStatus; throw error; }
@@ -160,6 +160,7 @@ export class FixtureRun {
     this.approvals.push(rejection);
     this.status = 'rejected';
     const parent = this.applier.rewind(this.currentVersion);
+    if (stage === 'finalization') this.finalizationVersion = undefined;
     if (parent) {
       this.currentVersion = parent;
       this.rendered = renderDesign(parent.ir);
@@ -248,12 +249,22 @@ export class FixtureRun {
    * — a secret in a page, an asset without a licence, a broken link — refuses
    * the ordinary approval exactly as it refuses Gate 3.
    */
-  private async writeRelease(source: VersionRecord): Promise<ReleaseManifest> {
+  private async writeRelease(source: VersionRecord, rationale: string): Promise<ReleaseManifest> {
     const compiled = compileRelease(renderDesign(source.ir), source.ir, {
       siteUrl: this.options.siteUrl ?? 'https://site.invalid',
       siteName: this.options.siteName ?? 'pro-website-builder',
     });
-    return writeReleaseBundle(compiled, this.options.exportRoot, { approvedVersionId: source.id });
+    const manifest = await writeReleaseBundle(compiled, this.options.exportRoot);
+    await appendReleasePublication(this.options.exportRoot, {
+      digest: manifest.digest,
+      approvedVersionId: this.finalizationVersion?.id ?? source.id,
+      releasedVersionId: source.id,
+      irHash: compiled.irHash,
+      approverRole: 'captain',
+      rationale,
+      acceptedEscalations: [],
+    });
+    return manifest;
   }
 
   private launch(stage: Stage): Promise<void> {

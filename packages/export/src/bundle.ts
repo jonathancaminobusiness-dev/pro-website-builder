@@ -13,8 +13,6 @@ export class ReleaseVetoError extends Error {
 export interface ReleaseManifest {
   digest: string;
   directory: string;
-  irHash: string;
-  approvedVersionId: string;
   rendererVersion: string;
   compilerVersion: string;
   siteUrl: string;
@@ -44,13 +42,14 @@ function safeTarget(directory: string, path: string): string {
  * file set is written. Any veto refuses the write outright — a blocked release
  * never reaches disk in a form that could be published by accident.
  *
- * The manifest describes the release and nothing about the act of publishing
- * it, so writing the same bytes twice writes the same manifest and succeeds.
- * Who accepted what, and why, belongs to the run's record, not to the bundle.
+ * The manifest is a pure function of the compiled bytes and the toolchain that
+ * produced them: it names no document, no version and no publication, so the
+ * same site always writes the same manifest and publishing it twice succeeds.
+ * Which document produced these bytes, and who accepted what to publish them,
+ * is the release record beside the bundle — see `appendReleasePublication`.
  */
-export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string, context: { approvedVersionId: string; extraVetoes?: ReleaseVeto[] }): Promise<ReleaseManifest> {
-  const vetoes = [...compiled.vetoes, ...(context.extraVetoes ?? [])];
-  if (vetoes.length > 0) throw new ReleaseVetoError(vetoes);
+export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string): Promise<ReleaseManifest> {
+  if (compiled.vetoes.length > 0) throw new ReleaseVetoError(compiled.vetoes);
 
   const directory = join(rootDir, compiled.digest);
   await mkdir(directory, { recursive: true });
@@ -64,8 +63,6 @@ export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string
   const manifest: ReleaseManifest = {
     digest: compiled.digest,
     directory,
-    irHash: compiled.irHash,
-    approvedVersionId: context.approvedVersionId,
     rendererVersion: compiled.rendererVersion,
     compilerVersion: compiled.compilerVersion,
     siteUrl: compiled.siteUrl,
@@ -80,8 +77,8 @@ export async function writeReleaseBundle(compiled: CompiledSite, rootDir: string
   };
   // The manifest is written last and is excluded from the digest, so the same IR
   // and toolchain always produce the same directory name and the same bytes. The
-  // digest cannot cover the manifest that names it, so a second write that would
-  // change it is refused rather than allowed to mutate an immutable release.
+  // digest cannot cover the manifest that names it, so a manifest that no longer
+  // describes this bundle is refused rather than overwritten.
   const manifestPath = join(directory, 'manifest.json');
   const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
   const existing = await readFile(manifestPath, 'utf8').catch(() => undefined);

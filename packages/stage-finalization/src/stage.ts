@@ -109,17 +109,20 @@ export class FinalizationStage {
       try {
         const patch = await this.options.refiner.propose(task, findings.filter((finding) => finding.severity === 'error'), input.signal);
         if (!patch) { escalations.push('O patch-refiner não produziu proposta; os achados abertos sobem para o capitão.'); await emit('release.refinement.stopped', { reason: 'no-proposal', cycles }); break; }
+        // Applying a patch spends its idempotency key against the base version,
+        // so a rewrite of what the review record already says is recognised
+        // before it is applied rather than minted and discarded.
+        if (sameDocument(input.applier.dryRun(patch, task, version.id).next, version.ir)) {
+          escalations.push('O patch-refiner reescreveu o que o registro de revisão já dizia; os achados abertos sobem para o capitão.');
+          await emit('release.refinement.stopped', { reason: 'no-change', cycles });
+          break;
+        }
         next = input.applier.apply(patch, task, version.id);
       } catch (error) {
         if (input.signal?.aborted) throw error;
         const reason = error instanceof Error ? error.message : 'O patch-refiner falhou sem mensagem.';
         escalations.push(`O patch-refiner falhou no ciclo ${cycles + 1} e os achados seguem abertos: ${reason}`);
         await emit('release.refinement.stopped', { reason: 'refiner-failed', cycles, detail: reason });
-        break;
-      }
-      if (sameDocument(next.ir, version.ir)) {
-        escalations.push('O patch-refiner reescreveu o que o registro de revisão já dizia; os achados abertos sobem para o capitão.');
-        await emit('release.refinement.stopped', { reason: 'no-change', cycles });
         break;
       }
       version = next;

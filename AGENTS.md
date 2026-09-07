@@ -16,7 +16,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Release vetoes, the evidence runners and the Gate 3 commands are described under "Finalization stage and Gate 3" in `README.md`; the veto catalogue itself is `packages/stage-finalization/src/veto-catalog.ts`.
 - A veto is objective and blocking, and a critic can raise none: critic tasks carry an empty `allowedPaths`, `ReleaseFinding` has no veto severity, and `evaluateReleaseGate` recomputes every veto from the compiled bundle and the raw artifacts. Keep it that way when extending the stage.
 - There is one export path: `compileRelease` → `writeReleaseBundle`. Both the finalization approval and Gate 3 go through it on the same version, so a new export must not bypass the vetoes or compile a sibling version.
-- A bundle's `manifest.json` is a pure function of the compiled release; publication facts (who accepted which escalation, and why) belong to the run's event log, so republishing identical bytes stays idempotent.
+- A bundle's `manifest.json` is a pure function of the compiled bytes and the toolchain and names no document, version or publication. Provenance and acceptance go to `<releaseRoot>/<digest>.publications.json` (`appendReleasePublication`) and the run's event log, so republishing identical bytes stays idempotent.
 - Evidence counts only when its `releaseDigest` matches the bundle being evaluated; a gap is an escalation the captain accepts in writing, never a silent pass.
 - `designIRSchema.parse` normalizes the document, so a version from the Applier can compile to a different digest than the same fixture compiled directly. Derive an expected digest from the version, not from `createFixtureIR()`.
 

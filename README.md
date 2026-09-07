@@ -155,10 +155,11 @@ runner reads it back from there. With no run to read, the fixture stands in.
 
 **One document, gates in order.** Gate 3 refuses to prepare or publish until the
 captain has approved identity and prototype on that run and the finalization
-stage has produced the version they are looking at. That version, plus the
-review record the refiner writes onto it, is the run's release: Gate 3 and the
-ordinary finalization approval compile exactly it, so the approval, the manifest
-and the published bytes always name the same version. Both take the same path —
+stage has produced the version they are looking at — rejecting that proposal
+closes Gate 3 again until the stage runs anew. That version, plus the review
+record the refiner writes onto it, is the run's release: Gate 3 and the ordinary
+finalization approval compile exactly it, so the approval, the release record and
+the published bytes always name the same version. Both take the same path —
 one compiler, one bundle writer, every veto — so a secret in a page refuses the
 ordinary approval exactly as it refuses Gate 3.
 
@@ -170,10 +171,11 @@ writes `/reviewRecord` and nothing else, because the bytes the release publishes
 have to be the bytes the captain approved. A refinement becomes a real version of
 the run: it is saved through the run's applier and repository, so the manifest
 names a version that can be retrieved and a second Gate 3 run builds on the
-first instead of redoing it. Rewriting what the review record already says
-changes no document, so it mints no version and escalates instead. A model
-session that fails — the refiner, the summarizer — escalates and the report
-still reaches the captain with every veto and every artifact already computed.
+first instead of redoing it. A patch that rewrites what the review record already
+says is recognised on the dry run, so it neither mints a version nor spends its
+idempotency key; it escalates instead. A model session that fails — the refiner,
+the summarizer — escalates and the report still reaches the captain with every
+veto and every artifact already computed.
 
 **Release vetoes.** Eight objective stop conditions, catalogued in
 `packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
@@ -206,9 +208,13 @@ Playwright's Firefox 153 build does not start — it times out after
 `sandbox_extension_issue_file_to_process ... Operation not permitted` — so that
 run leaves no Firefox artifact, and the gate escalates "Nenhuma execução
 Playwright em firefox". Publishing over an open escalation takes a written
-reason from the captain, recorded in the run's log as `release.published`. The
-manifest inside the bundle describes the release and never the act of publishing
-it, so writing the same bytes again is an idempotent success.
+reason from the captain, recorded in the run's log as `release.published` and in
+the release record beside the bundle. The manifest inside the bundle is a pure
+function of the compiled bytes and the toolchain — it names no document, no
+version and no publication — so writing the same bytes again is an idempotent
+success that appends a second entry to `<digest>.publications.json`, where the
+approved version, the released version, the document hash and the acceptance
+live.
 
 Lighthouse is a laboratory run. It measures one machine and one network, does
 not observe a visitor, and does not measure INP without interaction; the
@@ -228,7 +234,7 @@ each critic gave on the 0–4 scale with a minimum of 3, parity per route, which
 runners produced evidence, and what escalates. Publishing sends the digest the
 captain is looking at, so a release that moved since the report cannot be
 published by mistake, and an open escalation takes a written acceptance the run's
-log records. Only the captain publishes.
+log and the release record keep. Only the captain publishes.
 
 ### Real critic sessions
 

@@ -1,5 +1,5 @@
 import type { ReleaseGateReport } from '@pwb/domain';
-import { ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest } from '@pwb/export';
+import { appendReleasePublication, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner } from '@pwb/providers';
 import {
@@ -54,9 +54,10 @@ function providers(name: string): { critic: ReleaseCriticProvider; refiner: Rele
  * because the document changed, or because the refiner produced a new version —
  * publishing is refused, so what reaches disk is always the bundle the captain
  * actually looked at. Every escalation the gate raises has to be accepted in
- * writing before the bundle is written, so a gap is never passed over silently;
- * that acceptance is recorded in the run's log, never inside the immutable
- * bundle, so publishing the same bytes again succeeds instead of colliding.
+ * writing before the bundle is written, so a gap is never passed over silently.
+ * That acceptance, and the versions the bytes came from, are recorded in the
+ * run's log and in the release record beside the bundle — never inside it — so
+ * publishing the same bytes again succeeds instead of colliding.
  */
 export class ReleaseRun {
   private snapshotValue: ReleaseSnapshot | undefined;
@@ -113,7 +114,16 @@ export class ReleaseRun {
     if (escalations.length > 0 && reason === '') {
       throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
-    const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot, { approvedVersionId: current.versionId });
+    const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot);
+    await appendReleasePublication(this.options.releaseRoot, {
+      digest: manifest.digest,
+      approvedVersionId: current.report.approvedVersionId,
+      releasedVersionId: current.versionId,
+      irHash: current.report.irHash,
+      approverRole: 'captain',
+      rationale: reason,
+      acceptedEscalations: escalations,
+    });
     await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole: 'captain', rationale: reason, escalations });
     this.snapshotValue = { ...current, published: { directory: manifest.directory, digest: manifest.digest } };
     return manifest;

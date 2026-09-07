@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type DesignIR } from '@pwb/domain';
 import { renderDesign } from '@pwb/renderer';
-import { compileRelease, readBundleHashes, ReleaseVetoError, writeReleaseBundle, type CompiledSite } from './index.js';
+import { appendReleasePublication, compileRelease, readBundleHashes, readReleasePublications, ReleaseVetoError, writeReleaseBundle, type CompiledSite } from './index.js';
 
 const OPTIONS = { siteUrl: 'https://oficina.example', siteName: 'Oficina' };
 
@@ -114,7 +114,7 @@ describe('release vetoes', () => {
     expect(compiled.vetoes.map((veto) => veto.id)).toContain('ASSET_WITHOUT_LICENSE');
     const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
     try {
-      await expect(writeReleaseBundle(compiled, root, { approvedVersionId: 'v0' })).rejects.toBeInstanceOf(ReleaseVetoError);
+      await expect(writeReleaseBundle(compiled, root)).rejects.toBeInstanceOf(ReleaseVetoError);
       expect(await readdir(root)).toEqual([]);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
@@ -132,7 +132,7 @@ describe('release vetoes', () => {
     expect(compiled.vetoes.map((veto) => veto.id)).toContain('SECRET_IN_BUNDLE');
     const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
     try {
-      await expect(writeReleaseBundle(compiled, root, { approvedVersionId: 'v0' })).rejects.toThrow(/SECRET_IN_BUNDLE/);
+      await expect(writeReleaseBundle(compiled, root)).rejects.toThrow(/SECRET_IN_BUNDLE/);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -263,8 +263,8 @@ describe('immutable content-addressed bundle', () => {
     const rootA = await mkdtemp(join(tmpdir(), 'pwb-release-a-'));
     const rootB = await mkdtemp(join(tmpdir(), 'pwb-release-b-'));
     try {
-      const manifestA = await writeReleaseBundle(first, rootA, { approvedVersionId: 'v-approved' });
-      const manifestB = await writeReleaseBundle(second, rootB, { approvedVersionId: 'v-approved' });
+      const manifestA = await writeReleaseBundle(first, rootA);
+      const manifestB = await writeReleaseBundle(second, rootB);
       expect(manifestA.directory.endsWith(first.digest)).toBe(true);
       expect(await readBundleHashes(manifestA)).toEqual(await readBundleHashes(manifestB));
       expect({ ...manifestA, directory: '' }).toEqual({ ...manifestB, directory: '' });
@@ -280,15 +280,39 @@ describe('immutable content-addressed bundle', () => {
     expect(changed.digest).not.toBe(base.digest);
   });
 
-  it('refuses to rewrite an existing bundle with a different manifest', async () => {
+  it('publishes the same bytes twice and refuses a manifest that stopped describing them', async () => {
+    const compiled = compileFixture();
+    const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
+    const manifestPath = join(root, compiled.digest, 'manifest.json');
+    try {
+      // The manifest names no document and no publication, so a second write of
+      // the same release is an idempotent success rather than a collision.
+      const first = await writeReleaseBundle(compiled, root);
+      const raw = await readFile(manifestPath, 'utf8');
+      expect(JSON.parse(raw)).not.toHaveProperty('approvedVersionId');
+      expect(JSON.parse(raw)).not.toHaveProperty('irHash');
+      await expect(writeReleaseBundle(compiled, root)).resolves.toEqual(first);
+      expect(await readFile(manifestPath, 'utf8')).toBe(raw);
+
+      await writeFile(manifestPath, JSON.stringify({ digest: compiled.digest, files: [] }), 'utf8');
+      await expect(writeReleaseBundle(compiled, root)).rejects.toThrow(/never rewritten/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('keeps every publication of one bundle in the release record beside it', async () => {
     const compiled = compileFixture();
     const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
     try {
-      await writeReleaseBundle(compiled, root, { approvedVersionId: 'v-alpha' });
-      await expect(writeReleaseBundle(compiled, root, { approvedVersionId: 'v-beta' })).rejects.toThrow(/never rewritten/);
-      const raw = await readFile(join(root, compiled.digest, 'manifest.json'), 'utf8');
-      expect(JSON.parse(raw).approvedVersionId).toBe('v-alpha');
-      await writeReleaseBundle(compiled, root, { approvedVersionId: 'v-alpha' });
+      await writeReleaseBundle(compiled, root);
+      const entry = { digest: compiled.digest, approvedVersionId: 'v-approved', releasedVersionId: 'v-refined', irHash: compiled.irHash, approverRole: 'captain', rationale: 'Firefox não sobe aqui.', acceptedEscalations: ['Nenhuma execução Playwright em firefox.'] };
+      await appendReleasePublication(root, entry);
+      await appendReleasePublication(root, { ...entry, releasedVersionId: 'v-refined-again', rationale: 'Republicado com outra proveniência.' });
+      const record = await readReleasePublications(root, compiled.digest);
+      expect(record).toHaveLength(2);
+      expect(record[0]).toEqual(entry);
+      expect(record[1]?.releasedVersionId).toBe('v-refined-again');
+      // The record lives beside the bundle, never inside the immutable directory.
+      expect(await readdir(join(root, compiled.digest))).not.toContain(`${compiled.digest}.publications.json`);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
@@ -297,7 +321,7 @@ describe('immutable content-addressed bundle', () => {
     compiled.files.push({ path: '../escaped.html', contents: 'x', hash: 'x', bytes: 1 });
     const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
     try {
-      await expect(writeReleaseBundle(compiled, root, { approvedVersionId: 'v0' })).rejects.toThrow(/escapes the release bundle root/);
+      await expect(writeReleaseBundle(compiled, root)).rejects.toThrow(/escapes the release bundle root/);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

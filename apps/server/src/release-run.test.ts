@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
-import { compileRelease } from '@pwb/export';
+import { compileRelease, readReleasePublications } from '@pwb/export';
 import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { writeEvidenceArtifact } from '@pwb/stage-finalization';
@@ -115,20 +115,34 @@ describe('Gate 3 over the local API', () => {
 
     const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Firefox não sobe nesta máquina; aceito publicar com Chromium.' }) });
     expect(published.status).toBe(200);
-    expect(await readdir(releaseRoot)).toEqual([prepared.digest]);
-    // The manifest describes the release, never the act of publishing it, so the
-    // acceptance lives in the run's log and publishing the same bytes again works.
+    expect((await readdir(releaseRoot)).filter((entry) => !entry.endsWith('.json'))).toEqual([prepared.digest]);
+    // The manifest names no document and no publication, so the provenance and
+    // the acceptance live in the run's log and in the release record beside it.
     const manifest = JSON.parse(await readFile(join(releaseRoot, prepared.digest, 'manifest.json'), 'utf8')) as Record<string, unknown>;
-    expect(manifest.acceptance).toBeUndefined();
-    expect(manifest.approvedVersionId).toBe(prepared.versionId);
+    expect(manifest.approvedVersionId).toBeUndefined();
+    expect(manifest.irHash).toBeUndefined();
     const recorded = (await events(runId)).filter((event) => event.type === 'release.published');
     expect(recorded).toHaveLength(1);
     expect(recorded[0]!.payload).toMatchObject({ digest: prepared.digest, versionId: prepared.versionId, rationale: 'Firefox não sobe nesta máquina; aceito publicar com Chromium.' });
     expect(recorded[0]!.payload.escalations).toEqual(prepared.report.escalations);
+    expect(await readReleasePublications(releaseRoot, prepared.digest)).toEqual([{
+      digest: prepared.digest,
+      approvedVersionId: prepared.report.approvedVersionId,
+      releasedVersionId: prepared.versionId,
+      irHash: prepared.report.irHash,
+      approverRole: 'captain',
+      rationale: 'Firefox não sobe nesta máquina; aceito publicar com Chromium.',
+      acceptedEscalations: prepared.report.escalations,
+    }]);
 
+    // Publishing the same bytes again is an idempotent success that appends the
+    // second publication to the release record.
     const again = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Republicando os mesmos bytes.' }) });
     expect(again.status).toBe(200);
-    expect(await readdir(releaseRoot)).toEqual([prepared.digest]);
+    expect((await readdir(releaseRoot)).filter((entry) => !entry.endsWith('.json'))).toEqual([prepared.digest]);
+    const publications = await readReleasePublications(releaseRoot, prepared.digest);
+    expect(publications).toHaveLength(2);
+    expect(publications[1]?.rationale).toBe('Republicando os mesmos bytes.');
   });
 
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {
@@ -173,12 +187,27 @@ describe('Gate 3 over the local API', () => {
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     const snapshot = await run.approve('finalization', 'captain');
     const approval = snapshot.approvals.find((entry) => entry.stage === 'finalization' && entry.decision === 'approved')!;
-    const manifest = JSON.parse(await readFile(join(exportRoot, snapshot.exportManifest!.digest, 'manifest.json'), 'utf8')) as { approvedVersionId: string };
-    // The approval, the manifest and the published bytes all name one version.
+    // The approval, the release record and the published bytes all name one version.
     expect(approval.versionId).toBe(prepared.versionId);
-    expect(manifest.approvedVersionId).toBe(prepared.versionId);
     expect(snapshot.exportManifest!.digest).toBe(prepared.digest);
+    const [publication] = await readReleasePublications(exportRoot, snapshot.exportManifest!.digest);
+    expect(publication?.releasedVersionId).toBe(prepared.versionId);
+    expect(publication?.approvedVersionId).toBe(prepared.report.approvedVersionId);
     expect(await readFile(join(exportRoot, snapshot.exportManifest!.digest, 'proof', 'index.html'), 'utf8')).toContain(edited);
+  });
+
+  it('closes Gate 3 again when the captain rejects the finalization proposal', async () => {
+    const { origin, runId, run, releaseRoot } = await harness();
+    await run.reject('finalization', 'captain');
+    const refused = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: string }).error).toMatch(/etapa de finalização ainda não produziu/);
+    await expect(readdir(releaseRoot)).rejects.toThrow();
+
+    // Re-running the stage produces a new version, and Gate 3 compiles that one.
+    await run.runNext();
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(prepared.report.approvedVersionId).toBe(run.snapshot().currentVersion.id);
   });
 
   it('refuses to publish for anyone but the captain', async () => {

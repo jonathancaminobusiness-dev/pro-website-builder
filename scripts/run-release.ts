@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   let bundle: string | undefined;
   let refused: string | undefined;
   try {
-    bundle = (await writeReleaseBundle(result.compiled, releaseRoot, { approvedVersionId: result.version.id })).directory;
+    bundle = (await writeReleaseBundle(result.compiled, releaseRoot)).directory;
   } catch (error) {
     if (!(error instanceof ReleaseVetoError)) throw error;
     refused = error.message;

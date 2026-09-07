@@ -317,7 +317,7 @@ describe('phase 0 fixture run', () => {
 
   it('cancels before apply and restarts from the same immutable revision', async () => {
     const db = openDatabase(':memory:');
-    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: '/tmp/pwb-fixture-test', provider: new FakeModelProvider() });
+    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-restart-')), 'exports'), provider: new FakeModelProvider() });
     await run.initialize('run-2');
     const rootId = run.snapshot().currentVersion.id;
     await run.cancel();

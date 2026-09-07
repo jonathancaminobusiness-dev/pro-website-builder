@@ -7,3 +7,4 @@ export * from './fonts.js';
 export * from './html-scan.js';
 export * from './licenses.js';
 export * from './metadata.js';
+export * from './record.js';

@@ -44,8 +44,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * looking at, so a release that moved cannot be published by mistake.
  *
  * A gap the gate could not decide — a missing engine, an unresolved placeholder
- * — does not block, but publishing over it takes a written reason that the
- * bundle's manifest keeps.
+ * — does not block, but publishing over it takes a written reason, kept in the
+ * run's log and in the release record beside the bundle.
  */
 export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null; apiOrigin: string }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<ReleaseSnapshot | null>(null);
@@ -137,7 +137,7 @@ export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null;
             ? <p className="empty">Nada em aberto além da própria decisão.</p>
             : <><ul>{report.escalations.map((line) => <li key={line}>{line}</li>)}</ul>
                 <label className="acceptance">
-                  <span>Aceitação do capitão, gravada no manifesto do release</span>
+                  <span>Aceitação do capitão, gravada no histórico da execução e no registro do release</span>
                   <textarea value={rationale} onChange={(event) => setRationale(event.target.value)} placeholder="Por que estes pontos podem ser aceitos neste release?" rows={3} />
                 </label></>}
         </div>
