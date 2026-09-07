@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { createFixtureIR } from '../packages/domain/src/index.js';
 import { lintDesign } from '../packages/linter/src/index.js';
 import { Applier, PatchGate, Scheduler, VersionStore } from '../packages/orchestrator/src/index.js';
-import { RenderHub } from '../packages/render-hub/src/index.js';
+import { RENDER_VIEWPORTS, RenderHub } from '../packages/render-hub/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 import {
   ClaudeCritiqueRunner, ClaudeInformationArchitect, ClaudeSectionComposer,
@@ -17,6 +17,8 @@ import { createPreviewServer } from '../apps/server/src/preview.js';
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
 const claude = process.env.PWB_MODEL_PROVIDER === 'claude-code';
 const useBrowser = process.argv.includes('--render');
+// A finalist is worth the full sweep; a revision under review is measured at the representative widths.
+const fullMatrix = process.argv.includes('--full-matrix');
 
 async function main(): Promise<void> {
   const store = new VersionStore();
@@ -30,7 +32,7 @@ async function main(): Promise<void> {
   const cacheDir = process.env.PWB_RENDER_CACHE ?? await mkdtemp(join(tmpdir(), 'pwb-prototype-render-'));
 
   const evidence: EvidenceSource = useBrowser
-    ? new RenderHubEvidenceSource({ hub: new RenderHub({ cacheDir }), baseUrl: `http://127.0.0.1:${port}`, previewPrefix: (versionId) => `/preview/${versionId}` })
+    ? new RenderHubEvidenceSource({ hub: new RenderHub({ cacheDir }), baseUrl: `http://127.0.0.1:${port}`, previewPrefix: (versionId) => `/preview/${versionId}`, ...(fullMatrix ? { viewports: RENDER_VIEWPORTS } : {}) })
     : new DerivedEvidenceSource();
   const critique: CritiqueProvider = claude ? new ClaudeCritiqueRunner() : new FakeCritiqueProvider();
 
@@ -47,6 +49,7 @@ async function main(): Promise<void> {
       runId: outcome.runId,
       provider: claude ? 'claude-code' : 'fake',
       evidence: useBrowser ? 'render-hub' : 'derived',
+      matrix: fullMatrix ? 'full' : 'representative',
       routes: outcome.manifest.routes.map((route) => route.route),
       versions: { base: outcome.baseVersionId, architect: outcome.architectVersionId, composition: outcome.compositionVersionId, reviewed: outcome.versionId },
       cycles: outcome.cycles.length,

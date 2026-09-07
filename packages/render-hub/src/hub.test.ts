@@ -1,7 +1,9 @@
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { renderDesign } from '@pwb/renderer';
-import { cacheKey, createRenderCases, evaluateQa } from './index.js';
+import { assertBrowserInstalled, cacheKey, createRenderCases, evaluateQa } from './index.js';
 
 describe('render hub', () => {
   it('enumerates the phase 0 responsive and state matrix', () => {
@@ -13,6 +15,10 @@ describe('render hub', () => {
       { route: `/preview/${ir.meta.versionId}/`, width: 360, state: 'reduced', reducedMotion: true },
       { route: `/preview/${ir.meta.versionId}/proof`, width: 1440, state: 'default', reducedMotion: false },
     ]));
+  });
+
+  it('names the install command when Playwright has no browser to measure with', () => {
+    expect(() => assertBrowserInstalled(join(tmpdir(), 'pwb-chromium-that-is-not-installed'))).toThrow(/playwright install chromium/);
   });
 
   it('uses a content-addressed render cache key and deterministic QA checks', () => {

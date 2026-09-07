@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
@@ -38,6 +39,16 @@ function axeSource(): Promise<string> {
 }
 
 interface AxeResult { violations: Array<{ id: string; impact: string | null; help: string; nodes: Array<{ target: string[] }> }>; }
+
+/**
+ * Playwright ships no browser of its own, so the binary is fetched by a separate install step. Every
+ * measured path depends on it, and this says so in one sentence instead of letting `chromium.launch()`
+ * fail deep inside a capture.
+ */
+export function assertBrowserInstalled(executablePath: string = chromium.executablePath()): void {
+  if (existsSync(executablePath)) return;
+  throw new Error(`Playwright has no Chromium at ${executablePath}. Run \`corepack pnpm exec playwright install chromium\` and start again.`);
+}
 
 export class RenderHub {
   private readonly maxConcurrency: number;

@@ -25,6 +25,9 @@ export async function handlePrototypeRequest(registry: PrototypeRunRegistry, req
     return { status: 201, payload: await registry.create(runId) };
   }
 
+  // Every run this server holds, so a review whose tab was closed mid-measurement is reachable again.
+  if (request.method === 'GET' && pathname === '/api/prototype/runs') return { status: 200, payload: { runs: registry.list() } };
+
   const match = /^\/api\/prototype\/runs\/([^/]+)(?:\/(decision|gate))?$/.exec(pathname);
   if (!match) return undefined;
   const runId = decodeURIComponent(match[1]!);

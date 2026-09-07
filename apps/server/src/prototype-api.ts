@@ -25,9 +25,22 @@ export interface IssueDecisionRecord {
   createdAt: string;
 }
 
-/** Everything the Gate 2 screen needs to compare A with B and record what the captain decided. */
-export interface Gate2Snapshot {
+export type PrototypeRunStatus = 'running' | 'settled' | 'failed';
+
+/** Where a run is right now. A start request returns this immediately; the list endpoint returns only this. */
+export interface PrototypeRunProgress {
   runId: string;
+  status: PrototypeRunStatus;
+  /** The last stage event, as the machine name the event log stores. */
+  step: string;
+  detail: string;
+  startedAt: string;
+  updatedAt: string;
+  error?: string;
+}
+
+/** Everything the Gate 2 screen needs to compare A with B and record what the captain decided. */
+export interface Gate2Result {
   stopReason: PrototypeStageOutcome['stopReason'];
   stopDetail: string;
   gate: PrototypeStageOutcome['gate'];
@@ -48,12 +61,32 @@ export interface Gate2Snapshot {
   approval?: Approval;
 }
 
+/** The run as the Gate 2 screen polls it: progress always, the review once the stage settled. */
+export interface Gate2Snapshot extends PrototypeRunProgress {
+  result?: Gate2Result;
+}
+
 interface PrototypeRunRecord {
   runId: string;
   store: VersionStore;
-  outcome: PrototypeStageOutcome;
+  progress: PrototypeRunProgress;
+  outcome?: PrototypeStageOutcome;
   decisions: IssueDecisionRecord[];
   approval?: Approval;
+}
+
+/** One sentence per stage event, so a run that takes minutes says what it is doing. */
+function describeStep(type: string, payload: Record<string, unknown>): string {
+  const list = (value: unknown): string => Array.isArray(value) ? value.join(', ') : '';
+  if (type === 'prototype.manifest.applied') return `Arquitetura de informação pronta: ${list(payload.routes)}.`;
+  if (type === 'prototype.sections.applied') return `Seções compostas em paralelo: ${list(payload.sections)}.`;
+  if (type === 'prototype.qa.gate') return `QA determinístico medido no navegador: ${Array.isArray(payload.vetoes) ? payload.vetoes.length : 0} veto(s).`;
+  if (type === 'prototype.cycle.decided') return `Ciclo ${String(payload.cycle)}: ${String(payload.reason)}.`;
+  if (type === 'prototype.refine.applied') return `Ciclo ${String(payload.cycle)}: reparo causal aplicado.`;
+  if (type === 'prototype.refine.refused') return `Ciclo ${String(payload.cycle)}: reparo recusado.`;
+  if (type === 'prototype.critic.unavailable') return `Um crítico não entregou relatório: ${String(payload.reason)}.`;
+  if (type === 'prototype.stage.settled') return `Etapa concluída: ${String(payload.stopReason)}.`;
+  return type;
 }
 
 export interface PrototypeRegistryOptions {
@@ -72,20 +105,28 @@ export interface PrototypeRegistryOptions {
  */
 export class PrototypeRunRegistry {
   private readonly runs = new Map<string, PrototypeRunRecord>();
-  /** Every version store this registry owns, registered before the stage runs so the RenderHub can read a revision mid-run. */
-  private readonly stores = new Map<string, VersionStore>();
   private readonly rendered = new Map<string, RenderedDocument>();
 
   constructor(private readonly options: PrototypeRegistryOptions) {}
 
-  has(runId: string): boolean { return this.stores.has(runId); }
+  has(runId: string): boolean { return this.runs.has(runId); }
 
+  /**
+   * Starts a run and answers at once with its id and progress. Measuring the capture matrix takes
+   * minutes, so the stage runs on its own and the screen polls it; a reload never loses the run.
+   */
   async create(runId: string): Promise<Gate2Snapshot> {
-    if (this.stores.has(runId)) throw new Error(`Run ${runId} already exists.`);
+    if (this.runs.has(runId)) throw new Error(`Run ${runId} already exists.`);
     const store = new VersionStore();
-    this.stores.set(runId, store);
     const applier = new Applier(store, new PatchGate());
     const base = applier.createRoot((this.options.seed ?? createFixtureIR)());
+    const startedAt = new Date().toISOString();
+    const record: PrototypeRunRecord = {
+      runId, store, decisions: [],
+      progress: { runId, status: 'running', step: 'prototype.run.started', detail: 'Execução aceita; compondo o protótipo.', startedAt, updatedAt: startedAt },
+    };
+    this.runs.set(runId, record);
+
     const claude = this.options.modelProvider === 'claude-code';
     const critique: CritiqueProvider = claude ? new ClaudeCritiqueRunner() : new FakeCritiqueProvider();
     const stage = new PrototypeStage({
@@ -96,19 +137,24 @@ export class PrototypeRunRegistry {
       critique,
       evidence: this.options.evidence,
       brief: BRIEF,
-      onEvent: (type, payload) => this.options.repository.appendEvent({ id: randomUUID(), runId, type, payload }),
+      onEvent: (type, payload) => {
+        record.progress = { ...record.progress, step: type, detail: describeStep(type, payload), updatedAt: new Date().toISOString() };
+        return this.options.repository.appendEvent({ id: randomUUID(), runId, type, payload });
+      },
     });
-    let outcome: PrototypeStageOutcome;
-    try { outcome = await stage.run({ runId, baseVersionId: base.id }); }
-    catch (error) { this.stores.delete(runId); throw error; }
-    const record: PrototypeRunRecord = { runId, store, outcome, decisions: [] };
-    this.runs.set(runId, record);
+    await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.started', payload: { runId, baseVersionId: base.id } });
+    void this.execute(record, stage, base.id);
     return this.snapshot(record);
   }
 
   get(runId: string): Gate2Snapshot | undefined {
     const record = this.runs.get(runId);
     return record ? this.snapshot(record) : undefined;
+  }
+
+  /** Every run this server holds, newest first, so a run whose tab was closed is still reachable. */
+  list(): PrototypeRunProgress[] {
+    return [...this.runs.values()].map((record) => record.progress).sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : 0));
   }
 
   /**
@@ -118,14 +164,25 @@ export class PrototypeRunRegistry {
   preview(versionId: string): RenderedDocument | undefined {
     const cached = this.rendered.get(versionId);
     if (cached) return cached;
-    for (const store of this.stores.values()) {
-      const version = store.get(versionId);
+    for (const record of this.runs.values()) {
+      const version = record.store.get(versionId);
       if (!version) continue;
       const document = renderDesign(version.ir);
       this.rendered.set(versionId, document);
       return document;
     }
     return undefined;
+  }
+
+  private async execute(record: PrototypeRunRecord, stage: PrototypeStage, baseVersionId: string): Promise<void> {
+    try {
+      record.outcome = await stage.run({ runId: record.runId, baseVersionId });
+      record.progress = { ...record.progress, status: 'settled', detail: record.outcome.stopDetail, updatedAt: new Date().toISOString() };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'A etapa de protótipo falhou.';
+      record.progress = { ...record.progress, status: 'failed', step: 'prototype.run.failed', detail: message, error: message, updatedAt: new Date().toISOString() };
+      await this.options.repository.appendEvent({ id: randomUUID(), runId: record.runId, type: 'prototype.run.failed', payload: { error: message } }).catch(() => undefined);
+    }
   }
 
   async decide(runId: string, input: { findingId: string; decision: IssueDecision; rationale: string }): Promise<Gate2Snapshot> {
@@ -156,13 +213,14 @@ export class PrototypeRunRegistry {
     return this.snapshot(record);
   }
 
-  private require(runId: string): PrototypeRunRecord {
+  private require(runId: string): PrototypeRunRecord & { outcome: PrototypeStageOutcome } {
     const record = this.runs.get(runId);
     if (!record) throw new Error(`Run ${runId} was not found.`);
-    return record;
+    if (!record.outcome) throw new Error(`Run ${runId} is still ${record.progress.status === 'failed' ? 'unfinished' : 'running'}; there is nothing to decide yet.`);
+    return record as PrototypeRunRecord & { outcome: PrototypeStageOutcome };
   }
 
-  private issues(record: PrototypeRunRecord): Array<Finding & { applied: boolean; refusal?: string }> {
+  private issues(record: PrototypeRunRecord & { outcome: PrototypeStageOutcome }): Array<Finding & { applied: boolean; refusal?: string }> {
     const applied = new Set(record.outcome.cycles.flatMap((cycle) => cycle.appliedFindingIds));
     const refusals = new Map(record.outcome.rejectedRepairs.map((entry) => [entry.findingId, entry.reason]));
     return record.outcome.reports.flatMap((report) => report.projection.findings).map((finding) => ({
@@ -171,11 +229,15 @@ export class PrototypeRunRegistry {
   }
 
   private snapshot(record: PrototypeRunRecord): Gate2Snapshot {
+    if (!record.outcome) return { ...record.progress };
+    return { ...record.progress, result: this.result(record as PrototypeRunRecord & { outcome: PrototypeStageOutcome }) };
+  }
+
+  private result(record: PrototypeRunRecord & { outcome: PrototypeStageOutcome }): Gate2Result {
     const { outcome } = record;
     const ir = record.store.get(outcome.versionId)!.ir;
     const repaired = outcome.versionId !== outcome.compositionVersionId;
     return {
-      runId: record.runId,
       stopReason: outcome.stopReason,
       stopDetail: outcome.stopDetail,
       gate: outcome.gate,

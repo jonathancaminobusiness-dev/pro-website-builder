@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -20,7 +20,7 @@ function createLowContrastIR(): DesignIR {
   return ir;
 }
 
-interface Harness { origin: string; close: () => Promise<void>; }
+interface Harness { origin: string; cacheDir: string; close: () => Promise<void>; }
 
 /**
  * The same wiring `startServer` uses: the registry's evidence is measured by the RenderHub against the
@@ -28,6 +28,7 @@ interface Harness { origin: string; close: () => Promise<void>; }
  */
 async function harness(seed?: () => DesignIR): Promise<Harness> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-measured-'));
+  const cacheDir = join(dir, 'cache');
   const database = openDatabase(join(dir, 'gate2.sqlite'));
   const holder: { registry?: PrototypeRunRegistry } = {};
   const preview = createPreviewServer((versionId) => holder.registry?.preview(versionId), 0);
@@ -36,7 +37,7 @@ async function harness(seed?: () => DesignIR): Promise<Harness> {
   holder.registry = new PrototypeRunRegistry({
     repository: new ProjectRepository(database),
     evidence: new RenderHubEvidenceSource({
-      hub: new RenderHub({ cacheDir: join(dir, 'cache') }),
+      hub: new RenderHub({ cacheDir }),
       baseUrl: `http://127.0.0.1:${previewPort}`,
       previewPrefix: (versionId) => `/preview/${versionId}`,
     }),
@@ -50,6 +51,7 @@ async function harness(seed?: () => DesignIR): Promise<Harness> {
   const { port } = api.address() as AddressInfo;
   return {
     origin: `http://127.0.0.1:${port}`,
+    cacheDir,
     close: async () => {
       await preview.close();
       await new Promise<void>((resolve, reject) => api.close((error) => error ? reject(error) : resolve()));
@@ -68,19 +70,36 @@ async function post(origin: string, path: string, body: Record<string, unknown>)
   return { status: response.status, payload: await response.json() as Gate2Snapshot & { error?: string } };
 }
 
+/** A measured run answers immediately and keeps working; the screen polls it exactly like this. */
+async function settled(origin: string, runId: string): Promise<Gate2Snapshot> {
+  const deadline = Date.now() + 240_000;
+  while (Date.now() < deadline) {
+    const snapshot = await (await fetch(`${origin}/api/prototype/runs/${runId}`)).json() as Gate2Snapshot;
+    if (snapshot.status !== 'running') return snapshot;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Run ${runId} never settled.`);
+}
+
 test.describe('Gate 2 runs on measured evidence', () => {
   test.setTimeout(300_000);
 
-  test('takes the three-route prototype through Tier 0 without a veto', async () => {
+  test('takes the three-route prototype through Tier 0 without a veto, at the representative widths', async () => {
     const api = await harness();
     try {
       const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'measured-clean' });
       expect(created.status).toBe(201);
-      expect(created.payload.qa.filter((check) => check.severity === 'veto')).toEqual([]);
-      expect(created.payload.gate).toBe('needs_review');
-      // Every check was written from a real capture, so the matrix really was walked.
-      expect(created.payload.qa.length + created.payload.reports.length).toBeGreaterThan(0);
-      expect(created.payload.stopReason).toBe('clean');
+      expect(created.payload.status).toBe('running');
+
+      const result = (await settled(api.origin, 'measured-clean')).result!;
+      expect(result.qa.filter((check) => check.severity === 'veto')).toEqual([]);
+      expect(result.gate).toBe('needs_review');
+      expect(result.stopReason).toBe('clean');
+
+      // One screenshot per capture landed in the content-addressed cache: three widths per state and
+      // route, and nothing wider, which is what a revision under review is worth.
+      const screenshots = (await readdir(api.cacheDir)).filter((entry) => entry.endsWith('.evidence.png'));
+      expect(screenshots).toHaveLength(result.routes.length * 3 * result.states.length);
     } finally { await api.close(); }
   });
 
@@ -89,15 +108,16 @@ test.describe('Gate 2 runs on measured evidence', () => {
     try {
       const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'measured-contrast' });
       expect(created.status).toBe(201);
+      const result = (await settled(api.origin, 'measured-contrast')).result!;
 
-      const contrast = created.payload.qa.filter((check) => check.id === 'QA0-CONTRAST');
+      const contrast = result.qa.filter((check) => check.id === 'QA0-CONTRAST');
       expect(contrast.length).toBeGreaterThan(0);
       expect(contrast.every((check) => check.severity === 'veto')).toBe(true);
       expect(contrast[0]!.nodeIds.length).toBeGreaterThan(0);
-      expect(created.payload.gate).toBe('vetoed');
-      expect(created.payload.stopReason).toBe('tier0_veto');
+      expect(result.gate).toBe('vetoed');
+      expect(result.stopReason).toBe('tier0_veto');
       // The deterministic veto came before any critic ran.
-      expect(created.payload.reports).toEqual([]);
+      expect(result.reports).toEqual([]);
 
       const approval = await post(api.origin, '/api/prototype/runs/measured-contrast/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Quero aprovar assim mesmo.' });
       expect(approval.status).toBe(409);

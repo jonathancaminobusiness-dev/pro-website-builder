@@ -6,7 +6,7 @@ import { expect, test } from '@playwright/test';
 import { createFixtureIR } from '../../packages/domain/src/index.js';
 import { Applier, PatchGate, Scheduler, VersionStore } from '../../packages/orchestrator/src/index.js';
 import { runQa, runTier0 } from '../../packages/qa-deterministic/src/index.js';
-import { RenderHub, createTier1Matrix } from '../../packages/render-hub/src/index.js';
+import { RenderHub, createRepresentativeMatrix } from '../../packages/render-hub/src/index.js';
 import { renderDesign } from '../../packages/renderer/src/index.js';
 import {
   DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
@@ -41,7 +41,7 @@ test.describe('render hub evidence', () => {
       const source = new RenderHubEvidenceSource({ hub, baseUrl: `http://127.0.0.1:${port}`, previewPrefix: (versionId) => `/preview/${versionId}` });
       const bundle = await source.collect({ ir: version.ir, versionId: version.id, tier: 1, routes: ['/'] });
 
-      expect(bundle.evidence).toHaveLength(createTier1Matrix(version.ir, { routes: ['/'] }).length);
+      expect(bundle.evidence).toHaveLength(createRepresentativeMatrix(version.ir, { routes: ['/'] }).length);
       const widths = new Set(bundle.evidence.map((entry) => entry.context.viewport));
       expect(widths).toEqual(new Set([390, 768, 1440]));
       expect(new Set(bundle.evidence.map((entry) => entry.context.state))).toEqual(new Set(['default', 'empty', 'error', 'focus', 'loading', 'reduced']));

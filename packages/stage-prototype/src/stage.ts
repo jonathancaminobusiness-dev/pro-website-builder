@@ -95,7 +95,7 @@ export class PrototypeStage {
 
     while (decision.proceed) {
       const cycle = cycles.length + 1;
-      const bundle = await this.options.evidence.collect({ ir: current.ir, versionId: current.id, tier: 1, ...(input.signal ? { signal: input.signal } : {}) });
+      const bundle = await this.options.evidence.collect({ ir: current.ir, versionId: current.id, ...(input.signal ? { signal: input.signal } : {}) });
       qa = runQa({ ir: current.ir, evidence: bundle.evidence });
       if (qa.vetoes.length > 0) {
         cycles.push(summariseCycle({ cycle, versionId: current.id, qaIssueHash: qa.issueHash, vetoes: qa.vetoes.length, reports: [], plan: { accepted: [], rejected: [] } }));
@@ -248,7 +248,7 @@ export class PrototypeStage {
    * from the same evidence and the human gate needs to see them.
    */
   private async gateReport(version: VersionRecord, signal?: AbortSignal): Promise<QaReport> {
-    const bundle = await this.options.evidence.collect({ ir: version.ir, versionId: version.id, tier: 0, ...(signal ? { signal } : {}) });
+    const bundle = await this.options.evidence.collect({ ir: version.ir, versionId: version.id, ...(signal ? { signal } : {}) });
     const report = runQa({ ir: version.ir, evidence: bundle.evidence });
     await this.record('prototype.qa.gate', { versionId: version.id, passed: report.passed, vetoes: report.vetoes.map((check) => check.id), observations: report.checks.length - report.vetoes.length });
     return report;

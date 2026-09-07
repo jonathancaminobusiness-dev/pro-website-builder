@@ -70,9 +70,19 @@ test.describe('Gate 2 review screen', () => {
 
     await page.getByRole('button', { name: 'Executar a etapa de protótipo' }).click();
 
+    // The start request answers at once with the run id, which the URL keeps while the stage measures.
+    await expect(page).toHaveURL(/#\/gate-2\/gate2-\d+$/, { timeout: 30_000 });
+    await expect(page.getByRole('status')).not.toBeEmpty();
+    const reviewUrl = page.url();
+
     const compare = page.locator('.compare');
-    // The run measures the whole capture matrix in a real browser before it answers.
+    // The run measures every declared state at the representative widths in a real browser.
     await expect(compare).toBeVisible({ timeout: 240_000 });
+
+    // A reload finds the same run: the review is addressable, not held in a tab's memory.
+    await page.reload();
+    expect(page.url()).toBe(reviewUrl);
+    await expect(compare).toBeVisible({ timeout: 30_000 });
 
     // A and B are always both offered, at the same route and the same width.
     const frames = page.locator('.compare iframe');
@@ -118,6 +128,7 @@ test.describe('Gate 2 review screen', () => {
     try {
       await page.goto('/#/gate-2');
       await page.getByRole('button', { name: 'Executar a etapa de protótipo' }).click();
+      await expect(page).toHaveURL(/#\/gate-2\/gate2-\d+$/, { timeout: 30_000 });
       await expect(page.locator('.compare')).toBeVisible({ timeout: 60_000 });
 
       // A repair was applied, so the two sides really are two different revisions.
@@ -146,5 +157,21 @@ test.describe('Gate 2 review screen', () => {
     await expect(page.getByRole('button', { name: 'Executar a etapa de protótipo' })).toBeVisible();
     await page.getByRole('link', { name: '← pipeline' }).click();
     await expect(page.getByRole('heading', { name: 'Compilador de identidade' })).toBeVisible();
+  });
+
+  test('lists the runs this server holds, so a review whose tab was closed is reachable', async ({ page }) => {
+    const close = await serveSeededRun(page);
+    try {
+      await page.goto('/#/gate-2');
+      await page.getByRole('button', { name: 'Executar a etapa de protótipo' }).click();
+      await expect(page.locator('.compare')).toBeVisible({ timeout: 60_000 });
+      const runId = new URL(page.url()).hash.split('/').pop()!;
+
+      // The captain closes the review and comes back to the entry screen.
+      await page.goto('/#/gate-2');
+      await expect(page.locator('.gate2-runs')).toBeVisible();
+      await page.locator(`.gate2-runs a[href$="${runId}"]`).click();
+      await expect(page.locator('.compare')).toBeVisible({ timeout: 30_000 });
+    } finally { await close(); }
   });
 });

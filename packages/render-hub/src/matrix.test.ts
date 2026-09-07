@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
-import { conditionFor, createRenderMatrix, createTier1Matrix, readStateConditions, renderColorSchemes, RENDER_VIEWPORTS, TIER1_VIEWPORTS } from './index.js';
+import { conditionFor, createRenderMatrix, createRepresentativeMatrix, readStateConditions, renderColorSchemes, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS } from './index.js';
 
 describe('render matrix', () => {
   it('covers every route at the six agreed widths for every declared state', () => {
@@ -14,8 +14,8 @@ describe('render matrix', () => {
   });
 
   it('narrows the Tier 1 loop to three representative widths', () => {
-    const cases = createTier1Matrix(createFixtureIR(), { routes: ['/'] });
-    expect(new Set(cases.map((entry) => entry.width))).toEqual(new Set(TIER1_VIEWPORTS));
+    const cases = createRepresentativeMatrix(createFixtureIR(), { routes: ['/'] });
+    expect(new Set(cases.map((entry) => entry.width))).toEqual(new Set(REPRESENTATIVE_VIEWPORTS));
     expect(cases.every((entry) => entry.route === '/')).toBe(true);
   });
 

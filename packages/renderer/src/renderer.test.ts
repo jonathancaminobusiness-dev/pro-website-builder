@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR } from '@pwb/domain';
+import { createFixtureIR, resolveTokens } from '@pwb/domain';
 import { renderDesign } from './index.js';
 
 /** Parses the emitted stylesheet into the container queries a browser would apply, widths in px. */
@@ -23,13 +23,25 @@ describe('deterministic renderer', () => {
     expect(result.html).not.toContain('<script');
   });
 
-  it('declares the query container on an ancestor of the element the breakpoint restyles', () => {
-    const css = renderDesign(createFixtureIR()).css;
-    const subject = /@container \(min-width: 48rem\) \{ ([a-z]+) \{/.exec(css)?.[1];
-    expect(subject).toBe('main');
+  it('opens the shell padding at the identity\'s widest declared breakpoint, on a container it does not own', () => {
+    const ir = createFixtureIR();
+    const shell = containerQueries(renderDesign(ir).css).filter((block) => block.selector === 'main');
+    // The identity declares where the layout may transform; the renderer never invents a width.
+    const declared = ir.identity.gridGrammar.breakpointTokens.map((reference) => String(resolveTokens(ir.identity.tokens).values[reference.slice(1, -1)]));
+    expect(shell).toHaveLength(1);
+    expect(shell[0]!.minWidthPx).toBe(960);
+    expect(declared).toContain('60rem');
+
+    const css = renderDesign(ir).css;
     const containers = [...css.matchAll(/([a-z]+) \{[^}]*container-type: inline-size/g)].map((match) => match[1]);
     expect(containers).toContain('body');
-    expect(containers).not.toContain(subject);
+    expect(containers).not.toContain('main');
+  });
+
+  it('refuses to render when the identity declares a breakpoint no token backs', () => {
+    const ir = createFixtureIR();
+    ir.identity.gridGrammar = { ...ir.identity.gridGrammar, breakpointTokens: ['{breakpoint.compact}', '{breakpoint.absent}'] };
+    expect(() => renderDesign(ir)).toThrow(/breakpoint\.absent/);
   });
 
   it('opens a container query at the identity breakpoint, so 1024 gets a rule 390 does not', () => {

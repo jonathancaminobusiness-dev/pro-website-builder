@@ -1,13 +1,12 @@
 import type { DesignIR } from '@pwb/domain';
-import { createCleanEvidence, type QaTier, type RenderEvidence } from '@pwb/qa-deterministic';
-import { createRenderMatrix, createTier1Matrix, readStateConditions, renderColorSchemes, type RenderHub } from '@pwb/render-hub';
+import { createCleanEvidence, type RenderEvidence } from '@pwb/qa-deterministic';
+import { createRenderMatrix, readStateConditions, renderColorSchemes, REPRESENTATIVE_VIEWPORTS, type RenderHub, type RenderViewport } from '@pwb/render-hub';
 import { renderDesign } from '@pwb/renderer';
 import type { CritiqueCapture } from './critics.js';
 
 export interface EvidenceRequest {
   ir: DesignIR;
   versionId: string;
-  tier: QaTier;
   routes?: string[];
   signal?: AbortSignal;
 }
@@ -18,17 +17,19 @@ export interface EvidenceSource {
   collect(request: EvidenceRequest): Promise<EvidenceBundle>;
 }
 
+function matrixOptions(request: EvidenceRequest, viewports: readonly RenderViewport[]): { routes?: string[]; viewports: readonly RenderViewport[] } {
+  return { ...(request.routes ? { routes: request.routes } : {}), viewports };
+}
+
 /**
- * The real source: it drives the RenderHub over the full matrix for Tier 0 and over the three
- * representative widths for the per-candidate Tier 1 loop, reusing the content-addressed cache.
+ * The real source: it drives the RenderHub over every declared route, state and colour scheme at the
+ * widths the request asks for, reusing the content-addressed cache.
  */
 export class RenderHubEvidenceSource implements EvidenceSource {
-  constructor(private readonly options: { hub: RenderHub; baseUrl: string; previewPrefix: (versionId: string) => string }) {}
+  constructor(private readonly options: { hub: RenderHub; baseUrl: string; previewPrefix: (versionId: string) => string; viewports?: readonly RenderViewport[] }) {}
 
   async collect(request: EvidenceRequest): Promise<EvidenceBundle> {
-    const cases = request.tier === 0
-      ? createRenderMatrix(request.ir, request.routes ? { routes: request.routes } : {})
-      : createTier1Matrix(request.ir, request.routes ? { routes: request.routes } : {});
+    const cases = createRenderMatrix(request.ir, matrixOptions(request, this.options.viewports ?? REPRESENTATIVE_VIEWPORTS));
     const captures = await this.options.hub.capture({
       ir: request.ir,
       rendered: renderDesign(request.ir),
@@ -51,8 +52,7 @@ export class RenderHubEvidenceSource implements EvidenceSource {
  */
 export class DerivedEvidenceSource implements EvidenceSource {
   async collect(request: EvidenceRequest): Promise<EvidenceBundle> {
-    const options = request.routes ? { routes: request.routes } : {};
-    const cases = request.tier === 0 ? createRenderMatrix(request.ir, options) : createTier1Matrix(request.ir, options);
+    const cases = createRenderMatrix(request.ir, matrixOptions(request, REPRESENTATIVE_VIEWPORTS));
     const conditions = new Map(readStateConditions(request.ir).map((condition) => [condition.state, condition]));
     const schemes = renderColorSchemes(request.ir);
     const evidence = cases.map((renderCase) => createCleanEvidence(request.ir, {

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type DesignIR } from '@pwb/domain';
 import { FakeModelProvider } from '@pwb/providers';
-import { DerivedEvidenceSource } from '@pwb/stage-prototype';
+import { DerivedEvidenceSource, type EvidenceSource } from '@pwb/stage-prototype';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
@@ -26,12 +26,12 @@ function createOffRhythmControlIR(): DesignIR {
   return ir;
 }
 
-async function harness(options: { seed?: () => DesignIR } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; close: () => Promise<void> }> {
+async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSource } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; close: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-'));
   const db = openDatabase(join(dir, 'gate2.sqlite'));
   const repository = new ProjectRepository(db);
   // Synthesized evidence keeps these unit tests browserless; the server itself only ever measures.
-  const registry = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), ...(options.seed ? { seed: options.seed } : {}) });
+  const registry = new PrototypeRunRegistry({ repository, evidence: options.evidence ?? new DerivedEvidenceSource(), ...(options.seed ? { seed: options.seed } : {}) });
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs, prototypes: registry,
@@ -52,6 +52,16 @@ async function post(origin: string, path: string, body: Record<string, unknown>,
   return { status: response.status, payload: await response.json() as Gate2Snapshot & { error?: string } };
 }
 
+/** The screen polls a run until it settles; so does every test that needs the review. */
+async function settled(origin: string, runId: string): Promise<Gate2Snapshot> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const snapshot = await (await fetch(`${origin}/api/prototype/runs/${runId}`)).json() as Gate2Snapshot;
+    if (snapshot.status !== 'running') return snapshot;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Run ${runId} never settled.`);
+}
+
 describe('Gate 2 API', () => {
   it('starts a prototype run only for the captain and returns everything the gate screen compares', async () => {
     const api = await harness();
@@ -60,32 +70,65 @@ describe('Gate 2 API', () => {
       expect(refused.status).toBe(403);
       expect(refused.payload.error).toContain('Only the captain');
 
+      // The start request answers at once with the id, because measuring takes minutes.
       const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run' });
       expect(created.status).toBe(201);
-      const snapshot = created.payload;
-      expect(snapshot.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
-      expect(snapshot.viewports).toEqual([320, 360, 390, 768, 1024, 1440]);
-      expect(snapshot.states).toEqual(['default', 'empty', 'error', 'focus', 'loading', 'reduced']);
-      expect(snapshot.gate).toBe('needs_review');
-      expect(snapshot.qa.filter((check) => check.severity === 'veto')).toEqual([]);
-      expect(snapshot.reports).toHaveLength(4);
-      expect(snapshot.before.versionId).toMatch(/^v-/);
-      expect(snapshot.cycles.length).toBeGreaterThan(0);
+      expect(created.payload.runId).toBe('gate2-run');
+      expect(created.payload.status).toBe('running');
+      expect(created.payload.result).toBeUndefined();
 
       const duplicate = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run' });
       expect(duplicate.status).toBe(409);
-
-      const fetched = await fetch(`${api.origin}/api/prototype/runs/gate2-run`);
-      expect((await fetched.json() as Gate2Snapshot).runId).toBe('gate2-run');
       expect((await fetch(`${api.origin}/api/prototype/runs/absent`)).status).toBe(404);
+
+      const snapshot = await settled(api.origin, 'gate2-run');
+      expect(snapshot.status).toBe('settled');
+      const result = snapshot.result!;
+      expect(result.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
+      expect(result.viewports).toEqual([320, 360, 390, 768, 1024, 1440]);
+      expect(result.states).toEqual(['default', 'empty', 'error', 'focus', 'loading', 'reduced']);
+      expect(result.gate).toBe('needs_review');
+      expect(result.qa.filter((check) => check.severity === 'veto')).toEqual([]);
+      expect(result.reports).toHaveLength(4);
+      expect(result.before.versionId).toMatch(/^v-/);
+      expect(result.cycles.length).toBeGreaterThan(0);
+    } finally { await api.close(); }
+  });
+
+  it('keeps a run reachable by id and in the list while it measures, so a closed tab does not lose it', async () => {
+    // The measurement is held open, so the run is observed mid-flight instead of by racing it.
+    let release = (): void => {};
+    const measuring = new Promise<void>((resolve) => { release = resolve; });
+    const slow: EvidenceSource = { collect: async (request) => { await measuring; return new DerivedEvidenceSource().collect(request); } };
+    const api = await harness({ evidence: slow });
+    try {
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-recover' });
+      expect(created.payload.status).toBe('running');
+      expect(created.payload.result).toBeUndefined();
+
+      // Nothing can be decided until the stage has actually produced a revision.
+      const early = await post(api.origin, '/api/prototype/runs/gate2-recover/gate', { approverRole: 'captain', decision: 'approved', rationale: 'cedo demais' });
+      expect(early.status).toBe(409);
+      expect(early.payload.error).toContain('running');
+
+      const listing = async (): Promise<Array<{ runId: string; status: string; detail: string }>> =>
+        ((await (await fetch(`${api.origin}/api/prototype/runs`)).json()) as { runs: Array<{ runId: string; status: string; detail: string }> }).runs;
+      expect(await listing()).toMatchObject([{ runId: 'gate2-recover', status: 'running' }]);
+
+      release();
+      expect((await settled(api.origin, 'gate2-recover')).status).toBe('settled');
+      const listed = await listing();
+      expect(listed).toMatchObject([{ runId: 'gate2-recover', status: 'settled' }]);
+      expect(listed.every((entry) => entry.detail !== '')).toBe(true);
     } finally { await api.close(); }
   });
 
   it('serves both sides of the comparison from the isolated preview origin', async () => {
     const api = await harness();
     try {
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-preview' });
-      for (const versionId of [created.payload.before.versionId, created.payload.after.versionId]) {
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-preview' });
+      const result = (await settled(api.origin, 'gate2-preview')).result!;
+      for (const versionId of [result.before.versionId, result.after.versionId]) {
         const document = api.registry.preview(versionId);
         expect(document?.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
       }
@@ -97,8 +140,8 @@ describe('Gate 2 API', () => {
     // Driven from a revision with a known defect, so the run always carries a finding to decide on.
     const api = await harness({ seed: createOffRhythmControlIR });
     try {
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-decide' });
-      const findingId = created.payload.issues[0]!.id;
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-decide' });
+      const findingId = (await settled(api.origin, 'gate2-decide')).result!.issues[0]!.id;
       const path = '/api/prototype/runs/gate2-decide/decision';
 
       expect((await post(api.origin, path, { approverRole: 'captain', findingId, decision: 'accepted', rationale: '  ' })).status).toBe(400);
@@ -107,22 +150,23 @@ describe('Gate 2 API', () => {
       expect((await post(api.origin, path, { approverRole: 'captain', findingId, decision: 'maybe', rationale: 'ok' })).status).toBe(400);
 
       const decided = await post(api.origin, path, { approverRole: 'captain', findingId, decision: 'deferred', rationale: 'Sem tempo de revisar agora.' });
-      expect(decided.payload.decisions).toHaveLength(1);
-      expect(decided.payload.decisions[0]).toMatchObject({ findingId, decision: 'deferred', rationale: 'Sem tempo de revisar agora.', reviewerRole: 'captain' });
+      expect(decided.payload.result!.decisions).toHaveLength(1);
+      expect(decided.payload.result!.decisions[0]).toMatchObject({ findingId, decision: 'deferred', rationale: 'Sem tempo de revisar agora.', reviewerRole: 'captain' });
     } finally { await api.close(); }
   });
 
   it('records the gate decision against the reviewed revision and keeps it captain-only', async () => {
     const api = await harness();
     try {
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-gate' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-gate' });
+      const created = await settled(api.origin, 'gate2-gate');
       const path = '/api/prototype/runs/gate2-gate/gate';
       expect((await post(api.origin, path, { approverRole: 'captain', decision: 'maybe', rationale: 'ok' })).status).toBe(400);
       expect((await post(api.origin, path, { approverRole: 'designer', decision: 'approved', rationale: 'ok' })).status).toBe(403);
 
       const approved = await post(api.origin, path, { approverRole: 'captain', decision: 'approved', rationale: 'Hierarquia e caráter aprovados.' });
       expect(approved.status).toBe(200);
-      expect(approved.payload.approval).toMatchObject({ decision: 'approved', versionId: created.payload.after.versionId, approverRole: 'captain', stage: 'prototype' });
+      expect(approved.payload.result!.approval).toMatchObject({ decision: 'approved', versionId: created.result!.after.versionId, approverRole: 'captain', stage: 'prototype' });
     } finally { await api.close(); }
   });
 
@@ -132,10 +176,16 @@ describe('Gate 2 API', () => {
     const repository = new ProjectRepository(db);
     try {
       const registry = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), seed: createOffRhythmControlIR });
-      const snapshot = await registry.create('gate2-events');
-      await registry.decide('gate2-events', { findingId: snapshot.issues[0]!.id, decision: 'accepted', rationale: 'Reparo causal aceito.' });
+      await registry.create('gate2-events');
+      let snapshot = registry.get('gate2-events')!;
+      for (let attempt = 0; attempt < 200 && snapshot.status === 'running'; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        snapshot = registry.get('gate2-events')!;
+      }
+      await registry.decide('gate2-events', { findingId: snapshot.result!.issues[0]!.id, decision: 'accepted', rationale: 'Reparo causal aceito.' });
       await registry.settle('gate2-events', { decision: 'approved', rationale: 'Aprovado.' });
       const types = (await repository.listEvents('gate2-events')).map((event) => event.type);
+      expect(types).toContain('prototype.run.started');
       expect(types).toContain('prototype.qa.gate');
       expect(types).toContain('prototype.stage.settled');
       expect(types).toContain('gate2.decided');

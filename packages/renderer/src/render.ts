@@ -69,6 +69,15 @@ function renderPage(page: Page, values: Record<string, string | number | boolean
   return `<main data-page-id="${escapeHtml(page.id)}" data-route="${escapeHtml(page.route)}">${body}</main>`;
 }
 
+/** The widest container width the identity declares as a breakpoint, as the literal a query can hold. */
+function expandedBreakpoint(identity: IdentitySpec, values: Record<string, string | number | boolean>): string {
+  const reference = identity.gridGrammar.breakpointTokens[identity.gridGrammar.breakpointTokens.length - 1]!;
+  const path = /^\{([^}]+)\}$/.exec(reference);
+  const literal = path ? values[path[1]!] : undefined;
+  if (literal === undefined) throw new Error(`The grid grammar breakpoint ${reference} is not a token the document defines.`);
+  return String(literal);
+}
+
 function breakpointPx(literal: string | number | boolean, nodeId: string): number {
   if (typeof literal === 'number') { if (Number.isFinite(literal)) return literal; throw new Error(`Responsive width is not a length: ${nodeId}.responsive ${String(literal)}`); }
   const size = typeof literal === 'string' ? /^(\d*\.?\d+)(px|rem|em)?$/.exec(literal.trim()) : null;
@@ -126,7 +135,8 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
   const bodyTypeface = roleVar(ir.identity, 'bodyTypeface', values);
   const baseSpacing = roleVar(ir.identity, 'baseSpacing', values);
   const sectionSpacing = roleVar(ir.identity, 'sectionSpacing', values);
-  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n  [hidden] { display: none !important; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderResponsive(ir, values)}\n}`;
+  const expanded = expandedBreakpoint(ir.identity, values);
+  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n  [hidden] { display: none !important; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: ${expanded}) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderResponsive(ir, values)}\n}`;
 }
 
 export function renderDesign(ir: DesignIR): RenderedDocument {

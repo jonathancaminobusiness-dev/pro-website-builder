@@ -32,11 +32,14 @@ Corepack supplies the pinned pnpm version; pnpm does not need to be installed gl
 
 ```bash
 corepack pnpm install
+corepack pnpm exec playwright install chromium
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
 corepack pnpm test:e2e
 ```
+
+Playwright ships no browser of its own and `pnpm install` does not fetch one. The Gate 2 gate measures every revision in a real browser, so the server refuses to start without that binary and says which command installs it.
 
 Run the deterministic fixture without starting the UI:
 
@@ -106,8 +109,9 @@ The `PatchPlanner` compiles at most three causal repairs per cycle, guards every
 Run the stage without the UI:
 
 ```bash
-corepack pnpm run:prototype            # deterministic evidence, no browser
-corepack pnpm run:prototype -- --render  # the real Playwright RenderHub
+corepack pnpm run:prototype                            # deterministic evidence, no browser
+corepack pnpm run:prototype -- --render                # the real Playwright RenderHub
+corepack pnpm run:prototype -- --render --full-matrix  # the finalist sweep, all six widths
 ```
 
 Both bind an ephemeral port, so several checkouts can run them at the same time.
@@ -115,6 +119,10 @@ Both bind an ephemeral port, so several checkouts can run them at the same time.
 The Gate 2 screen is at `http://127.0.0.1:5173/#/gate-2`. It compares the composed revision with the refined one on the same route at the same width, offers an overlay and a difference blend, keeps the deterministic gate and the critics' opinion in separate panels, and records accept, reject or defer with a reason for each issue before the captain settles the gate. Both sides are always shown: when the loop applied no repair the two are the same revision and the difference blend is empty, which is itself the answer.
 
 The server measures that verdict rather than assuming it. `startServer` hands the run registry a `RenderHubEvidenceSource` pointed at the isolated preview origin, so a Gate 2 run drives the real capture matrix through Playwright — contrast, focus, axe, overflow, clipping and stability are observed on a live page before any critic runs, and a Tier 0 veto blocks approval. The browser cache lives in `PWB_RENDER_CACHE` (default `.treehouse/render-cache`), so an unchanged revision is never recaptured. The synthesized `DerivedEvidenceSource` is a test-only stand-in; no server path can reach it.
+
+Both deterministic tiers measure every declared route, state and colour scheme at the three representative widths — 390, 768 and 1440 — because a revision under review is not worth six widths of browser time. The full `RENDER_VIEWPORTS` sweep (320/360/390/768/1024/1440) is for a finalist and is asked for explicitly: `corepack pnpm run:prototype -- --render --full-matrix`.
+
+Measuring takes minutes, so a run is asynchronous and recoverable. `POST /api/prototype/runs` records the run and answers at once with its id and status; the stage keeps working and every step it reaches is persisted as an event. `GET /api/prototype/runs/<id>` returns that progress and, once the stage settles, the whole review; `GET /api/prototype/runs` lists every run this server holds. The Studio keeps the id in the address (`#/gate-2/<runId>`) and polls it, so a reload — or a tab closed in the middle of a measurement — finds the same review instead of starting a second one.
 
 ## Real local Claude Code in the prototype stage
 

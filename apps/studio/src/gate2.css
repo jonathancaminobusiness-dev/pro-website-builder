@@ -89,5 +89,13 @@
   .gate2-issues { grid-column: auto; }
   .compare[data-columns="2"] { grid-template-columns: 1fr; }
 }
+.gate2-runs { margin-top: 24px; border-top: 1px solid #ddd4c9; padding-top: 18px; }
+.gate2-runs ul { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
+.gate2-runs li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.gate2-runs code { color: #a84f37; font-size: .74rem; }
+.gate2-runs small { color: #7b878c; font-size: .74rem; }
+.status-running { color: #6b5a2c; border-color: #ddc98e; background: #f6efd8; }
+.status-settled { color: #35624a; border-color: #a9c7b3; background: #e6efe7; }
+.status-failed { color: #8c3a2c; border-color: #c98d7c; background: #f8dfd3; }
 .gate2-checks { scrollbar-width: thin; }
 .gate2-checks li:last-child { padding-bottom: 2px; }

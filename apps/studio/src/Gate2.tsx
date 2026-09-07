@@ -20,8 +20,13 @@ interface Report {
   projection: { verdict: Verdict; rubric: Array<{ criterion: string; score: number; evidence: string }>; findings: Issue[] };
 }
 
-interface Snapshot {
-  runId: string; stopReason: string; stopDetail: string; gate: 'needs_review' | 'vetoed'; journey: string;
+interface Progress {
+  runId: string; status: 'running' | 'settled' | 'failed'; step: string; detail: string;
+  startedAt: string; updatedAt: string; error?: string;
+}
+
+interface Result {
+  stopReason: string; stopDetail: string; gate: 'needs_review' | 'vetoed'; journey: string;
   before: { versionId: string; label: string }; after: { versionId: string; label: string }; repaired: boolean;
   routes: Array<{ route: string; title: string }>; viewports: number[]; states: string[]; colorSchemes: Array<'light' | 'dark'>;
   qa: Array<{ id: string; tier: number; severity: string; title: string; message: string; nodeIds: string[] }>;
@@ -31,6 +36,17 @@ interface Snapshot {
   issues: Issue[];
   decisions: Array<{ findingId: string; decision: IssueDecision; rationale: string; createdAt: string }>;
   approval?: { decision: 'approved' | 'rejected'; rationale: string; versionId: string; createdAt: string };
+}
+
+interface Snapshot extends Progress { result?: Result }
+
+const GATE2_ROUTE = '#/gate-2';
+const POLL_INTERVAL_MS = 1500;
+
+/** The run under review is the one named in the URL, so a reload during a measurement finds it again. */
+function runIdFromHash(): string {
+  const hash = window.location.hash;
+  return hash.startsWith(`${GATE2_ROUTE}/`) ? decodeURIComponent(hash.slice(GATE2_ROUTE.length + 1)) : '';
 }
 
 const API_ORIGIN = import.meta.env.VITE_API_ORIGIN ?? 'http://127.0.0.1:4310';
@@ -52,6 +68,9 @@ const dimensionCopy: Record<string, string> = {
   'a11y-interaction': 'Acessibilidade e interação', coherence: 'Coerência e genericidade',
 };
 const decisionCopy: Record<IssueDecision, string> = { accepted: 'Aceito', rejected: 'Rejeitado', deferred: 'Adiado' };
+const statusCopy: Record<Progress['status'], string> = {
+  running: 'Medindo o protótipo no navegador…', settled: 'Pronto para a decisão do capitão', failed: 'A execução falhou',
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_ORIGIN}${path}`, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
@@ -113,7 +132,9 @@ function Compare(props: { mode: 'side' | 'overlay' | 'difference'; viewport: num
 }
 
 export default function Gate2(): ReactElement {
+  const [runId, setRunId] = useState(runIdFromHash);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [recent, setRecent] = useState<Progress[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [route, setRoute] = useState('/');
@@ -123,16 +144,61 @@ export default function Gate2(): ReactElement {
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [gateReason, setGateReason] = useState('');
 
+  const adopt = useCallback((next: Snapshot): void => {
+    setSnapshot(next);
+    const routes = next.result?.routes ?? [];
+    setRoute((current) => routes.some((entry) => entry.route === current) ? current : routes[0]?.route ?? '/');
+  }, []);
+
   const act = useCallback(async (action: () => Promise<Snapshot>): Promise<void> => {
     setBusy(true); setError('');
-    try { const next = await action(); setSnapshot(next); setRoute((current) => next.routes.some((entry) => entry.route === current) ? current : next.routes[0]?.route ?? '/'); }
+    try { adopt(await action()); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); }
     finally { setBusy(false); }
-  }, []);
+  }, [adopt]);
 
   useEffect(() => { document.title = 'Gate 2 — protótipo'; }, []);
 
-  const start = (): Promise<void> => act(() => request<Snapshot>('/api/prototype/runs', { method: 'POST', body: JSON.stringify({ approverRole: 'captain', runId: `gate2-${Date.now()}` }) }));
+  useEffect(() => {
+    const track = (): void => setRunId(runIdFromHash());
+    window.addEventListener('hashchange', track);
+    return () => window.removeEventListener('hashchange', track);
+  }, []);
+
+  // The run in the URL is polled until it settles, so the review survives a reload and a closed tab.
+  useEffect(() => {
+    if (!runId) { setSnapshot(null); return; }
+    let live = true;
+    let timer: number | undefined;
+    const poll = async (): Promise<void> => {
+      try {
+        const next = await request<Snapshot>(`/api/prototype/runs/${encodeURIComponent(runId)}`);
+        if (!live) return;
+        adopt(next);
+        setError(next.error ?? '');
+        if (next.status === 'running') timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
+      } catch (cause) {
+        if (live) setError(cause instanceof Error ? cause.message : 'Erro desconhecido.');
+      }
+    };
+    void poll();
+    return () => { live = false; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [runId, adopt]);
+
+  useEffect(() => {
+    if (runId) return;
+    void request<{ runs: Progress[] }>('/api/prototype/runs').then((payload) => setRecent(payload.runs)).catch(() => setRecent([]));
+  }, [runId]);
+
+  const start = async (): Promise<void> => {
+    setBusy(true); setError('');
+    try {
+      const created = await request<Snapshot>('/api/prototype/runs', { method: 'POST', body: JSON.stringify({ approverRole: 'captain', runId: `gate2-${Date.now()}` }) });
+      window.location.hash = `${GATE2_ROUTE}/${encodeURIComponent(created.runId)}`;
+      setRunId(created.runId);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); }
+    finally { setBusy(false); }
+  };
   const decide = async (runId: string, findingId: string, decision: IssueDecision): Promise<void> => act(() => request<Snapshot>(`/api/prototype/runs/${runId}/decision`, {
     method: 'POST', body: JSON.stringify({ approverRole: 'captain', findingId, decision, rationale: reasons[findingId]?.trim() || `${decisionCopy[decision]} sem observação adicional do capitão.` }),
   }));
@@ -140,8 +206,9 @@ export default function Gate2(): ReactElement {
     method: 'POST', body: JSON.stringify({ approverRole: 'captain', decision, rationale: gateReason.trim() || (decision === 'approved' ? 'Protótipo aprovado pelo capitão.' : 'Protótipo devolvido para revisão.') }),
   }));
 
-  const decided = useMemo(() => new Map((snapshot?.decisions ?? []).map((entry) => [entry.findingId, entry])), [snapshot]);
-  const vetoes = snapshot?.qa.filter((check) => check.severity === 'veto') ?? [];
+  const result = snapshot?.result;
+  const decided = useMemo(() => new Map((result?.decisions ?? []).map((entry) => [entry.findingId, entry])), [result]);
+  const vetoes = result?.qa.filter((check) => check.severity === 'veto') ?? [];
 
   if (!snapshot) {
     return (
@@ -152,7 +219,40 @@ export default function Gate2(): ReactElement {
         </header>
         <section className="gate2-intro">
           <p>O protótipo é composto por agentes em paralelo sobre a identidade congelada, verificado por checagens determinísticas antes de qualquer modelo, e criticado por quatro sessões separadas. Nada roda até você pedir.</p>
-          <button className="primary" onClick={() => void start()} disabled={busy}>{busy ? 'Compondo o protótipo…' : 'Executar a etapa de protótipo'}</button>
+          <p>A etapa mede cada revisão num navegador real, então leva minutos. A execução fica no endereço desta página: recarregar não perde a revisão.</p>
+          <button className="primary" onClick={() => void start()} disabled={busy}>{busy ? 'Abrindo a execução…' : 'Executar a etapa de protótipo'}</button>
+          {recent.length > 0 && (
+            <div className="gate2-runs">
+              <p className="eyebrow">Execuções desta sessão</p>
+              <ul>
+                {recent.map((entry) => (
+                  <li key={entry.runId}>
+                    <a href={`${GATE2_ROUTE}/${encodeURIComponent(entry.runId)}`}><code>{entry.runId}</code></a>
+                    <span className={`status status-${entry.status}`}>{statusCopy[entry.status]}</span>
+                    <small>{entry.detail}</small>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {error && <p className="error-banner" role="alert">{error}</p>}
+        </section>
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <div className="gate2-shell">
+        <header className="gate2-top">
+          <div><p className="eyebrow">Gate 02 · protótipo · {snapshot.runId}</p><h1>{statusCopy[snapshot.status]}</h1></div>
+          <a className="gate2-back" href={GATE2_ROUTE}>← execuções</a>
+        </header>
+        <section className="gate2-intro">
+          <p role="status">{snapshot.detail}</p>
+          <p className="gate2-note">Passo atual: <code>{snapshot.step}</code> · início {new Date(snapshot.startedAt).toLocaleTimeString('pt-BR')}</p>
+          <p>Cada revisão é capturada num navegador real em 390, 768 e 1440 px, em cada estado declarado, antes que qualquer crítico opine. Esta página acompanha sozinha; o endereço guarda a execução.</p>
+          {snapshot.status === 'failed' && <p className="error-banner" role="alert">{snapshot.error ?? snapshot.detail}</p>}
           {error && <p className="error-banner" role="alert">{error}</p>}
         </section>
       </div>
@@ -164,11 +264,11 @@ export default function Gate2(): ReactElement {
       <header className="gate2-top">
         <div>
           <p className="eyebrow">Gate 02 · protótipo · {snapshot.runId}</p>
-          <h1>{snapshot.journey}</h1>
+          <h1>{result.journey}</h1>
         </div>
         <div className="gate2-badges">
-          <span className={`status status-${snapshot.gate}`}>{snapshot.gate === 'vetoed' ? 'vetado pelo QA' : 'aguarda decisão'}</span>
-          <span className="qa-chip" title={snapshot.stopDetail}>parou por: {stopReasonCopy[snapshot.stopReason] ?? snapshot.stopReason}</span>
+          <span className={`status status-${result.gate}`}>{result.gate === 'vetoed' ? 'vetado pelo QA' : 'aguarda decisão'}</span>
+          <span className="qa-chip" title={result.stopDetail}>parou por: {stopReasonCopy[result.stopReason] ?? result.stopReason}</span>
           <a className="gate2-back" href="#/">← pipeline</a>
         </div>
       </header>
@@ -177,14 +277,14 @@ export default function Gate2(): ReactElement {
         <section className="gate2-compare-panel">
           <div className="gate2-controls">
             <div className="route-tabs">
-              {snapshot.routes.map((entry) => (
+              {result.routes.map((entry) => (
                 <button key={entry.route} className={route === entry.route ? 'selected' : ''} onClick={() => setRoute(entry.route)}>{entry.route}</button>
               ))}
             </div>
             <div className="gate2-selects">
               <label>Largura
                 <select value={viewport} onChange={(event) => setViewport(Number(event.target.value))}>
-                  {snapshot.viewports.map((width) => <option key={width} value={width}>{width}px</option>)}
+                  {result.viewports.map((width) => <option key={width} value={width}>{width}px</option>)}
                 </select>
               </label>
               <div className="gate2-modes" role="group" aria-label="Modo de comparação">
@@ -195,11 +295,11 @@ export default function Gate2(): ReactElement {
             </div>
           </div>
           <p className="gate2-versions">
-            <strong>{snapshot.before.label}</strong> <code>{snapshot.before.versionId}</code>
-            {' · '}<strong>{snapshot.after.label}</strong> <code>{snapshot.after.versionId}</code>
-            {!snapshot.repaired && <> · nenhum reparo foi aplicado, então os dois lados são a mesma revisão e a diferença é vazia</>}
+            <strong>{result.before.label}</strong> <code>{result.before.versionId}</code>
+            {' · '}<strong>{result.after.label}</strong> <code>{result.after.versionId}</code>
+            {!result.repaired && <> · nenhum reparo foi aplicado, então os dois lados são a mesma revisão e a diferença é vazia</>}
           </p>
-          <Compare mode={mode} viewport={viewport} before={snapshot.before.versionId} after={snapshot.after.versionId} route={route} />
+          <Compare mode={mode} viewport={viewport} before={result.before.versionId} after={result.after.versionId} route={route} />
         </section>
 
         <section className="gate2-evidence">
@@ -207,11 +307,11 @@ export default function Gate2(): ReactElement {
             <h2>QA determinístico</h2>
             <p className="gate2-note">
               {vetoes.length > 0 ? `${vetoes.length} veto(s) impedem a promoção. ` : 'Tier 0 passou sem veto. '}
-              {snapshot.qa.length > 12 ? `Mostrando 12 de ${snapshot.qa.length} observações; role a lista.` : `${snapshot.qa.length} observação(ões) no total.`}
+              {result.qa.length > 12 ? `Mostrando 12 de ${result.qa.length} observações; role a lista.` : `${result.qa.length} observação(ões) no total.`}
             </p>
             <ul className="gate2-checks">
-              {snapshot.qa.length === 0 && <li className="clean">Nenhuma observação determinística.</li>}
-              {snapshot.qa.slice(0, 12).map((check, index) => (
+              {result.qa.length === 0 && <li className="clean">Nenhuma observação determinística.</li>}
+              {result.qa.slice(0, 12).map((check, index) => (
                 <li key={`${check.id}-${index}`} className={check.severity}>
                   <span className="tag">T{check.tier} · {check.id}</span>
                   <span>{check.message}</span>
@@ -228,7 +328,7 @@ export default function Gate2(): ReactElement {
                 <button key={id} className={lens === id ? 'selected' : ''} onClick={() => setLens(id)}>{label}</button>
               ))}
             </div>
-            {snapshot.reports.map((report) => (
+            {result.reports.map((report) => (
               <article className="gate2-critic" key={report.dimension}>
                 <header>
                   <strong>{dimensionCopy[report.dimension] ?? report.dimension}</strong>
@@ -251,11 +351,11 @@ export default function Gate2(): ReactElement {
         <section className="gate2-issues">
           <div className="section-heading">
             <div><p className="eyebrow">Achados</p><h2>Cada issue traz nó, evidência e o reparo proposto</h2></div>
-            <span className="qa-chip">{snapshot.issues.length} achado(s) · {snapshot.decisions.length} decidido(s)</span>
+            <span className="qa-chip">{result.issues.length} achado(s) · {result.decisions.length} decidido(s)</span>
           </div>
-          {snapshot.issues.length === 0 && <p className="gate2-note">Nenhum crítico encontrou algo a reparar nesta revisão.</p>}
+          {result.issues.length === 0 && <p className="gate2-note">Nenhum crítico encontrou algo a reparar nesta revisão.</p>}
           <div className="gate2-issue-list">
-            {snapshot.issues.map((issue) => {
+            {result.issues.map((issue) => {
               const record = decided.get(issue.id);
               return (
                 <article className={`gate2-issue severity-${issue.severity}`} key={issue.id}>
@@ -291,10 +391,10 @@ export default function Gate2(): ReactElement {
           <div className="gate2-final">
             <label className="sr-only" htmlFor="gate-reason">Motivo da decisão do gate</label>
             <input id="gate-reason" placeholder="Motivo da decisão do gate" value={gateReason} onChange={(event) => setGateReason(event.target.value)} />
-            <button className="secondary" disabled={busy || Boolean(snapshot.approval)} onClick={() => void settle(snapshot.runId, 'rejected')}>Devolver para revisão</button>
-            <button className="primary" disabled={busy || snapshot.gate === 'vetoed' || Boolean(snapshot.approval)} onClick={() => void settle(snapshot.runId, 'approved')}>Aprovar o Gate 2</button>
+            <button className="secondary" disabled={busy || Boolean(result.approval)} onClick={() => void settle(snapshot.runId, 'rejected')}>Devolver para revisão</button>
+            <button className="primary" disabled={busy || result.gate === 'vetoed' || Boolean(result.approval)} onClick={() => void settle(snapshot.runId, 'approved')}>Aprovar o Gate 2</button>
           </div>
-          {snapshot.approval && <p className="gate2-decided" role="status">Gate {snapshot.approval.decision === 'approved' ? 'aprovado' : 'devolvido'} em {snapshot.approval.versionId} · {snapshot.approval.rationale}</p>}
+          {result.approval && <p className="gate2-decided" role="status">Gate {result.approval.decision === 'approved' ? 'aprovado' : 'devolvido'} em {result.approval.versionId} · {result.approval.rationale}</p>}
           {error && <p className="error-banner" role="alert">{error}</p>}
         </section>
       </div>

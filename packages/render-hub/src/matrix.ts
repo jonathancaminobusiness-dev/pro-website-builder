@@ -3,8 +3,12 @@ import type { RenderCase, RenderColorScheme, RenderViewport } from './cases.js';
 
 /** The CSS pixel widths every prototype must survive, from the smallest phone to a wide desktop. */
 export const RENDER_VIEWPORTS = [320, 360, 390, 768, 1024, 1440] as const;
-/** The three representative widths of the fast per-candidate loop. */
-export const TIER1_VIEWPORTS = [390, 768, 1440] as const;
+/**
+ * The three widths every measured pass uses: a phone, a tablet and a desktop. Both deterministic tiers
+ * read these, so a revision under review costs three captures per state instead of six; the full
+ * `RENDER_VIEWPORTS` sweep is for a finalist, and is asked for explicitly.
+ */
+export const REPRESENTATIVE_VIEWPORTS = [390, 768, 1440] as const;
 
 /**
  * A state fixture describes a capture condition through a closed vocabulary:
@@ -56,9 +60,9 @@ export function createRenderMatrix(ir: DesignIR, options: RenderMatrixOptions = 
   })))));
 }
 
-/** The Tier 1 subset: the same states and schemes on three representative widths. */
-export function createTier1Matrix(ir: DesignIR, options: Omit<RenderMatrixOptions, 'viewports'> = {}): RenderCase[] {
-  return createRenderMatrix(ir, { ...options, viewports: TIER1_VIEWPORTS });
+/** The measured subset: the same routes, states and schemes on the three representative widths. */
+export function createRepresentativeMatrix(ir: DesignIR, options: Omit<RenderMatrixOptions, 'viewports'> = {}): RenderCase[] {
+  return createRenderMatrix(ir, { ...options, viewports: REPRESENTATIVE_VIEWPORTS });
 }
 
 export function conditionFor(ir: DesignIR, state: string): StateCondition {
