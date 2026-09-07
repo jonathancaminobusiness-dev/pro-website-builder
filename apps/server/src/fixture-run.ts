@@ -33,7 +33,7 @@ export interface FixtureSnapshot {
 export class FixtureRun {
   private readonly store = new VersionStore();
   private readonly applier = new Applier(this.store, new PatchGate());
-  private readonly planner = new RunPlanner();
+  private readonly planner = new RunPlanner(this.store);
   private readonly scheduler = new Scheduler();
   private readonly approvals: Approval[] = [];
   private currentVersion!: VersionRecord;

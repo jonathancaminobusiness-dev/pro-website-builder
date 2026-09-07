@@ -1,19 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR, hashJson, type AgentTask } from '@pwb/domain';
+import { agentTaskSchema, createFixtureIR, hashJson, type AgentTask, type DesignIR } from '@pwb/domain';
 import { FakeModelProvider } from '@pwb/providers';
 import { Applier, PatchGate, RunPlanner, Scheduler, VersionStore } from './index.js';
 
 const ALLOWED = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
 function task(id: string, baseVersionId = 'v0', overrides: Partial<AgentTask> = {}): AgentTask {
-  return { id, attempt: 1, stage: 'identity', role: 'director', state: 'queued', lane: 'claude', baseVersionId, inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake', deadlineMs: 1000, allowedPaths: ['/reviewRecord'], brief: 'fixture', ...overrides };
+  return { id, attempt: 1, stage: 'identity', role: 'director', state: 'queued', lane: 'claude', baseVersionId, inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake', deadlineMs: 1000, allowedPaths: ['/reviewRecord'], documentSlice: { '/identity': createFixtureIR().identity }, brief: 'fixture', ...overrides };
 }
 
 describe('orchestrator', () => {
   it('plans the fixed identity to prototype to finalization stage order', () => {
-    const plan = new RunPlanner().plan('run-1', 'v0', 'brief');
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const plan = new RunPlanner(store).plan('run-1', root.id, 'brief');
     expect(plan.tasks.map((item) => item.stage)).toEqual(['identity', 'prototype', 'finalization']);
     expect(plan.tasks.map((item) => item.id)).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
+  });
+
+  it('hands every task an immutable slice of the base version and digests it', () => {
+    const ir = createFixtureIR();
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const root = applier.createRoot(ir);
+    const plan = new RunPlanner(store).plan('run-slice', root.id, 'brief');
+    const identityTask = agentTaskSchema.parse(plan.tasks[0]);
+    const prototypeTask = agentTaskSchema.parse(plan.tasks[1]);
+    expect(identityTask.documentSlice['/identity']).toEqual(ir.identity);
+    expect(prototypeTask.documentSlice['/identity']).toEqual(ir.identity);
+    expect(prototypeTask.documentSlice['/pages']).toEqual(ir.pages);
+    (identityTask.documentSlice['/pages'] as DesignIR['pages']).routes.length = 0;
+    expect(store.get(root.id)!.ir.pages.routes).toHaveLength(3);
+    const next = applier.apply({ op: 'proposal', operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['changed'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'change the document', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'slice-digest' }, ALLOWED);
+    const replanned = new RunPlanner(store).plan('run-slice', next.id, 'brief');
+    expect(replanned.tasks[0]!.documentSlice['/reviewRecord']).toEqual({ findings: ['changed'], approvals: [] });
+    expect(replanned.tasks[0]!.inputDigest).not.toBe(identityTask.inputDigest);
   });
 
   it('enforces the configured concurrent task limit', async () => {

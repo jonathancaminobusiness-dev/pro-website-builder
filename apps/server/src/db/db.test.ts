@@ -1,6 +1,7 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { openDatabase, ProjectRepository, scanSecrets } from './repository.js';
@@ -20,6 +21,23 @@ describe('sqlite persistence', () => {
     await repo.appendEvent({ id: 'event-1', runId: 'run-1', type: 'started', payload: { safe: true } });
     await repo.appendEvent({ id: 'event-2', runId: 'run-1', type: 'finished', payload: { safe: true } });
     expect((await repo.listEvents('run-1')).map((event) => event.id)).toEqual(['event-1', 'event-2']);
+    db.sqlite.close();
+  });
+
+  it('rebuilds the tasks table when a database written before the attempt key is opened', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-legacy-'));
+    const file = join(dir, 'legacy.sqlite');
+    const legacy = new Database(file);
+    legacy.exec('CREATE TABLE tasks (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, stage TEXT NOT NULL, role TEXT NOT NULL, state TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL);');
+    legacy.prepare('INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)').run('task-identity', 'run-old', 'identity', 'director', 'queued', 'v0', '{}');
+    legacy.close();
+    const db = openDatabase(file);
+    const repo = new ProjectRepository(db);
+    const task = { id: 'task-identity', attempt: 2, stage: 'identity' as const, role: 'director' as const, state: 'queued' as const, lane: 'claude' as const, baseVersionId: 'v1', inputDigest: 'digest', promptVersion: '1', modelAlias: 'fake', deadlineMs: 1000, allowedPaths: ['/reviewRecord'], documentSlice: { '/identity': createFixtureIR().identity }, brief: 'fixture' };
+    await repo.saveTask(task, 'run-new');
+    const tasks = (JSON.parse(repo.dump()) as { tasks: Array<{ id: string; run_id: string; attempt: number }> }).tasks;
+    expect(tasks.map((row) => [row.id, row.run_id, row.attempt])).toEqual([['task-identity', 'run-new', 2]]);
+    expect((db.sqlite.pragma('user_version') as Array<{ user_version: number }>)[0]?.user_version).toBe(1);
     db.sqlite.close();
   });
 

@@ -47,6 +47,12 @@ describe('domain contracts', () => {
     expect(() => designIRSchema.parse(duplicateId)).toThrow(/share the id page-home/i);
   });
 
+  it('rejects routes that differ only in case, which one export path cannot keep apart', () => {
+    const cased = createFixtureIR();
+    cased.pages.routes[1]!.route = '/Contact';
+    expect(() => designIRSchema.parse(cased)).toThrow(/share the route/i);
+  });
+
   it('rejects routes that are not already the path the export writes', () => {
     const trailing = createFixtureIR();
     trailing.pages.routes[1]!.route = '/proof/';

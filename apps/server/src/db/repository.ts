@@ -14,11 +14,16 @@ CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY NOT NULL, run_id TEXT 
 CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, provenance TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);`;
 
+const SCHEMA_VERSION = 1;
+
 export function openDatabase(filename: string): LocalDatabase {
   const sqlite = new Database(filename);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
+  const [version] = sqlite.pragma('user_version') as Array<{ user_version: number }>;
+  if ((version?.user_version ?? 0) < SCHEMA_VERSION) sqlite.exec('DROP TABLE IF EXISTS tasks;');
   sqlite.exec(migration);
+  sqlite.pragma(`user_version = ${SCHEMA_VERSION}`);
   return { sqlite, orm: drizzle(sqlite, { schema }) };
 }
 

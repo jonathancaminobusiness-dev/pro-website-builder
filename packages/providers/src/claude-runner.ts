@@ -24,6 +24,7 @@ export class ClaudeRunner implements ModelProvider {
           task.brief,
           `Answer as the ${task.role} of the ${task.stage} stage for taskId ${task.id}.`,
           `A proposal must set baseVersionId to ${task.baseVersionId} and may only touch these paths: ${task.allowedPaths.join(', ')}.`,
+          `This is the immutable slice of the current document you may read; the identity contract is read-only: ${JSON.stringify(task.documentSlice)}`,
           correction ? 'Correct the previous schema violation and return only JSON matching the supplied schema.' : '',
         ].filter(Boolean).join('\n');
         const { stdout } = await execFileAsync(this.options.executable, [

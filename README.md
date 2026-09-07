@@ -42,7 +42,7 @@ Run the deterministic fixture without starting the UI:
 corepack pnpm run:fixture
 ```
 
-The command writes a local SQLite database under `.treehouse/` and a content-addressed export under `exports/`. Set `PWB_DB_PATH` and `PWB_EXPORT_ROOT` to use explicit locations, and `PWB_MODEL_PROVIDER` to choose the model provider. Add `--render` to also drive the approved home route through the Playwright `RenderHub` (screenshot, DOM, accessibility snapshot, hash cache under `PWB_RENDER_CACHE`).
+The command writes a local SQLite database under `.treehouse/` and a content-addressed export under `exports/`. The database carries a schema version in `PRAGMA user_version`; opening a file written by an older version rebuilds the `tasks` table from scratch, because this pre-release tool keeps no task history worth backfilling. Set `PWB_DB_PATH` and `PWB_EXPORT_ROOT` to use explicit locations, and `PWB_MODEL_PROVIDER` to choose the model provider. Add `--render` to also drive the approved home route through the Playwright `RenderHub` (screenshot, DOM, accessibility snapshot, hash cache under `PWB_RENDER_CACHE`).
 
 Start the local API and preview, then the Studio in another terminal:
 

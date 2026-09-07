@@ -58,8 +58,9 @@ export const designIRSchema = z.object({
     for (const key of ['id', 'route'] as const) {
       const seen = new Set<string>();
       for (const page of pages.routes) {
-        if (seen.has(page[key])) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Pages must not share the ${key} ${page[key]}.` });
-        seen.add(page[key]);
+        const value = key === 'route' ? page.route.toLowerCase() : page.id;
+        if (seen.has(value)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Pages must not share the ${key} ${page[key]}.` });
+        seen.add(value);
       }
     }
   }),
