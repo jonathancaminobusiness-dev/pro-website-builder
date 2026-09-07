@@ -7,6 +7,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Use Corepack commands from `README.md` because pnpm is not assumed to be globally installed.
 - Keep generated sites flowing through `packages/domain` → `packages/orchestrator` → `packages/renderer`; agents must not write HTML/JSX directly.
 - A stage package (`packages/stage-identity`, and its successors) composes the orchestrator; it must not grow a scheduler, patch gate or version writer of its own.
+- A stage's write boundary and the stage/role a patch may declare come from `stageWritablePaths` and `stageRoles` in `packages/domain/src/schema-json.ts`, never from a constant a stage package invents. Work a stage cannot write hands off to the stage that owns that subtree.
 - Alternative candidates are sibling versions that share a parent and are never merged. The mechanism is one `PatchGate` per branch over one shared `VersionStore`; see `packages/stage-identity/src/branches.ts`.
 - A model never asserts a fact the code can measure. Divergence axis keys are assigned by the seat and palette fingerprints are computed from tokens, so a stage re-imposes them rather than trusting the answer; see `packages/stage-identity/src/stage.ts`.
 - Fixture builders in `packages/domain/src/fixture.ts` must return fresh data on every call; callers mutate what they get.

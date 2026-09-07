@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentResult, type AgentTask } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
+import { IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
 import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { identityAxisBriefs } from './axes.js';
@@ -8,6 +9,7 @@ import { imageryPolicyViolations } from './art-director.js';
 import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
 import { IdentityStage } from './stage.js';
+import { stageRoles } from '@pwb/domain';
 
 const BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A prova é o registro de cada decisão.';
 
@@ -158,6 +160,35 @@ describe('identity stage fan-out', () => {
   });
 });
 
+describe('the identity stage write boundary', () => {
+  it('may write only the paths the foundation assigns the stage', () => {
+    expect(IDENTITY_ALLOWED_PATHS).toEqual(['/identity', '/reviewRecord']);
+    expect(IDENTITY_TASK_SCOPE).toEqual({ allowedPaths: ['/identity', '/reviewRecord'], stage: 'identity', role: stageRoles.identity });
+  });
+
+  it('cannot reach the asset ledger, which belongs to the stages that place page media', () => {
+    const { store, baseVersionId } = seedStore();
+    const applier = new Applier(store, new PatchGate());
+    const patch = {
+      operations: [{ op: 'replace' as const, path: '/assets/items', value: [] }],
+      baseVersionId, touchedPaths: ['/assets/items'], rationale: 'An identity worker must not write assets.',
+      confidence: 1, stage: 'identity' as const, role: stageRoles.identity, idempotencyKey: 'boundary-assets',
+    };
+    expect(() => applier.apply(patch, IDENTITY_TASK_SCOPE, baseVersionId)).toThrow(/not allowed/i);
+  });
+
+  it('refuses a patch that declares a role other than the one the stage pins', () => {
+    const { store, baseVersionId } = seedStore();
+    const applier = new Applier(store, new PatchGate());
+    const patch = {
+      operations: [{ op: 'replace' as const, path: '/reviewRecord', value: { findings: [], approvals: [] } }],
+      baseVersionId, touchedPaths: ['/reviewRecord'], rationale: 'A critic must not patch.',
+      confidence: 1, stage: 'identity' as const, role: 'critic' as const, idempotencyKey: 'boundary-role',
+    };
+    expect(() => applier.apply(patch, IDENTITY_TASK_SCOPE, baseVersionId)).toThrow(/declare exactly that stage and role/i);
+  });
+});
+
 describe('image art director', () => {
   it('plans for every direction but generates nothing before the captain decides', async () => {
     const { stage, events } = harness();
@@ -169,7 +200,7 @@ describe('image art director', () => {
 
   it('generates only the approved direction and records provenance and licence per image', async () => {
     const calls: Array<Record<string, unknown>> = [];
-    const { stage } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
+    const { stage, store } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
     const result = await stage.run();
     const approval = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
     expect(calls).toHaveLength(result.candidates.find((candidate) => candidate.directionId === 'modular-technical')!.imagePlan!.plans.length);
@@ -180,6 +211,11 @@ describe('image art director', () => {
     expect(asset?.provenance.prompt).toBeTruthy();
     expect(asset?.provenance.termsNote).toMatch(/Expected licence:/);
     expect(asset?.alt).toBeTruthy();
+    // The stage may not write /assets, so the imagery travels on the handoff with its licence.
+    const handed = stage.handoff()!;
+    expect(handed.assets.map((entry) => entry.id)).toEqual(approval.assets.map((entry) => entry.id));
+    expect(handed.assets.every((entry) => entry.provenance.license.trim().length > 0)).toBe(true);
+    expect(store.get(handed.versionId)!.ir.assets.items.some((entry) => entry.id.startsWith('asset-modular-technical'))).toBe(false);
   });
 
   it('still records provenance when Higgsfield is not configured, instead of leaving a silent gap', async () => {

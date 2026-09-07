@@ -8,6 +8,8 @@ import {
   idempotencyKey,
   resolveTokens,
   signatureOfColors,
+  stageRoles,
+  stageWritablePaths,
   type AgentTask,
   type DesignIR,
   type DirectionComparison,
@@ -18,7 +20,7 @@ import {
   type Token,
 } from '@pwb/domain';
 import { lintDesign, type LintReport } from '@pwb/linter';
-import { Scheduler, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
+import { Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider, RasterProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { generateApprovedImagery, imageryPolicyViolations, type IdentityAsset } from './art-director.js';
@@ -42,8 +44,17 @@ import { identityCritics } from './critics.js';
 import { evaluateIdentityGate, handoffOf, identityHash, type IdentityGateRecord, type IdentityGateState, type IdentityHandoff } from './gate.js';
 import { briefCuratorPrompt, criticPrompt, documentSliceOf, identityDirectorPrompt, identityRefinerPrompt, imageArtDirectorPrompt } from './prompts.js';
 
-export const IDENTITY_ALLOWED_PATHS = ['/identity'];
-export const IDENTITY_ASSET_PATHS = ['/assets'];
+/**
+ * The write boundary is the foundation's, not this package's: the identity
+ * stage may write the identity contract and the review record, and nothing
+ * else. The gate re-checks it against the per-stage patch schema, so a patch
+ * that reaches beyond it is refused whatever this constant says.
+ */
+export const IDENTITY_ALLOWED_PATHS = stageWritablePaths.identity;
+/** What a worker may read. Wider than what it may write, and the same set the RunPlanner hands a stage. */
+export const IDENTITY_READABLE_PATHS = ['/identity', '/pages', '/assets', '/reviewRecord'];
+/** The identity stage's write scope, pinned to the stage and role the foundation assigns it. */
+export const IDENTITY_TASK_SCOPE: TaskScope = { allowedPaths: IDENTITY_ALLOWED_PATHS, stage: 'identity', role: stageRoles.identity };
 
 export interface IdentityStageDeadlines { curator: number; director: number; critic: number; refiner: number; artDirector: number; }
 export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 5 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000 };
@@ -136,6 +147,7 @@ export class IdentityStage {
   private gateRecord: IdentityGateRecord | undefined;
   private approvedIr: DesignIR | undefined;
   private currentVersionId: string | undefined;
+  private approvedAssets: IdentityAsset[] = [];
   private refinementCyclesUsed = 0;
 
   constructor(private readonly options: IdentityStageOptions) {
@@ -188,7 +200,7 @@ export class IdentityStage {
   /** The typed handoff the prototype stage plans against; undefined until the captain decides. */
   handoff(): IdentityHandoff | undefined {
     const versionId = this.approvedVersionId;
-    return versionId ? handoffOf(this.gateState(), versionId) : undefined;
+    return versionId ? handoffOf(this.gateState(), versionId, this.approvedAssets) : undefined;
   }
 
   // ---------------------------------------------------------------- step 1
@@ -252,14 +264,14 @@ export class IdentityStage {
       const patch: Patch = {
         operations: [{ op: 'replace', path: '/identity', value: identity }],
         baseVersionId: entry.task.baseVersionId,
-        touchedPaths: IDENTITY_ALLOWED_PATHS,
+        touchedPaths: ['/identity'],
         rationale: `Direction ${entry.seatId}: ${identity.direction.rationale}`,
         confidence: 1,
         stage: 'identity',
-        role: 'director',
+        role: stageRoles.identity,
         idempotencyKey: idempotencyKey(entry.task),
       };
-      const version = this.branches.applierFor(entry.seatId).apply(patch, IDENTITY_ALLOWED_PATHS, entry.task.baseVersionId);
+      const version = this.branches.applierFor(entry.seatId).apply(patch, IDENTITY_TASK_SCOPE, entry.task.baseVersionId);
       renderDesign(version.ir);
       candidates.push(this.candidateOf(entry.seatId, version));
       await this.record('identity.candidate.opened', { directionId: entry.seatId, versionId: version.id, parentVersionId: version.parentId, identityHash: identityHash(version.ir) });
@@ -405,8 +417,8 @@ export class IdentityStage {
       let version: VersionRecord;
       try {
         const identity = this.repairedIdentity(task.id, result.proposal, base.ir.identity);
-        const patch: Patch = { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: identity }], baseVersionId: base.id, touchedPaths: IDENTITY_ALLOWED_PATHS, stage: 'identity', role: 'refiner', idempotencyKey: idempotencyKey(task) };
-        version = this.branches.applierFor(candidate.directionId).apply(patch, IDENTITY_ALLOWED_PATHS, base.id);
+        const patch: Patch = { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: identity }], baseVersionId: base.id, touchedPaths: ['/identity'], stage: 'identity', role: stageRoles.identity, idempotencyKey: idempotencyKey(task) };
+        version = this.branches.applierFor(candidate.directionId).apply(patch, IDENTITY_TASK_SCOPE, base.id);
         renderDesign(version.ir);
       } catch (error) {
         this.failures.push({ taskId: task.id, reason: error instanceof Error ? error.message : 'The refinement did not validate.' });
@@ -467,10 +479,10 @@ export class IdentityStage {
         rationale: 'Deterministic fan-in: the divergence matrix is re-measured after the refinement cycle.',
         confidence: 1,
         stage: 'identity',
-        role: 'refiner',
+        role: stageRoles.identity,
         idempotencyKey: hashJson({ directionId: candidate.directionId, base: candidate.versionId, digest }),
       };
-      const version = this.branches.applierFor(candidate.directionId).apply(patch, IDENTITY_ALLOWED_PATHS, candidate.versionId);
+      const version = this.branches.applierFor(candidate.directionId).apply(patch, IDENTITY_TASK_SCOPE, candidate.versionId);
       this.candidates[index] = this.candidateOf(candidate.directionId, version, candidate);
       await this.record('identity.matrix.synced', { directionId: candidate.directionId, versionId: version.id });
     }
@@ -543,33 +555,18 @@ export class IdentityStage {
     this.currentVersionId = version.id;
     await this.record('identity.gate.approved', { directionId: record.directionId, versionId: record.versionId, identityHash: record.identityHash, blockers, overridden: blockers.length > 0 });
 
+    // Imagery for the approved direction only. The identity stage may write the
+    // identity contract and the review record, never `/assets`, so the generated
+    // assets travel on the handoff with their provenance and licence and are
+    // placed in the ledger by the stage that owns page media.
     let assets: IdentityAsset[] = [];
-    let versionId = version.id;
     if (candidate.imagePlan && this.options.raster) {
       const generated = await generateApprovedImagery(candidate.imagePlan, { provider: this.options.raster, identityVersionId: version.id, ...(input.signal ? { signal: input.signal } : {}) });
       assets = generated.assets;
+      this.approvedAssets = assets;
       await this.record('identity.imagery.generated', { directionId: candidate.directionId, assets: assets.map((asset) => ({ id: asset.id, status: asset.status, license: asset.provenance.license, hash: asset.provenance.hash })) });
-      // The asset ledger is part of the versioned document, so provenance and
-      // licence land through the applier rather than in a side table.
-      if (assets.length > 0) {
-        const ledgerPaths = [...IDENTITY_ALLOWED_PATHS, ...IDENTITY_ASSET_PATHS];
-        const ledger: Patch = {
-          operations: [{ op: 'replace', path: '/assets/items', value: [...version.ir.assets.items, ...assets] }],
-          baseVersionId: version.id,
-          touchedPaths: ['/assets/items'],
-          rationale: `Imagery generated for the approved direction ${candidate.directionId}, with provenance and licence per image.`,
-          confidence: 1,
-          stage: 'identity',
-          role: 'art-director',
-          idempotencyKey: hashJson({ base: version.id, assets: assets.map((asset) => asset.provenance.hash) }),
-        };
-        const withAssets = this.branches.applierFor(candidate.directionId).apply(ledger, ledgerPaths, version.id);
-        renderDesign(withAssets.ir);
-        this.currentVersionId = withAssets.id;
-        versionId = withAssets.id;
-      }
     }
-    return { record, assets, versionId, ...(input.overrideRationale ? { overrideRationale: input.overrideRationale } : {}) };
+    return { record, assets, versionId: version.id, ...(input.overrideRationale ? { overrideRationale: input.overrideRationale } : {}) };
   }
 
   /**
@@ -589,10 +586,10 @@ export class IdentityStage {
       rationale: `Gate 1 chose ${directionId}; the divergence matrix becomes history in rejectedAlternatives (${direction.rejectedAlternatives.map((entry) => entry.directionId).join(', ') || 'none'}).`,
       confidence: 1,
       stage: 'identity',
-      role: 'director',
+      role: stageRoles.identity,
       idempotencyKey: hashJson({ retire: versionId, directionId }),
     };
-    const settled = this.branches.applierFor(directionId).apply(patch, IDENTITY_ALLOWED_PATHS, versionId);
+    const settled = this.branches.applierFor(directionId).apply(patch, IDENTITY_TASK_SCOPE, versionId);
     renderDesign(settled.ir);
     return settled;
   }
@@ -617,10 +614,10 @@ export class IdentityStage {
       rationale: input.rationale,
       confidence: 1,
       stage: 'identity',
-      role: 'refiner',
+      role: stageRoles.identity,
       idempotencyKey: hashJson({ base: baseId, pointer, value: input.value }),
     };
-    const version = this.branches.applierFor(this.gateRecord.directionId).apply(patch, IDENTITY_ALLOWED_PATHS, baseId);
+    const version = this.branches.applierFor(this.gateRecord.directionId).apply(patch, IDENTITY_TASK_SCOPE, baseId);
     renderDesign(version.ir);
     this.currentVersionId = version.id;
     const gate = this.gateState();
@@ -632,7 +629,7 @@ export class IdentityStage {
 
   private task(input: { id: string; role: AgentTask['role']; deadlineMs: number; brief: string; allowedPaths: string[]; ir: DesignIR; baseVersionId?: string }): AgentTask {
     const baseVersionId = input.baseVersionId ?? this.options.baseVersionId;
-    const documentSlice = documentSliceOf(input.ir, input.allowedPaths);
+    const documentSlice = documentSliceOf(input.ir, IDENTITY_READABLE_PATHS);
     return {
       id: input.id,
       attempt: 1,

@@ -82,11 +82,18 @@ export interface IdentityHandoff {
   identityHash: string;
   approvedAt: string;
   stale: boolean;
+  /**
+   * Imagery generated for the approved direction, each entry carrying its
+   * prompt, model, licence and terms. The identity stage may not write
+   * `/assets`, so these travel here for the stage that owns page media to place
+   * in the ledger; nothing reaches an export without a licence on record.
+   */
+  assets: DesignIR['assets']['items'];
 }
 
-export function handoffOf(state: IdentityGateState, currentVersionId: string): IdentityHandoff | undefined {
+export function handoffOf(state: IdentityGateState, currentVersionId: string, assets: DesignIR['assets']['items'] = []): IdentityHandoff | undefined {
   if (state.state === 'open') return undefined;
-  return { directionId: state.record.directionId, versionId: currentVersionId, identityHash: state.record.identityHash, approvedAt: state.record.approvedAt, stale: state.state === 'reopened' };
+  return { directionId: state.record.directionId, versionId: currentVersionId, identityHash: state.record.identityHash, approvedAt: state.record.approvedAt, stale: state.state === 'reopened', assets: structuredClone(assets) };
 }
 
 export type IdentityGateState =
