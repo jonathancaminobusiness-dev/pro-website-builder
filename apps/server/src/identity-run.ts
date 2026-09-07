@@ -167,8 +167,7 @@ export class IdentityRun {
       this.status = 'reopened';
       // The renders the approved identity produced are unreachable now; drop them
       // instead of keeping screenshots of an identity nobody approved.
-      if (this.options.renderCacheDir) this.prunedRenders = (await pruneRenderCache(this.options.renderCacheDir, changed.gate.impact.staleRenderKeys)).length;
-      else this.prunedRenders = changed.gate.impact.staleRenderKeys.length;
+      this.prunedRenders = this.options.renderCacheDir ? (await pruneRenderCache(this.options.renderCacheDir, changed.gate.impact.staleRenderKeys)).length : 0;
     }
     this.result = this.stage.snapshot();
     return this.snapshot();
@@ -180,6 +179,7 @@ export class IdentityRun {
 
   snapshot(): IdentityRunSnapshot {
     const gate = this.stage.gateState();
+    const handoff = this.stage.handoff(gate);
     return {
       runId: this.options.runId,
       projectId: this.projectId,
@@ -195,7 +195,7 @@ export class IdentityRun {
       approvals: structuredClone(this.approvals),
       assets: structuredClone(this.assets),
       ...(this.stage.approvedVersionId ? { previewVersionId: this.stage.approvedVersionId } : {}),
-      ...(this.stage.handoff() ? { handoff: this.stage.handoff()! } : {}),
+      ...(handoff ? { handoff } : {}),
       ...(this.prunedRenders === undefined ? {} : { prunedRenders: this.prunedRenders }),
       ...(this.failure ? { error: this.failure } : {}),
     };

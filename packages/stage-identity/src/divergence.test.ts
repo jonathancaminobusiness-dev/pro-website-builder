@@ -4,7 +4,6 @@ import {
   createFixtureIR,
   divergenceAxes,
   paletteSignature,
-  signatureOfColors,
   toOklch,
   type DirectionVector,
 } from '@pwb/domain';
@@ -20,7 +19,7 @@ function vectorFor(directionId: Parameters<typeof fakeIdentityFor>[0], overrides
     directionId,
     label: directionId,
     axes: Object.fromEntries(divergenceAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: `${axis} descriptor for ${directionId}` }])) as DirectionVector['axes'],
-    paletteSignature: signatureOfColors(colors),
+    paletteSignature: paletteSignature(colors),
     ...overrides,
   };
 }
@@ -73,7 +72,7 @@ describe('divergence axes and the hue rule', () => {
 describe('DIV-030 through the linter registry', () => {
   function irWithMatrix(matrix: DirectionVector[], directionId: string) {
     const ir = createFixtureIR();
-    ir.identity = { ...fakeIdentityFor('editorial-material'), direction: { ...fakeIdentityFor('editorial-material').direction, divergence: { directionId, matrix, constants: ['token paths'], incompatibilities: [], minimumDistinctAxes: 4 } } };
+    ir.identity = { ...fakeIdentityFor('editorial-material'), direction: { ...fakeIdentityFor('editorial-material').direction, divergence: { directionId, matrix, constants: ['token paths'], incompatibilities: [] } } };
     return ir;
   }
 
@@ -94,7 +93,7 @@ describe('DIV-030 through the linter registry', () => {
 
   it('refuses a palette signature that does not match the identity it belongs to', () => {
     const matrix = identityAxisBriefs.map((seat) => vectorFor(seat.id));
-    const tampered = matrix.map((vector) => vector.directionId === 'editorial-material' ? { ...vector, paletteSignature: signatureOfColors(['#000000']) } : vector);
+    const tampered = matrix.map((vector) => vector.directionId === 'editorial-material' ? { ...vector, paletteSignature: paletteSignature(['#000000']) } : vector);
     const findings = lintDesign(irWithMatrix(tampered, 'editorial-material')).findings.filter((finding) => finding.id === 'DIV-030');
     expect(findings.some((finding) => /palette signature recorded/i.test(finding.message))).toBe(true);
   });

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -7,7 +7,12 @@ import { createFixtureIR } from '../../packages/domain/src/index.js';
 import { runTier0 } from '../../packages/qa-deterministic/src/index.js';
 import { renderDesign } from '../../packages/renderer/src/index.js';
 import { createRenderMatrix, qaFor, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../../packages/render-hub/src/index.js';
+import { identityChangeImpact, pruneRenderCache } from '../../packages/stage-identity/src/gate.js';
 import { createPreviewServer } from '../../apps/server/src/preview.js';
+
+async function exists(path: string): Promise<boolean> {
+  try { await access(path); return true; } catch { return false; }
+}
 
 test('render hub captures a screenshot, DOM and accessibility snapshot, then reuses its cache', async () => {
   const ir = createFixtureIR();
@@ -39,6 +44,7 @@ test('drives the whole route, viewport and state matrix against the preview serv
   const rendered = renderDesign(ir);
   const preview = createPreviewServer((versionId) => versionId === ir.meta.versionId ? rendered : undefined, 0);
   await preview.start();
+  const origin = `http://127.0.0.1:${(preview.server.address() as AddressInfo).port}`;
   const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-render-matrix-'));
   try {
     const prefix = `/preview/${ir.meta.versionId}`;
@@ -212,6 +218,36 @@ test('applies a container query to a property the node already declares, measure
     // 24px is {space.md}; 96px is {space.xl}, which the query opens at 44rem.
     expect(await paddingAt(390)).toEqual({ inline: 24, block: 24 });
     expect(await paddingAt(1024)).toEqual({ inline: 96, block: 24 });
+  } finally {
+    await preview.close();
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test('a token change drops the cache entries the hub actually wrote for the approved version', async () => {
+  const approved = createFixtureIR();
+  const versionId = approved.meta.versionId;
+  const prefix = `/preview/${versionId}`;
+  const rendered = renderDesign(approved, { routePrefix: prefix });
+  const preview = createPreviewServer((requested) => requested === versionId ? rendered : undefined, 0);
+  await preview.start();
+  const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-render-invalidation-'));
+  try {
+    // Exactly the case form the product drives the hub with, for the version the gate approved.
+    const [renderCase] = createRenderMatrix(approved, { viewports: REPRESENTATIVE_VIEWPORTS });
+    const [written] = await new RenderHub({ cacheDir }).capture({ ir: approved, rendered, baseUrl: preview.origin, previewPrefix: prefix, cases: [renderCase!] });
+    expect(written?.cached).toBe(false);
+    expect(await exists(written!.evidence.screenshotPath)).toBe(true);
+
+    const changed = structuredClone(approved);
+    (changed.identity.tokens.color as Record<string, unknown>).accent = { $value: '#ff5c00', $type: 'color' };
+    const impact = identityChangeImpact(approved, changed, versionId);
+    expect(impact.reopensGate).toBe(true);
+
+    const removed = await pruneRenderCache(cacheDir, impact.staleRenderKeys);
+    expect(await exists(written!.evidence.screenshotPath)).toBe(false);
+    // Only the entries the hub had written are counted; the rest of the matrix was never rendered.
+    expect(removed).toHaveLength(2);
   } finally {
     await preview.close();
     await rm(cacheDir, { recursive: true, force: true });

@@ -38,4 +38,11 @@ test('captain compares three directions and decides Gate 1, and a token change r
   await expect(page.locator('.gate-check.blocked')).toContainText('Gate 1 reaberto');
   await expect(page.locator('.gate-check.blocked')).toContainText('color.accent');
   await expect(page.getByText('reaberto', { exact: true })).toBeVisible();
+
+  // A reopened gate is decidable again: the captain closes it from the same screen.
+  await page.getByLabel(/Motivo da decisão/).fill('Token revisado; a direção segue valendo.');
+  await page.locator('.direction-card', { hasText: 'modular-technical' }).getByRole('button', { name: 'Aprovar esta direção' }).click();
+  await expect(page.locator('.gate-check.blocked')).toHaveCount(0);
+  await expect(page.getByText('aprovado', { exact: true })).toBeVisible();
+  await expect(record).toContainText('Token revisado; a direção segue valendo.');
 });

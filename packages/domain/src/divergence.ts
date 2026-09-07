@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { paletteSignature, paletteSignaturesMatch, type PaletteSignature } from './color.js';
+import { paletteSignaturesMatch } from './color.js';
 
 /**
  * The six axes the approved plan uses to decide whether three identity
@@ -60,7 +60,6 @@ export const divergenceSpecSchema = z.object({
   /** What the fan-out deliberately holds constant, so divergence is a decision and not an accident. */
   constants: z.array(z.string().min(1)).min(1),
   incompatibilities: z.array(z.object({ a: z.string().min(1), b: z.string().min(1), reason: z.string().min(1) })).default([]),
-  minimumDistinctAxes: z.number().int().min(1).max(divergenceAxes.length).default(MINIMUM_DISTINCT_AXES),
 }).superRefine((spec, ctx) => {
   const ids = spec.matrix.map((vector) => vector.directionId);
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['matrix'], message: 'A divergence matrix must not list the same direction twice.' });
@@ -139,5 +138,3 @@ export function compareDivergenceMatrix(matrix: DirectionVector[]): DirectionCom
   }
   return pairs;
 }
-
-export function signatureOfColors(colors: string[]): PaletteSignature { return paletteSignature(colors); }

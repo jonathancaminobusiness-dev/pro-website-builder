@@ -3,9 +3,10 @@ import {
   flattenTokens,
   governedContractFields,
   isGroundedDecision,
+  MINIMUM_DISTINCT_AXES,
+  paletteSignature,
   paletteSignaturesMatch,
   resolveTokens,
-  signatureOfColors,
   type DesignIR,
 } from '@pwb/domain';
 import type { LintIssue } from './rules.js';
@@ -86,18 +87,18 @@ export function divergenceDistance(ir: DesignIR): LintIssue[] {
   const own = spec.matrix.find((vector) => vector.directionId === spec.directionId);
   if (!own) return [{ path: '/identity/direction/divergence/matrix', message: `The matrix does not contain the direction ${spec.directionId} it belongs to.` }];
 
-  const measured = signatureOfColors(identityColors(ir));
+  const measured = paletteSignature(identityColors(ir));
   if (!paletteSignaturesMatch(measured, own.paletteSignature)) {
     issues.push({ path: '/identity/direction/divergence/matrix', message: `The palette signature recorded for ${spec.directionId} does not match the identity's colour tokens, so its divergence claim cannot be verified.` });
   }
 
   for (const pair of compareDivergenceMatrix(spec.matrix)) {
-    if (pair.distinctAxes.length >= spec.minimumDistinctAxes) continue;
+    if (pair.distinctAxes.length >= MINIMUM_DISTINCT_AXES) continue;
     const shared = pair.comparisons.filter((entry) => !entry.distinct).map((entry) => `${entry.axis}: ${entry.reason}`);
     const hue = pair.hueOnlyColor ? ' Changing only the hue does not count as a colour direction.' : '';
     issues.push({
       path: '/identity/direction/divergence/matrix',
-      message: `Directions ${pair.a} and ${pair.b} differ on ${pair.distinctAxes.length} of the required ${spec.minimumDistinctAxes} axes (${pair.distinctAxes.join(', ') || 'none'}). Shared axes — ${shared.join(' ')}${hue}`,
+      message: `Directions ${pair.a} and ${pair.b} differ on ${pair.distinctAxes.length} of the required ${MINIMUM_DISTINCT_AXES} axes (${pair.distinctAxes.join(', ') || 'none'}). Shared axes — ${shared.join(' ')}${hue}`,
     });
   }
   return issues;

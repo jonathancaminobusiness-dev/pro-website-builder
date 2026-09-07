@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { flattenTokens, governedContractFields, hashJson, type Approval, type DesignIR } from '@pwb/domain';
-import { cacheKey, createRenderCases } from '@pwb/render-hub';
+import { cacheKey, createRenderMatrix, REPRESENTATIVE_VIEWPORTS } from '@pwb/render-hub';
 import { renderDesign } from '@pwb/renderer';
 
 /** The hash the next stage consumes. It covers the identity contract only, so a page edit never reopens Gate 1. */
@@ -23,10 +23,11 @@ export interface IdentityChangeImpact {
   changedTokenPaths: string[];
   changedContractFields: string[];
   /**
-   * Render cache entries produced from the approved identity. The RenderHub
-   * keys its cache by the IR hash, so a token change makes these unreachable
-   * rather than stale; listing them is what lets the studio drop them and lets a
-   * test prove no approved screenshot survives a token change.
+   * Render cache entries the RenderHub wrote for the approved version, keyed on
+   * the same preview route it is driven with. The cache is content-addressed, so
+   * a token change makes these unreachable rather than stale; listing them is
+   * what lets the studio drop them and lets a test prove no approved screenshot
+   * survives a token change.
    */
   staleRenderKeys: string[];
 }
@@ -39,7 +40,7 @@ function contractFieldValue(ir: DesignIR, field: string): unknown {
   return field.split('.').reduce<unknown>((current, segment) => (current && typeof current === 'object' ? (current as Record<string, unknown>)[segment] : undefined), ir.identity);
 }
 
-export function identityChangeImpact(approved: DesignIR, current: DesignIR): IdentityChangeImpact {
+export function identityChangeImpact(approved: DesignIR, current: DesignIR, approvedVersionId: string): IdentityChangeImpact {
   const before = tokenValues(approved);
   const after = tokenValues(current);
   const changedTokenPaths = [...new Set([...before.keys(), ...after.keys()])]
@@ -49,23 +50,24 @@ export function identityChangeImpact(approved: DesignIR, current: DesignIR): Ide
     .filter((field) => hashJson(contractFieldValue(approved, field)) !== hashJson(contractFieldValue(current, field)))
     .map((field) => String(field));
   const reopensGate = identityHash(approved) !== identityHash(current);
-  const approvedRender = renderDesign(approved);
-  const staleRenderKeys = reopensGate ? createRenderCases(approved).map((renderCase) => cacheKey(approvedRender, renderCase)) : [];
+  if (!reopensGate) return { reopensGate, changedTokenPaths, changedContractFields, staleRenderKeys: [] };
+  const approvedRender = renderDesign(approved, { routePrefix: `/preview/${approvedVersionId}` });
+  const staleRenderKeys = createRenderMatrix(approved, { viewports: REPRESENTATIVE_VIEWPORTS }).map((renderCase) => cacheKey(approvedRender, renderCase));
   return { reopensGate, changedTokenPaths, changedContractFields, staleRenderKeys };
 }
 
 /**
  * Drops the RenderHub cache entries a change made unreachable. The cache is
  * content-addressed, so a stale entry can never be served by mistake; pruning
- * is about not keeping screenshots of an identity nobody approved.
+ * is about not keeping screenshots of an identity nobody approved. What comes
+ * back is what the cache actually held, never the list of paths tried.
  */
 export async function pruneRenderCache(cacheDir: string, keys: string[]): Promise<string[]> {
   const removed: string[] = [];
   for (const key of keys) {
-    for (const extension of ['.json', '.png']) {
+    for (const extension of ['.evidence.json', '.evidence.png']) {
       const path = join(cacheDir, `${key}${extension}`);
-      await rm(path, { force: true });
-      removed.push(path);
+      try { await rm(path); removed.push(path); } catch { /* the cache never held this entry */ }
     }
   }
   return removed;
@@ -109,7 +111,7 @@ export type IdentityGateState =
  */
 export function evaluateIdentityGate(record: IdentityGateRecord | undefined, approvedIr: DesignIR | undefined, currentIr: DesignIR): IdentityGateState {
   if (!record || !approvedIr) return { state: 'open', reason: 'Gate 1 has not been decided by the captain yet.' };
-  const impact = identityChangeImpact(approvedIr, currentIr);
+  const impact = identityChangeImpact(approvedIr, currentIr, record.versionId);
   if (!impact.reopensGate) return { state: 'closed', record };
   return { state: 'reopened', record, impact };
 }

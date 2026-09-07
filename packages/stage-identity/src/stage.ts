@@ -6,10 +6,12 @@ import {
   hashJson,
   identitySpecSchema,
   idempotencyKey,
+  MINIMUM_DISTINCT_AXES,
+  paletteSignature,
   resolveTokens,
-  signatureOfColors,
   stageRoles,
   stageWritablePaths,
+  type AgentResult,
   type AgentTask,
   type DesignIR,
   type DirectionComparison,
@@ -116,6 +118,13 @@ function getTokenAt(tokens: IdentitySpec['tokens'], path: string): unknown {
   return path.split('.').reduce<unknown>((current, segment) => (current && typeof current === 'object' ? (current as Record<string, unknown>)[segment] : undefined), tokens);
 }
 
+/** The validation errors a corrective re-invocation has to repair, or undefined when the artefact already fits its schema. */
+function artifactProblem(schema: { parse: (value: unknown) => unknown }, artifact: unknown): string | undefined {
+  if (artifact === undefined) return 'The answer carried no artifact at all.';
+  try { schema.parse(artifact); return undefined; }
+  catch (error) { return error instanceof Error ? error.message : 'The artifact does not match its schema.'; }
+}
+
 function requireArtifact<T>(schema: { parse: (value: unknown) => T }, artifact: unknown, taskId: string, what: string): T {
   if (artifact === undefined) throw new StageError(`Task ${taskId} returned no ${what}.`);
   try { return schema.parse(artifact); }
@@ -169,6 +178,7 @@ export class IdentityStage {
     this.candidates = await this.refine(this.brief, signal);
     await this.syncMatrix();
     this.divergence = this.measureDivergence();
+    await this.recritiqueRefined(this.brief, signal);
     await this.planImagery(this.brief, signal);
     await this.record('identity.stage.gate_opened', { runId: this.options.runId, directions: this.candidates.map((candidate) => candidate.directionId), divergencePassed: this.divergence.passed });
     return this.snapshot();
@@ -198,9 +208,9 @@ export class IdentityStage {
   get approvedVersionId(): string | undefined { return this.currentVersionId ?? this.gateRecord?.versionId; }
 
   /** The typed handoff the prototype stage plans against; undefined until the captain decides. */
-  handoff(): IdentityHandoff | undefined {
+  handoff(gate: IdentityGateState = this.gateState()): IdentityHandoff | undefined {
     const versionId = this.approvedVersionId;
-    return versionId ? handoffOf(this.gateState(), versionId, this.approvedAssets) : undefined;
+    return versionId ? handoffOf(gate, versionId, this.approvedAssets) : undefined;
   }
 
   // ---------------------------------------------------------------- step 1
@@ -208,7 +218,7 @@ export class IdentityStage {
   private async curate(signal?: AbortSignal): Promise<BriefSpec> {
     const base = this.branches.version(this.options.baseVersionId);
     const task = this.task({ id: 'identity-curator', role: 'curator', deadlineMs: this.deadlines.curator, brief: briefCuratorPrompt(this.options.briefing), allowedPaths: [], ir: base.ir });
-    const [result] = await this.dispatch([task], signal);
+    const [result] = await this.dispatch([task], signal, briefSpecSchema);
     if (!result) throw new StageError('The brief curator produced no result.');
     return requireArtifact(briefSpecSchema, result.artifact, task.id, 'BriefSpec');
   }
@@ -225,7 +235,7 @@ export class IdentityStage {
       allowedPaths: IDENTITY_ALLOWED_PATHS,
       ir: base.ir,
     }));
-    const results = await this.dispatch(tasks, signal);
+    const results = await this.dispatch(tasks, signal, directionVectorDraftSchema);
 
     // One director failing its schema is a recoverable loss of a branch, not the
     // loss of the stage; the matrix still needs at least two directions to exist.
@@ -252,30 +262,37 @@ export class IdentityStage {
 
     const candidates: IdentityCandidate[] = [];
     for (const entry of drafts) {
-      const spec: DivergenceSpec = { directionId: entry.seatId, matrix, constants, incompatibilities, minimumDistinctAxes: 4 };
-      const identity = identitySpecSchema.parse({
-        ...entry.identity,
-        direction: {
-          ...entry.identity.direction,
-          divergence: spec,
-          rejectedAlternatives: matrix.filter((vector) => vector.directionId !== entry.seatId).map((vector) => ({ directionId: vector.directionId, label: vector.label, reason: 'Alternative branch kept for the captain to compare; never merged into this one.' })),
-        },
-      });
-      const patch: Patch = {
-        operations: [{ op: 'replace', path: '/identity', value: identity }],
-        baseVersionId: entry.task.baseVersionId,
-        touchedPaths: ['/identity'],
-        rationale: `Direction ${entry.seatId}: ${identity.direction.rationale}`,
-        confidence: 1,
-        stage: 'identity',
-        role: stageRoles.identity,
-        idempotencyKey: idempotencyKey(entry.task),
-      };
-      const version = this.branches.applierFor(entry.seatId).apply(patch, IDENTITY_TASK_SCOPE, entry.task.baseVersionId);
-      renderDesign(version.ir);
-      candidates.push(this.candidateOf(entry.seatId, version));
-      await this.record('identity.candidate.opened', { directionId: entry.seatId, versionId: version.id, parentVersionId: version.parentId, identityHash: identityHash(version.ir) });
+      try {
+        const spec: DivergenceSpec = { directionId: entry.seatId, matrix, constants, incompatibilities };
+        const identity = identitySpecSchema.parse({
+          ...entry.identity,
+          direction: {
+            ...entry.identity.direction,
+            divergence: spec,
+            rejectedAlternatives: matrix.filter((vector) => vector.directionId !== entry.seatId).map((vector) => ({ directionId: vector.directionId, label: vector.label, reason: 'Alternative branch kept for the captain to compare; never merged into this one.' })),
+          },
+        });
+        const patch: Patch = {
+          operations: [{ op: 'replace', path: '/identity', value: identity }],
+          baseVersionId: entry.task.baseVersionId,
+          touchedPaths: ['/identity'],
+          rationale: `Direction ${entry.seatId}: ${identity.direction.rationale}`,
+          confidence: 1,
+          stage: 'identity',
+          role: stageRoles.identity,
+          idempotencyKey: idempotencyKey(entry.task),
+        };
+        const version = this.branches.applierFor(entry.seatId).apply(patch, IDENTITY_TASK_SCOPE, entry.task.baseVersionId);
+        renderDesign(version.ir);
+        candidates.push(this.candidateOf(entry.seatId, version));
+        await this.record('identity.candidate.opened', { directionId: entry.seatId, versionId: version.id, parentVersionId: version.parentId, identityHash: identityHash(version.ir) });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'The director branch could not be opened.';
+        this.failures.push({ taskId: entry.task.id, reason });
+        await this.record('identity.candidate.rejected', { directionId: entry.seatId, reason });
+      }
     }
+    if (candidates.length < 2) throw new StageError(`The identity fan-out produced ${candidates.length} usable directions; a divergence matrix needs at least two.`);
     siblingsOf(this.options.store, candidates.map((candidate) => candidate.versionId));
     return candidates;
   }
@@ -299,7 +316,7 @@ export class IdentityStage {
       directionId: seatId,
       label: draft.label,
       axes: Object.fromEntries(divergenceAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: draft.descriptors[axis] }])) as DirectionVector['axes'],
-      paletteSignature: signatureOfColors(colors),
+      paletteSignature: paletteSignature(colors),
     };
   }
 
@@ -330,21 +347,21 @@ export class IdentityStage {
     const matrix = this.candidates.map((candidate) => candidate.vector);
     if (matrix.length < 2) return { pairs: [], passed: false, blockedPairs: ['A divergence matrix needs at least two directions.'] };
     const pairs = compareDivergenceMatrix(matrix);
-    const minimum = this.candidates[0]?.identity.direction.divergence?.minimumDistinctAxes ?? 4;
     const blockedPairs = pairs
-      .filter((pair) => pair.distinctAxes.length < minimum)
-      .map((pair) => `${pair.a} and ${pair.b} differ on ${pair.distinctAxes.length} of ${minimum} axes${pair.hueOnlyColor ? '; the colour difference is only a hue rotation' : ''}.`);
+      .filter((pair) => pair.distinctAxes.length < MINIMUM_DISTINCT_AXES)
+      .map((pair) => `${pair.a} and ${pair.b} differ on ${pair.distinctAxes.length} of ${MINIMUM_DISTINCT_AXES} axes${pair.hueOnlyColor ? '; the colour difference is only a hue rotation' : ''}.`);
     return { pairs, passed: blockedPairs.length === 0, blockedPairs };
   }
 
   // ---------------------------------------------------------------- step 4
 
-  private async critique(brief: BriefSpec, signal?: AbortSignal): Promise<CritiqueReport[]> {
+  private async critique(brief: BriefSpec, signal?: AbortSignal, only?: IdentityAxisBriefId[]): Promise<CritiqueReport[]> {
+    const subjects = only ? this.candidates.filter((candidate) => only.includes(candidate.directionId)) : this.candidates;
     const tasks: AgentTask[] = [];
     for (const critic of identityCritics) {
       if (critic.scope === 'matrix') {
         const first = this.candidates[0];
-        if (!first) continue;
+        if (!first || only) continue;
         tasks.push(this.task({
           id: `identity-critic-${critic.id}`,
           role: 'critic',
@@ -355,7 +372,7 @@ export class IdentityStage {
         }));
         continue;
       }
-      for (const candidate of this.candidates) {
+      for (const candidate of subjects) {
         tasks.push(this.task({
           id: `identity-critic-${critic.id}-${candidate.directionId}`,
           role: 'critic',
@@ -366,7 +383,7 @@ export class IdentityStage {
         }));
       }
     }
-    const results = await this.dispatch(tasks, signal);
+    const results = await this.dispatch(tasks, signal, critiqueReportSchema);
     const reports: CritiqueReport[] = [];
     for (const result of results) {
       if (result.proposal) {
@@ -374,22 +391,48 @@ export class IdentityStage {
         await this.record('identity.critic.rejected', { taskId: result.taskId, reason: 'critic proposed a patch' });
         continue;
       }
-      reports.push(requireArtifact(critiqueReportSchema, result.artifact, result.taskId, 'CritiqueReport'));
+      // A critic is advisory, so an answer that misses its schema costs its own
+      // report and the captain's attention, never the whole stage.
+      try {
+        reports.push(requireArtifact(critiqueReportSchema, result.artifact, result.taskId, 'CritiqueReport'));
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'The critique did not validate.';
+        this.failures.push({ taskId: result.taskId, reason });
+        await this.record('identity.critic.rejected', { taskId: result.taskId, reason });
+      }
     }
     await this.record('identity.critique.completed', { reports: reports.length, abstained: reports.filter((report) => report.abstain).length });
     return reports;
   }
 
+  /**
+   * A direction carries the findings written about it and the findings written
+   * about the set it belongs to: a matrix critic judges the fan-out as a whole,
+   * so its findings weigh on every candidate in it.
+   */
   private applyCritiqueToCandidates(): void {
     this.candidates = this.candidates.map((candidate) => {
       const forCandidate = this.critiques.filter((report) => (report.subject.kind === 'direction' && report.subject.directionId === candidate.directionId) || report.subject.kind === 'matrix');
       return {
         ...candidate,
-        blocking: forCandidate.flatMap(blockingFindings).filter((finding) => findingTargets(finding, candidate.directionId)),
+        blocking: forCandidate.flatMap(blockingFindings),
         rubricGaps: forCandidate.flatMap(belowRubric),
         abstained: forCandidate.some((report) => report.abstain),
       };
     });
+  }
+
+  /**
+   * The other half of the single refinement cycle: a repaired direction is read
+   * again by the same critics, so what the captain sees at Gate 1 describes the
+   * version in front of them and a repair can actually clear a blocker.
+   */
+  private async recritiqueRefined(brief: BriefSpec, signal?: AbortSignal): Promise<void> {
+    const refined = this.candidates.filter((candidate) => candidate.refinedFromVersionId).map((candidate) => candidate.directionId);
+    if (refined.length === 0) return;
+    const reports = await this.critique(brief, signal, refined);
+    this.critiques = [...this.critiques.filter((report) => !(report.subject.kind === 'direction' && refined.includes(report.subject.directionId as IdentityAxisBriefId))), ...reports];
+    this.applyCritiqueToCandidates();
   }
 
   // ---------------------------------------------------------------- step 5
@@ -471,7 +514,7 @@ export class IdentityStage {
     for (const [index, candidate] of this.candidates.entries()) {
       const current = candidate.identity.direction.divergence;
       if (current && hashJson(current.matrix) === digest) continue;
-      const spec: DivergenceSpec = { directionId: candidate.directionId, matrix, constants: current?.constants ?? [], incompatibilities: current?.incompatibilities ?? [], minimumDistinctAxes: current?.minimumDistinctAxes ?? 4 };
+      const spec: DivergenceSpec = { directionId: candidate.directionId, matrix, constants: current?.constants ?? [], incompatibilities: current?.incompatibilities ?? [] };
       const patch: Patch = {
         operations: [{ op: 'replace', path: '/identity/direction/divergence', value: spec }],
         baseVersionId: candidate.versionId,
@@ -499,14 +542,23 @@ export class IdentityStage {
       ir: this.branches.version(candidate.versionId).ir,
       brief: imageArtDirectorPrompt({ brief, directionId: candidate.directionId, identity: candidate.identity }),
     }));
-    const results = await this.dispatch(tasks, signal);
+    const results = await this.dispatch(tasks, signal, imagePromptPlanSchema);
     for (const result of results) {
       const directionId = result.taskId.replace('identity-art-director-', '') as IdentityAxisBriefId;
       const index = this.candidates.findIndex((candidate) => candidate.directionId === directionId);
       if (index < 0) continue;
-      const plan = requireArtifact(imagePromptPlanSchema, result.artifact, result.taskId, 'ImagePromptPlan');
-      const candidate = this.candidates[index]!;
-      this.candidates[index] = { ...candidate, imagePlan: plan, imageryViolations: imageryPolicyViolations(plan, this.branches.version(candidate.versionId).ir) };
+      try {
+        const plan = requireArtifact(imagePromptPlanSchema, result.artifact, result.taskId, 'ImagePromptPlan');
+        // The seat the task was issued for is the only direction the plan can be
+        // about; otherwise its policy would be checked against another direction.
+        if (plan.directionId !== directionId) throw new StageError(`Art director ${result.taskId} answered for direction ${plan.directionId} instead of its own seat.`);
+        const candidate = this.candidates[index]!;
+        this.candidates[index] = { ...candidate, imagePlan: plan, imageryViolations: imageryPolicyViolations(plan, this.branches.version(candidate.versionId).ir) };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'The image prompt plan did not validate.';
+        this.failures.push({ taskId: result.taskId, reason });
+        await this.record('identity.imagery.rejected', { directionId, reason });
+      }
     }
     await this.record('identity.imagery.planned', { plans: this.candidates.filter((candidate) => candidate.imagePlan).length, generated: 0 });
   }
@@ -648,14 +700,32 @@ export class IdentityStage {
     };
   }
 
-  /** Runs tasks through the shared scheduler, which is what keeps the lane limits and deadlines honest. */
-  private async dispatch(tasks: AgentTask[], signal?: AbortSignal): Promise<Array<{ taskId: string; proposal: Patch | undefined; artifact: unknown }>> {
+  /**
+   * Runs tasks through the shared scheduler, which is what keeps the lane limits
+   * and deadlines honest. When the role answers with an artefact, the scheduler's
+   * settle callback validates it against that role's closed schema and spends
+   * exactly one corrective re-invocation, carrying the validation errors, before
+   * the answer is handed on as it is and recorded for human review.
+   */
+  private async dispatch(tasks: AgentTask[], signal?: AbortSignal, artifactSchema?: { parse: (value: unknown) => unknown }): Promise<Array<{ taskId: string; proposal: Patch | undefined; artifact: unknown }>> {
     for (const task of tasks) await this.record('identity.task.queued', { taskId: task.id, role: task.role, baseVersionId: task.baseVersionId, deadlineMs: task.deadlineMs });
+    const corrections = new Map<string, string>();
     const outcome = await this.scheduler.run(tasks, async (task, taskSignal) => {
-      const result = agentResultSchema.parse(await this.options.provider.propose(task, taskSignal));
+      const correction = corrections.get(task.id);
+      const brief = correction ? `${task.brief}\n\n## Correção\nA resposta anterior não passou no schema desta função. Corrija exatamente estes erros e responda de novo, no mesmo formato:\n${correction}` : task.brief;
+      const result = agentResultSchema.parse(await this.options.provider.propose({ ...task, brief }, taskSignal));
       if (result.status === 'failed') throw new Error(`${task.id} failed: ${result.summary}`);
       return result;
-    }, { ...(signal ? { signal } : {}) });
+    }, {
+      ...(signal ? { signal } : {}),
+      ...(artifactSchema ? { settle: async (task: AgentTask, value: AgentResult) => {
+        const problem = artifactProblem(artifactSchema, value.artifact);
+        if (!problem || task.attempt > 1) return 'approved';
+        corrections.set(task.id, problem);
+        await this.record('identity.task.correction', { taskId: task.id, role: task.role, attempt: task.attempt, reason: problem });
+        return 'rejected';
+      } } : {}),
+    });
 
     const answers: Array<{ taskId: string; proposal: Patch | undefined; artifact: unknown }> = [];
     for (const entry of outcome.results) {
@@ -674,9 +744,4 @@ export class IdentityStage {
   private async record(type: string, payload: Record<string, unknown>): Promise<void> {
     await this.options.onEvent?.(type, payload);
   }
-}
-
-/** A matrix-level finding belongs to a direction when it names it, and to all of them when it names none. */
-function findingTargets(finding: CritiqueFinding, directionId: string): boolean {
-  return !finding.path.startsWith('/candidates/') || finding.path.includes(directionId);
 }

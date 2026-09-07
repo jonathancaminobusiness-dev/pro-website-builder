@@ -102,7 +102,18 @@ describe('identity run', () => {
     expect(handed.directionId).toBe('editorial-material');
     const reopened = await run.changeToken({ tokenPath: 'color.paper', value: { $value: '#ffffff', $type: 'color' }, rationale: 'Papel mais claro.' });
     expect(reopened.handoff?.stale).toBe(true);
-    expect(reopened.prunedRenders).toBeGreaterThan(0);
+  });
+
+  it('reports only the render cache entries it actually removed', async () => {
+    const run = new IdentityRun({ runId: 'identity-prune', repository: new ProjectRepository(database), provider: new FakeIdentityProvider(), renderCacheDir: join(directory, 'render-cache') });
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
+    const reopened = await run.changeToken({ tokenPath: 'color.paper', value: { $value: '#ffffff', $type: 'color' }, rationale: 'Papel mais claro.' });
+    // Nothing was ever rendered for this run, so nothing was pruned; the count is
+    // what left the cache, not how many keys were tried.
+    expect(reopened.gate.state).toBe('reopened');
+    expect(reopened.prunedRenders).toBe(0);
   });
 
   it('refuses a rejection from anyone but the captain', async () => {

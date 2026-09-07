@@ -137,6 +137,70 @@ describe('identity stage fan-out', () => {
     await expect(harness({ provider }).stage.run()).rejects.toThrow(/needs at least two/i);
   });
 
+  it('keeps the healthy branches when one director\u2019s identity cannot be applied', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-director-modular-technical' || !result.proposal) return result;
+        // A token vocabulary the fixture pages still reference: schema-valid, but no document can be built from it.
+        const identity = fakeIdentityFor('modular-technical');
+        const { display: _display, ...type } = identity.tokens.type as Record<string, unknown>;
+        return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: { ...identity, tokens: { ...identity.tokens, type } } }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    expect(result.candidates.map((candidate) => candidate.directionId)).toEqual(['editorial-material', 'typographic-low-chroma']);
+    expect(result.failures.some((failure) => failure.taskId === 'identity-director-modular-technical')).toBe(true);
+    expect(result.gate.state).toBe('open');
+  });
+
+  it('spends exactly one corrective re-invocation on an artefact that misses its schema', async () => {
+    const inner = new FakeIdentityProvider();
+    const briefs: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-brand-fit-critic-editorial-material') return result;
+        briefs.push(task.brief);
+        if (task.attempt > 1) return result;
+        const { summary: _summary, ...withoutSummary } = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: withoutSummary };
+      },
+    };
+    const { stage, events } = harness({ provider });
+    const result = await stage.run();
+    expect(briefs).toHaveLength(2);
+    // The second invocation carries the validation errors the first answer produced.
+    expect(briefs[1]).toContain('summary');
+    expect(briefs[1]!.startsWith(briefs[0]!)).toBe(true);
+    expect(result.failures).toEqual([]);
+    expect(result.critiques.some((report) => report.criticId === 'brand-fit-critic' && report.subject.kind === 'direction' && report.subject.directionId === 'editorial-material')).toBe(true);
+    expect(events.some((event) => event.type === 'identity.task.correction')).toBe(true);
+  });
+
+  it('escalates to human review instead of correcting twice', async () => {
+    const inner = new FakeIdentityProvider();
+    const attempts: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-brand-fit-critic-editorial-material') return result;
+        attempts.push(task.attempt);
+        const { summary: _summary, ...withoutSummary } = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: withoutSummary };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    expect(attempts).toEqual([1, 2]);
+    expect(result.failures.some((failure) => failure.taskId === 'identity-critic-brand-fit-critic-editorial-material' && /does not match its schema/.test(failure.reason))).toBe(true);
+    expect(result.critiques.some((report) => report.criticId === 'brand-fit-critic' && report.subject.kind === 'direction' && report.subject.directionId === 'editorial-material')).toBe(false);
+    // One critic's malformed answer costs its own report, never the stage.
+    expect(result.candidates).toHaveLength(3);
+  });
+
   it('spends at most one refinement cycle and applies it onto the branch it repairs', async () => {
     const inner = new FakeIdentityProvider();
     const refinerCalls: string[] = [];
@@ -157,6 +221,30 @@ describe('identity stage fan-out', () => {
     expect(repaired.versionId).not.toBe(repaired.refinedFromVersionId);
     // The refinement is a child of the candidate branch, not a new sibling of the base.
     expect(store.get(repaired.versionId)!.parentId).toBe(repaired.refinedFromVersionId);
+  });
+
+  it('lets a refined direction be approved without an override once the critics read the repair', async () => {
+    const inner = new FakeIdentityProvider();
+    const reads: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-brand-fit-critic-editorial-material') return result;
+        reads.push(task.attempt);
+        if (reads.length > 1) return result;
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, findings: [{ id: 'bf-1', dimension: 'brand-fit', severity: 'error', path: '/identity/direction/thesis', observation: 'A tese não cita a prova.', why: 'O público avalia processo, não promessa.', evidenceIds: ['ev-proof'], confidence: 0.7 }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const repaired = result.candidates.find((candidate) => candidate.directionId === 'editorial-material')!;
+    expect(repaired.refinedFromVersionId).toBeDefined();
+    // The critics read the repaired version once, so the finding the refiner closed is gone.
+    expect(reads).toHaveLength(2);
+    expect(repaired.blocking).toEqual([]);
+    const approved = await stage.approve({ directionId: 'editorial-material', rationale: 'A direção editorial responde ao briefing.', approverRole: 'captain' });
+    expect(approved.record.directionId).toBe('editorial-material');
   });
 });
 
@@ -225,6 +313,23 @@ describe('image art director', () => {
     expect(approval.assets[0]?.status).toBe('placeholder');
     expect(approval.assets[0]?.provenance.source).toMatch(/not configured/);
     expect(approval.assets[0]?.provenance.license).toBeTruthy();
+  });
+
+  it('refuses a plan that answers for a direction other than the seat it was asked about', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-art-director-typographic-low-chroma') return result;
+        const plan = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...plan, directionId: 'editorial-material', plans: [{ ...(plan.plans as Record<string, unknown>[])[0], role: 'hero' }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'typographic-low-chroma')!;
+    expect(candidate.imagePlan).toBeUndefined();
+    expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-typographic-low-chroma' && /instead of its own seat/.test(failure.reason))).toBe(true);
   });
 
   it('refuses a plan that smuggles photography into a direction that declared none', async () => {
@@ -296,10 +401,10 @@ describe('gate 1', () => {
     expect(changed.gate.impact.staleRenderKeys.length).toBeGreaterThan(0);
 
     const currentIr = store.get(changed.versionId)!.ir;
-    const impact = identityChangeImpact(approvedIr, currentIr);
+    const impact = identityChangeImpact(approvedIr, currentIr, chosen.versionId);
     expect(impact.reopensGate).toBe(true);
     // Every render key the approved identity produced is gone; none survives into the new version.
-    const nextKeys = new Set(identityChangeImpact(currentIr, approvedIr).staleRenderKeys);
+    const nextKeys = new Set(identityChangeImpact(currentIr, approvedIr, chosen.versionId).staleRenderKeys);
     for (const key of impact.staleRenderKeys) expect(nextKeys.has(key)).toBe(false);
     expect(events.some((event) => event.type === 'identity.gate.reopened')).toBe(true);
   });
@@ -311,7 +416,7 @@ describe('gate 1', () => {
     await stage.approve({ directionId: chosen.directionId, rationale: 'Aprovada.', approverRole: 'captain' });
     const ir = store.get(chosen.versionId)!.ir;
     const withNewPageTitle = { ...ir, pages: { routes: ir.pages.routes.map((page, index) => index === 0 ? { ...page, title: 'Outro título' } : page) } };
-    expect(identityChangeImpact(ir, withNewPageTitle).reopensGate).toBe(false);
+    expect(identityChangeImpact(ir, withNewPageTitle, chosen.versionId).reopensGate).toBe(false);
     expect(stage.gateState().state).toBe('closed');
   });
 

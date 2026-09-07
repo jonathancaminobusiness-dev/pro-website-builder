@@ -79,9 +79,12 @@ describe('render invalidation', () => {
       }
       await writeFile(join(cacheDir, 'unrelated.json'), '{}', 'utf8');
 
-      await pruneRenderCache(cacheDir, keys);
+      const removed = await pruneRenderCache(cacheDir, keys);
+      expect(removed).toHaveLength(keys.length * 2);
       const left = await readdir(cacheDir);
       expect(left).toEqual(['unrelated.json']);
+      // A second pass has nothing left to drop, and says so instead of counting attempts.
+      expect(await pruneRenderCache(cacheDir, keys)).toEqual([]);
     } finally {
       await rm(cacheDir, { recursive: true, force: true });
     }
