@@ -56,6 +56,27 @@ describe('phase 0 fixture run', () => {
     db.sqlite.close();
   });
 
+  it('holds the prototype stage until the captain approves identity, across a rejected re-run', async () => {
+    const db = openDatabase(':memory:');
+    const repository = new ProjectRepository(db);
+    const fake = new FakeModelProvider();
+    const attempted: string[] = [];
+    const recording: ModelProvider = { async propose(task, signal) { attempted.push(`${task.stage}#${task.attempt}`); return fake.propose(task, signal); } };
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-order-')), 'exports'), provider: recording });
+    await run.initialize('run-order');
+    expect((await run.runNext()).currentStage).toBe('identity');
+    expect(attempted).toEqual(['identity#1']);
+    await run.reject('identity', 'captain');
+    expect((await run.runNext()).currentStage).toBe('identity');
+    expect(attempted).toEqual(['identity#1', 'identity#2']);
+    await run.approve('identity', 'captain');
+    expect((await run.runNext()).currentStage).toBe('prototype');
+    expect(attempted).toEqual(['identity#1', 'identity#2', 'prototype#1']);
+    const events = (await repository.listEvents('run-order')).map((event) => event.type);
+    expect(events.indexOf('approval.recorded')).toBeLessThan(events.lastIndexOf('task.started'));
+    db.sqlite.close();
+  });
+
   it('keeps a pending captain gate across cancel and restart', async () => {
     const db = openDatabase(':memory:');
     const repository = new ProjectRepository(db);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { agentTaskSchema, createFixtureIR, hashJson, type AgentTask, type DesignIR } from '@pwb/domain';
 import { FakeModelProvider } from '@pwb/providers';
-import { Applier, PatchGate, RunPlanner, Scheduler, VersionStore } from './index.js';
+import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, VersionStore } from './index.js';
 
 const ALLOWED = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
@@ -16,6 +16,7 @@ describe('orchestrator', () => {
     const plan = new RunPlanner(store).plan('run-1', root.id, 'brief');
     expect(plan.tasks.map((item) => item.stage)).toEqual(['identity', 'prototype', 'finalization']);
     expect(plan.tasks.map((item) => item.id)).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
+    expect(plan.edges).toEqual([['task-identity', 'task-prototype'], ['task-prototype', 'task-finalization']]);
   });
 
   it('hands every task an immutable slice of the base version and digests it', () => {
@@ -148,6 +149,86 @@ describe('orchestrator', () => {
     expect((result.results[0]?.error as Error).message).toMatch(/deadline/i);
     expect(aborted).toBe(true);
     expect(result.cancelled).toBe(false);
+  });
+
+  it('starts a stage only after the stage it depends on has succeeded', async () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const plan = new RunPlanner(store).plan('run-dag', root.id, 'brief');
+    const started: string[] = [];
+    const finished: string[] = [];
+    let concurrent = 0;
+    let peak = 0;
+    const result = await new Scheduler({ maxActiveClaude: 3 }).run(plan.tasks, async (item) => {
+      started.push(item.id);
+      concurrent += 1; peak = Math.max(peak, concurrent);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      finished.push(item.id);
+      concurrent -= 1;
+      return item.stage;
+    }, { edges: plan.edges });
+    expect(peak).toBe(1);
+    expect(finished).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
+    for (const [dependency, dependent] of plan.edges) {
+      expect(started.indexOf(dependent)).toBeGreaterThan(finished.indexOf(dependency));
+    }
+    expect(result.results.map((item) => item.state)).toEqual(['succeeded', 'succeeded', 'succeeded']);
+  });
+
+  it('cancels the stages that depend on a stage which did not succeed', async () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const plan = new RunPlanner(store).plan('run-dag', root.id, 'brief');
+    const result = await new Scheduler().run(plan.tasks, async (item) => {
+      if (item.stage === 'identity') throw new Error('director failed');
+      return item.stage;
+    }, { edges: plan.edges });
+    expect(result.results.map((item) => [item.task.id, item.state])).toEqual([
+      ['task-identity', 'failed'],
+      ['task-prototype', 'cancelled'],
+      ['task-finalization', 'cancelled'],
+    ]);
+  });
+
+  it('holds a dependent stage until its predecessor gate is settled and re-runs a rejected stage', async () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const plan = new RunPlanner(store).plan('run-gate', root.id, 'brief');
+    const started: string[] = [];
+    const approved = new Set<string>();
+    let identityVerdicts: GateVerdict[] = ['rejected', 'approved'];
+    const result = await new Scheduler().run(plan.tasks, async (item) => { started.push(`${item.id}#${item.attempt}`); return item.stage; }, {
+      edges: plan.edges,
+      admit: (item) => plan.edges.filter(([, to]) => to === item.id).every(([from]) => approved.has(from)),
+      settle: async (item) => {
+        const verdict = item.id === 'task-identity' ? identityVerdicts.shift()! : 'approved';
+        if (verdict === 'approved') approved.add(item.id);
+        return verdict;
+      },
+    });
+    expect(started).toEqual(['task-identity#1', 'task-identity#2', 'task-prototype#1', 'task-finalization#1']);
+    expect(result.results.map((item) => [item.task.id, item.task.attempt, item.state])).toEqual([
+      ['task-identity', 2, 'succeeded'],
+      ['task-prototype', 1, 'succeeded'],
+      ['task-finalization', 1, 'succeeded'],
+    ]);
+  });
+
+  it('cancels a dependent stage whose predecessor succeeded but was never approved', async () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const plan = new RunPlanner(store).plan('run-unapproved', root.id, 'brief');
+    const started: string[] = [];
+    const result = await new Scheduler().run(plan.tasks, async (item) => { started.push(item.id); return item.stage; }, {
+      edges: plan.edges,
+      admit: (item) => item.id === 'task-identity',
+    });
+    expect(started).toEqual(['task-identity']);
+    expect(result.results.map((item) => [item.task.id, item.state])).toEqual([
+      ['task-identity', 'succeeded'],
+      ['task-prototype', 'cancelled'],
+      ['task-finalization', 'cancelled'],
+    ]);
   });
 
   it('creates immutable versions and preserves the parent on cancel/restart', async () => {

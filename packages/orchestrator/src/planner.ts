@@ -1,7 +1,7 @@
 import { hashJson, type AgentTask, type DesignIR } from '@pwb/domain';
 import type { VersionStore } from './applier.js';
 
-export interface RunPlan { runId: string; tasks: AgentTask[]; }
+export interface RunPlan { runId: string; tasks: AgentTask[]; edges: [string, string][]; }
 
 const allowedPaths = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
@@ -29,6 +29,6 @@ export class RunPlanner {
     ];
     const inputDigest = hashJson({ runId, brief, documentSlice });
     const tasks = stages.map((item) => ({ id: `task-${item.stage}`, ...item, attempt: 1, state: 'queued' as const, lane: 'claude' as const, baseVersionId, inputDigest, promptVersion: 'phase0-v1', modelAlias: 'claude-local', allowedPaths, documentSlice, brief }));
-    return { runId, tasks };
+    return { runId, tasks, edges: [['task-identity', 'task-prototype'], ['task-prototype', 'task-finalization']] };
   }
 }
