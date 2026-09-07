@@ -1,6 +1,5 @@
 import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { CONTROL_SEEDS, type ControlSeed } from '@pwb/stage-prototype';
 import type { Gate2Snapshot, IssueDecision, PrototypeRunRegistry } from './prototype-api.js';
 
 export interface PrototypeResponse { status: number; payload: unknown; }
@@ -23,9 +22,7 @@ export async function handlePrototypeRequest(registry: PrototypeRunRegistry, req
     const runId = text(input, 'runId') || `prototype-${randomUUID()}`;
     if (input.approverRole !== 'captain') return { status: 403, payload: { error: 'Only the captain can start a prototype run.' } };
     if (registry.has(runId)) return { status: 409, payload: { error: `Run ${runId} already exists.` } };
-    const seed = (text(input, 'seed') || 'fixture') as ControlSeed;
-    if (!CONTROL_SEEDS.includes(seed)) return { status: 400, payload: { error: `Unknown seed ${seed}; use ${CONTROL_SEEDS.join(' or ')}.` } };
-    return { status: 201, payload: await registry.create(runId, seed) };
+    return { status: 201, payload: await registry.create(runId) };
   }
 
   const match = /^\/api\/prototype\/runs\/([^/]+)(?:\/(decision|gate))?$/.exec(pathname);

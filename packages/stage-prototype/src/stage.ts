@@ -99,6 +99,7 @@ export class PrototypeStage {
       qa = runQa({ ir: current.ir, evidence: bundle.evidence });
       if (qa.vetoes.length > 0) {
         cycles.push(summariseCycle({ cycle, versionId: current.id, qaIssueHash: qa.issueHash, vetoes: qa.vetoes.length, reports: [], plan: { accepted: [], rejected: [] } }));
+        decision = decideNextCycle(cycles, this.budget, this.now() - started);
         break;
       }
       reports = await this.critique(input, current.ir, identity, qa, bundle.captures, cycle);
@@ -118,11 +119,6 @@ export class PrototypeStage {
       }
       decision = decideNextCycle(cycles, this.budget, this.now() - started);
       await this.record('prototype.cycle.decided', { runId: input.runId, cycle, reason: decision.reason, proceed: decision.proceed });
-    }
-
-    if (cycles.length > 0) {
-      const settled = decideNextCycle(cycles, this.budget, this.now() - started);
-      decision = { proceed: false, reason: settled.reason, detail: settled.detail };
     }
 
     const finalQa = qa.vetoes.length > 0 ? qa : await this.gateReport(current, input.signal);
@@ -159,8 +155,15 @@ export class PrototypeStage {
   private async composeSections(input: { runId: string; baseVersionId: string; signal?: AbortSignal }, manifest: RouteManifest, base: VersionRecord, identity: IdentitySpec): Promise<VersionRecord> {
     const sections = manifest.routes.flatMap((route) => route.sections);
     const tasks = sections.map((section) => this.composerTask(input, manifest, section, base.id, identity));
+    // The scheduler reports results in completion order, so a composer is always found by the section
+    // its task names, never by its position in the result list.
+    const sectionOf = (taskId: string): SectionPlan => {
+      const section = sections.find((candidate) => candidate.id === taskId.replace(`${input.runId}-compose-`, ''));
+      if (!section) throw new PrototypeStageError('section-composer', `A tarefa ${taskId} não corresponde a nenhuma seção do manifesto.`);
+      return section;
+    };
     const result = await this.options.scheduler.run(tasks, async (task, signal) => {
-      const section = sections.find((candidate) => candidate.id === task.id.replace(`${input.runId}-compose-`, ''))!;
+      const section = sectionOf(task.id);
       const composition = await this.options.composer.compose(task, section, manifest, signal);
       const problems = validateComposition(composition, section, manifest, identity);
       if (problems.length > 0) throw new PrototypeStageError('section-composer', `A composição de ${section.id} viola seu contrato: ${problems.join(' ')}`);
@@ -173,10 +176,12 @@ export class PrototypeStage {
     // Fan-in: every composer patch is checked against the same base through the real patch gate, so an
     // overlap between two windows is refused here, and only the merged patch reaches the applier.
     const gate = new PatchGate();
+    const bySection = new Map(result.results.map((entry) => [sectionOf(entry.task.id).id, entry.value!]));
+    // Merging in manifest order, not completion order, also keeps the merged patch byte-identical run to run.
     const patches: Patch[] = [];
-    for (const [index, entry] of result.results.entries()) {
-      const patch = entry.value!;
-      const section = sections[index]!;
+    for (const section of sections) {
+      const patch = bySection.get(section.id);
+      if (!patch) throw new PrototypeStageError('section-composer', `A seção ${section.id} não produziu uma composição.`);
       gate.commit(base.id, gate.validate(patch, { currentVersionId: base.id, stage: 'prototype', role: stageRoles.prototype, allowedPaths: sectionAllowedPaths(manifest, section.id) }));
       patches.push(patch);
     }

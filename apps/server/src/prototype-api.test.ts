@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import { createFixtureIR, type DesignIR } from '@pwb/domain';
 import { FakeModelProvider } from '@pwb/providers';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
@@ -11,11 +12,24 @@ import { PrototypeRunRegistry, type Gate2Snapshot } from './prototype-api.js';
 
 const captain = { origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' };
 
-async function harness(): Promise<{ origin: string; registry: PrototypeRunRegistry; close: () => Promise<void> }> {
+/**
+ * A revision with a defect the critics are guaranteed to report: the grid grammar declares a beat the
+ * identity's own spacing roles cannot land on. It is a test fixture, not a second briefing the product
+ * offers — the shipped API runs one mode.
+ */
+function createOffRhythmControlIR(): DesignIR {
+  const ir = createFixtureIR();
+  const space = ir.identity.tokens.space as Record<string, { $value: string; $type: 'dimension' }>;
+  ir.identity.tokens = { ...ir.identity.tokens, space: { ...space, beat: { $value: '0.625rem', $type: 'dimension' } } };
+  ir.identity.gridGrammar = { ...ir.identity.gridGrammar, rhythmToken: '{space.beat}' };
+  return ir;
+}
+
+async function harness(options: { seed?: () => DesignIR } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; close: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-'));
   const db = openDatabase(join(dir, 'gate2.sqlite'));
   const repository = new ProjectRepository(db);
-  const registry = new PrototypeRunRegistry({ repository });
+  const registry = new PrototypeRunRegistry({ repository, ...(options.seed ? { seed: options.seed } : {}) });
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs, prototypes: registry,
@@ -78,18 +92,18 @@ describe('Gate 2 API', () => {
   });
 
   it('records an issue decision with a reason and refuses one without', async () => {
-    const api = await harness();
+    // Driven from a revision with a known defect, so the run always carries a finding to decide on.
+    const api = await harness({ seed: createOffRhythmControlIR });
     try {
       const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-decide' });
-      const findingId = created.payload.issues[0]?.id;
+      const findingId = created.payload.issues[0]!.id;
       const path = '/api/prototype/runs/gate2-decide/decision';
 
-      expect((await post(api.origin, path, { approverRole: 'captain', findingId: findingId ?? 'x', decision: 'accepted', rationale: '  ' })).status).toBe(400);
-      expect((await post(api.origin, path, { approverRole: 'designer', findingId: findingId ?? 'x', decision: 'accepted', rationale: 'ok' })).status).toBe(403);
+      expect((await post(api.origin, path, { approverRole: 'captain', findingId, decision: 'accepted', rationale: '  ' })).status).toBe(400);
+      expect((await post(api.origin, path, { approverRole: 'designer', findingId, decision: 'accepted', rationale: 'ok' })).status).toBe(403);
       expect((await post(api.origin, path, { approverRole: 'captain', findingId: 'ghost-finding', decision: 'accepted', rationale: 'ok' })).status).toBe(400);
-      expect((await post(api.origin, path, { approverRole: 'captain', findingId: findingId ?? 'x', decision: 'maybe', rationale: 'ok' })).status).toBe(400);
+      expect((await post(api.origin, path, { approverRole: 'captain', findingId, decision: 'maybe', rationale: 'ok' })).status).toBe(400);
 
-      if (!findingId) return;
       const decided = await post(api.origin, path, { approverRole: 'captain', findingId, decision: 'deferred', rationale: 'Sem tempo de revisar agora.' });
       expect(decided.payload.decisions).toHaveLength(1);
       expect(decided.payload.decisions[0]).toMatchObject({ findingId, decision: 'deferred', rationale: 'Sem tempo de revisar agora.', reviewerRole: 'captain' });
@@ -115,10 +129,9 @@ describe('Gate 2 API', () => {
     const db = openDatabase(join(dir, 'events.sqlite'));
     const repository = new ProjectRepository(db);
     try {
-      const registry = new PrototypeRunRegistry({ repository });
+      const registry = new PrototypeRunRegistry({ repository, seed: createOffRhythmControlIR });
       const snapshot = await registry.create('gate2-events');
-      const findingId = snapshot.issues[0]?.id;
-      if (findingId) await registry.decide('gate2-events', { findingId, decision: 'accepted', rationale: 'Reparo causal aceito.' });
+      await registry.decide('gate2-events', { findingId: snapshot.issues[0]!.id, decision: 'accepted', rationale: 'Reparo causal aceito.' });
       await registry.settle('gate2-events', { decision: 'approved', rationale: 'Aprovado.' });
       const types = (await repository.listEvents('gate2-events')).map((event) => event.type);
       expect(types).toContain('prototype.qa.gate');

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { type Approval, type DesignIR } from '@pwb/domain';
+import { createFixtureIR, type Approval, type DesignIR } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { declaresDarkScheme } from '@pwb/domain';
@@ -7,7 +7,7 @@ import { RENDER_VIEWPORTS, readStateConditions } from '@pwb/render-hub';
 import {
   ClaudeInformationArchitect, ClaudeSectionComposer, ClaudeCritiqueRunner,
   DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
-  PrototypeStage, seedFor, type ControlSeed, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
+  PrototypeStage, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
 } from '@pwb/stage-prototype';
 import type { ProjectRepository } from './db/repository.js';
 
@@ -28,7 +28,6 @@ export interface IssueDecisionRecord {
 /** Everything the Gate 2 screen needs to compare A with B and record what the captain decided. */
 export interface Gate2Snapshot {
   runId: string;
-  seed: ControlSeed;
   stopReason: PrototypeStageOutcome['stopReason'];
   stopDetail: string;
   gate: PrototypeStageOutcome['gate'];
@@ -51,7 +50,6 @@ export interface Gate2Snapshot {
 
 interface PrototypeRunRecord {
   runId: string;
-  seed: ControlSeed;
   store: VersionStore;
   outcome: PrototypeStageOutcome;
   rendered: Map<string, RenderedDocument>;
@@ -64,6 +62,7 @@ export interface PrototypeRegistryOptions {
   /** `fake` keeps CI and the fixture deterministic; `claude-code` runs the owner's local binary. */
   modelProvider?: string;
   evidence?: EvidenceSource;
+  /** The revision a run starts from; tests inject a document with a known defect through it. */
   seed?: () => DesignIR;
 }
 
@@ -78,11 +77,11 @@ export class PrototypeRunRegistry {
 
   has(runId: string): boolean { return this.runs.has(runId); }
 
-  async create(runId: string, seed: ControlSeed = 'fixture'): Promise<Gate2Snapshot> {
+  async create(runId: string): Promise<Gate2Snapshot> {
     if (this.runs.has(runId)) throw new Error(`Run ${runId} already exists.`);
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
-    const base = applier.createRoot((this.options.seed ?? seedFor(seed))());
+    const base = applier.createRoot((this.options.seed ?? createFixtureIR)());
     const claude = this.options.modelProvider === 'claude-code';
     const critique: CritiqueProvider = claude ? new ClaudeCritiqueRunner() : new FakeCritiqueProvider();
     const stage = new PrototypeStage({
@@ -101,7 +100,7 @@ export class PrototypeRunRegistry {
       const version = store.get(versionId);
       if (version) rendered.set(versionId, renderDesign(version.ir));
     }
-    const record: PrototypeRunRecord = { runId, seed, store, outcome, rendered, decisions: [] };
+    const record: PrototypeRunRecord = { runId, store, outcome, rendered, decisions: [] };
     this.runs.set(runId, record);
     return this.snapshot(record);
   }
@@ -165,7 +164,6 @@ export class PrototypeRunRegistry {
     const repaired = outcome.versionId !== outcome.compositionVersionId;
     return {
       runId: record.runId,
-      seed: record.seed,
       stopReason: outcome.stopReason,
       stopDetail: outcome.stopDetail,
       gate: outcome.gate,

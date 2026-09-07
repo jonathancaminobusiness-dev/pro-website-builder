@@ -102,7 +102,7 @@ export function compileManifestPages(manifest: RouteManifest, identity: Identity
       id: route.rootNodeId, kind: 'stack', semantic: 'div',
       props: { background: `{${identity.tokenRoles.surface}}`, color: `{${identity.tokenRoles.text}}`, gap: `{${identity.tokenRoles.sectionSpacing}}`, padding: `{${identity.tokenRoles.baseSpacing}}` },
       slots: { sections: route.sections.map((section) => section.nodeIds[0]!) },
-      responsive: [{ minWidth: identity.gridGrammar.maxWidthToken, props: { paddingInline: identity.gridGrammar.gutterToken } }],
+      responsive: [{ minWidth: identity.gridGrammar.breakpointTokens[0]!, props: { paddingInline: identity.gridGrammar.gutterToken } }],
     };
     const windows = route.sections.flatMap((section) => section.nodeIds.map((nodeId, offset) => {
       const node = placeholderNode(nodeId, offset === 0 ? 'section' : 'p', identity);

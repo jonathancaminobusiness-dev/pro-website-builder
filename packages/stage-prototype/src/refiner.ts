@@ -3,9 +3,6 @@ import type { Applier, TaskScope, VersionRecord } from '@pwb/orchestrator';
 import type { CritiqueReport } from './critique.js';
 import { planPatch, type PatchPlan } from './patch-planner.js';
 
-/** The refiner runs once per cycle; the loop controller, not the refiner, decides whether a cycle is earned. */
-export const REFINER_CYCLES_PER_STAGE = 1;
-
 export interface RefineInput {
   ir: DesignIR;
   currentVersionId: string;

@@ -14,6 +14,7 @@ export function renderComposerPrompt(task: AgentTask, section: SectionPlan, mani
     `Section contract:\n${JSON.stringify(section)}`,
     `Approved identity contract, frozen and read-only:\n${JSON.stringify({ direction: identity.direction, tokenRoles: identity.tokenRoles, gridGrammar: identity.gridGrammar, iconography: identity.iconography, content: identity.content, do: identity.do, dont: identity.dont, forbiddenDefaults: identity.forbiddenDefaults })}`,
     `Available token references: ${Object.keys(resolveTokens(identity.tokens).values).map((path) => `{${path}}`).join(', ')}`,
+    `A responsive rule may only open at one of the identity's breakpoints — ${identity.gridGrammar.breakpointTokens.join(' or ')} — never at the content max width, which is narrower than the smallest viewport this prototype has to survive.`,
     `Return a SectionComposition holding exactly ${section.nodeIds.length} nodes, with these ids in this order: ${section.nodeIds.join(', ')}. The first id is the section root; every other id must be reachable from it through the slots you declare. A node may only carry these visual props: ${[...visualPropKeys].join(', ')}, plus text. Every visual prop must be a token reference such as {color.ink}; a raw value is refused. A node whose semantic is h1, h2, h3 or p carries its own text and declares no children. The journey runs ${manifest.routes.map((route) => route.route).join(' then ')}; name the next route in the copy, because this renderer emits no anchors.`,
     `Write the copy in ${identity.meta.locale}, in the identity voice, and never use ${identity.content.forbiddenTerms.join(', ')}.`,
   ].join('\n\n');
@@ -32,8 +33,11 @@ export class FakeSectionComposer implements ComposerProvider {
       id: rootId, kind: 'stack', semantic: 'section',
       props: { background: surface, color: ink, gap: rhythm, paddingBlock: `{${identity.tokenRoles.sectionSpacing}}` },
       slots: { children: childIds },
-      // One real breakpoint: past the declared max width the section takes the section gutter inline.
-      responsive: [{ minWidth: identity.gridGrammar.maxWidthToken, props: { paddingInline: identity.gridGrammar.gutterToken } }],
+      // The identity's own breakpoints, which are the only widths the layout may transform at.
+      responsive: [
+        { minWidth: identity.gridGrammar.breakpointTokens[0]!, props: { paddingInline: identity.gridGrammar.gutterToken } },
+        { minWidth: identity.gridGrammar.breakpointTokens[1]!, props: { paddingInline: `{${identity.tokenRoles.sectionSpacing}}` } },
+      ],
     };
     const copy = section.role === 'support'
       ? ['Carregando o conteúdo desta rota.', 'Ainda não há conteúdo para mostrar.', 'Não foi possível carregar esta rota. Tente novamente.']
@@ -110,7 +114,11 @@ export function validateComposition(composition: SectionComposition, section: Se
 
   let tokens: Set<string>;
   try { tokens = new Set(Object.keys(resolveTokens(identity.tokens).values)); } catch { tokens = new Set(); }
+  const breakpoints = new Set(identity.gridGrammar.breakpointTokens);
   for (const node of composition.nodes) {
+    for (const rule of node.responsive) {
+      if (!breakpoints.has(rule.minWidth)) problems.push(`Node ${node.id} opens a breakpoint at ${rule.minWidth}, which the grid grammar does not declare as one of ${identity.gridGrammar.breakpointTokens.join(', ')}.`);
+    }
     for (const [key, value] of Object.entries(node.props)) {
       if (!visualPropKeys.has(key) || value === undefined) continue;
       const reference = typeof value === 'string' ? /^\{([^}]+)\}$/.exec(value) : null;

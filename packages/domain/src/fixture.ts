@@ -15,6 +15,10 @@ export function createFixtureIdentity(): IdentitySpec {
       lg: { $value: '3rem', $type: 'dimension' as const },
       xl: { $value: '6rem', $type: 'dimension' as const },
     },
+    breakpoint: {
+      compact: { $value: '40rem', $type: 'dimension' as const },
+      expanded: { $value: '64rem', $type: 'dimension' as const },
+    },
     radius: { card: { $value: '1.25rem', $type: 'borderRadius' as const } },
     type: {
       display: { $value: '"Fraunces", Georgia, serif', $type: 'fontFamily' as const },
@@ -28,7 +32,7 @@ export function createFixtureIdentity(): IdentitySpec {
     direction: { thesis: 'Oficina editorial', tension: 'Precisão encontra calor humano', materiality: 'Papel, tinta e diagramas', density: 'balanced', divergenceVector: ['editorial', 'tactile', 'asymmetric'], rationale: 'A identidade transforma processo em evidência visual.' },
     tokens,
     tokenRoles: { surface: 'color.paper', text: 'color.ink', bodyTypeface: 'type.body', baseSpacing: 'space.md', sectionSpacing: 'space.lg' },
-    gridGrammar: { maxWidthToken: '{space.xl}', columns: 12, gutterToken: '{space.md}', rhythmToken: '{space.md}', responsive: [{ container: 'narrow', rule: 'stack content before proof' }] },
+    gridGrammar: { maxWidthToken: '{space.xl}', columns: 12, gutterToken: '{space.md}', rhythmToken: '{space.md}', breakpointTokens: ['{breakpoint.compact}', '{breakpoint.expanded}'], responsive: [{ container: 'narrow', rule: 'stack content before proof' }] },
     imagery: { treatment: 'Documentary crops with paper texture', focalPolicy: 'Keep the subject off-center', allowedSources: ['manual', 'higgsfield'] },
     iconography: { family: 'single-line workshop marks', strokeToken: '{color.ink}', naming: 'purpose-first accessible labels' },
     content: { voice: 'direta, humana, específica', message: 'Toda escolha tem motivo.', allowedTerms: ['processo', 'prova', 'oficina'], forbiddenTerms: ['revolucionário', 'mágico'] },

@@ -1,6 +1,5 @@
 export * from './claude-session.js';
 export * from './contracts.js';
-export * from './control-seeds.js';
 export * from './critics.js';
 export * from './critique.js';
 export * from './critique-provider.js';

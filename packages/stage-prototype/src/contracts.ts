@@ -55,6 +55,7 @@ export const routeManifestSchema = z.object({
 }).strict().superRefine((manifest, ctx) => {
   const seenRoutes = new Set<string>();
   const seenNodeIds = new Set<string>();
+  const seenSectionIds = new Set<string>();
   for (const route of manifest.routes) {
     if (seenRoutes.has(route.route)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `The manifest repeats the route ${route.route}.` });
     seenRoutes.add(route.route);
@@ -62,6 +63,9 @@ export const routeManifestSchema = z.object({
     let expected = ROUTE_SHELL_SLOT + 1;
     for (const section of route.sections) {
       if (section.route !== route.route) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Section ${section.id} claims route ${section.route} inside ${route.route}.` });
+      // A section id addresses one window: it names the composer task and resolves the paths that task may write.
+      if (seenSectionIds.has(section.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `The manifest repeats the section id ${section.id}; a section id has to name exactly one window across every route.` });
+      seenSectionIds.add(section.id);
       if (section.nodeRange.start !== expected) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Section ${section.id} starts at slot ${section.nodeRange.start}; ${route.route} expects ${expected} so the windows stay contiguous and disjoint.` });
       expected += section.nodeRange.count;
       for (const nodeId of section.nodeIds) {

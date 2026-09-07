@@ -90,8 +90,5 @@
   .gate2-issues { grid-column: auto; }
   .compare[data-columns="2"] { grid-template-columns: 1fr; }
 }
-.gate2-seed { display: grid; gap: 8px; margin: 0 0 24px; border: 1px solid #ddd4c9; border-radius: 14px; padding: 14px 16px; }
-.gate2-seed legend { padding: 0 6px; color: #a84f37; font-size: .66rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
-.gate2-seed label { display: flex; align-items: center; gap: 9px; color: #4d5a5f; font-size: .84rem; }
 .gate2-checks { scrollbar-width: thin; }
 .gate2-checks li:last-child { padding-bottom: 2px; }

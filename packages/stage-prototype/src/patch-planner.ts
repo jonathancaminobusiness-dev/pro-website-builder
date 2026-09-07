@@ -75,6 +75,9 @@ function compile(ir: DesignIR, patch: ProposedPatch, tokens: Set<string>): { ope
     for (const reference of [patch.minWidth, patch.token]) {
       if (!tokens.has(reference.slice(1, -1))) return { reason: `A identidade não define o token ${reference}.` };
     }
+    if (!ir.identity.gridGrammar.breakpointTokens.includes(patch.minWidth)) {
+      return { reason: `A gramática de grid não declara ${patch.minWidth} como ponto de quebra; use ${ir.identity.gridGrammar.breakpointTokens.join(' ou ')}.` };
+    }
     const existing = node.responsive.find((entry) => entry.minWidth === patch.minWidth);
     const merged = { minWidth: patch.minWidth, props: { ...existing?.props, [patch.prop]: patch.token } };
     const next = [...node.responsive.filter((entry) => entry.minWidth !== patch.minWidth), merged]

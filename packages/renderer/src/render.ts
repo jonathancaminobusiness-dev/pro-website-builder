@@ -69,6 +69,14 @@ function renderPage(page: Page, values: Record<string, string | number | boolean
   return `<main data-page-id="${escapeHtml(page.id)}" data-route="${escapeHtml(page.route)}">${body}</main>`;
 }
 
+function breakpointPx(literal: string | number | boolean, nodeId: string): number {
+  if (typeof literal === 'number') { if (Number.isFinite(literal)) return literal; throw new Error(`Responsive width is not a length: ${nodeId}.responsive ${String(literal)}`); }
+  const size = typeof literal === 'string' ? /^(\d*\.?\d+)(px|rem|em)?$/.exec(literal.trim()) : null;
+  if (!size) throw new Error(`Responsive width is not a length: ${nodeId}.responsive ${String(literal)}`);
+  const amount = Number.parseFloat(size[1]!);
+  return size[2] === 'rem' || size[2] === 'em' ? amount * 16 : amount;
+}
+
 /**
  * Reads the responsive rules of every node into container queries. The width is resolved from its token
  * at build time because a container query condition cannot hold a custom property, so a breakpoint is
@@ -77,10 +85,15 @@ function renderPage(page: Page, values: Record<string, string | number | boolean
 function renderResponsive(ir: DesignIR, values: Record<string, string | number | boolean>): string {
   const blocks: string[] = [];
   for (const page of ir.pages.routes) for (const node of page.nodes) {
-    for (const rule of [...node.responsive].sort((a, b) => (a.minWidth < b.minWidth ? -1 : a.minWidth > b.minWidth ? 1 : 0))) {
-      const resolved = /^\{([^}]+)\}$/.exec(rule.minWidth);
-      const literal = resolved ? values[resolved[1]!] : undefined;
+    const resolvedRules = node.responsive.map((rule) => {
+      const reference = /^\{([^}]+)\}$/.exec(rule.minWidth);
+      const literal = reference ? values[reference[1]!] : undefined;
       if (literal === undefined) throw new Error(`Responsive width is not token-backed: ${node.id}.responsive ${rule.minWidth}`);
+      return { rule, literal, width: breakpointPx(literal, node.id) };
+    });
+    // Equal-specificity blocks are decided by source order, so the widest condition has to be emitted
+    // last. Ordering by the token reference would let {space.lg} lose to the narrower {space.md}.
+    for (const { rule, literal, width } of [...resolvedRules].sort((a, b) => a.width - b.width)) {
       const declarations = Object.entries(rule.props)
         .filter((entry): entry is [string, string | number | boolean] => visualPropKeys.has(entry[0]) && entry[1] !== undefined)
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -95,9 +108,11 @@ function renderResponsive(ir: DesignIR, values: Record<string, string | number |
 function renderDarkScheme(ir: DesignIR, values: Record<string, string | number | boolean>): string {
   const overrides = Object.entries(ir.identity.schemes?.dark ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   if (overrides.length === 0) return '';
+  // The source is emitted as its literal, not as var(--source): a pair that swaps two roles would
+  // otherwise compile to a custom-property cycle, which CSS makes invalid at computed-value time.
   const declarations = overrides.map(([target, source]) => {
     for (const path of [target, source]) if (!(path in values)) throw new Error(`The dark scheme references ${path}, which the document does not define.`);
-    return `      ${cssCustomPropertyName(target)}: var(${cssCustomPropertyName(source)});`;
+    return `      ${cssCustomPropertyName(target)}: ${String(values[source]!)};`;
   }).join('\n');
   return `\n\n@layer tokens {\n  @media (prefers-color-scheme: dark) {\n    :root {\n${declarations}\n    }\n  }\n}`;
 }
@@ -111,7 +126,7 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
   const bodyTypeface = roleVar(ir.identity, 'bodyTypeface', values);
   const baseSpacing = roleVar(ir.identity, 'baseSpacing', values);
   const sectionSpacing = roleVar(ir.identity, 'sectionSpacing', values);
-  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderResponsive(ir, values)}\n}`;
+  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}${renderDarkScheme(ir, values)}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  :where(h1, h2, h3, p, figure, figcaption) { margin: 0; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n  [hidden] { display: none !important; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }${renderResponsive(ir, values)}\n}`;
 }
 
 export function renderDesign(ir: DesignIR): RenderedDocument {

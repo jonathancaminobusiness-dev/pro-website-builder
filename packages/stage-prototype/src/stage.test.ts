@@ -1,13 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR, type AgentTask, type IdentitySpec } from '@pwb/domain';
+import { createFixtureIR, type AgentTask, type DesignIR, type IdentitySpec } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { renderDesign } from '@pwb/renderer';
 import {
   DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
-  PrototypeStage, PrototypeStageError, createOffRhythmControlIR, criticRegistry,
+  PrototypeStage, PrototypeStageError, criticRegistry,
   type ComposerProvider, type CritiqueProvider, type CritiqueReport, type CritiqueTask, type ProposedPatch,
   type PrototypeStageOutcome, type RouteManifest, type SectionComposition, type SectionPlan,
 } from './index.js';
+
+/**
+ * A revision with a known defect, so the loop is never only shown clean input: the grid grammar declares
+ * a beat the identity's own spacing roles cannot land on, and every section inherits spacing off it.
+ * It lives here because it is a test fixture; the product itself runs one briefing and one mode.
+ */
+function createOffRhythmControlIR(): DesignIR {
+  const ir = createFixtureIR();
+  const space = ir.identity.tokens.space as Record<string, { $value: string; $type: 'dimension' }>;
+  ir.identity.tokens = { ...ir.identity.tokens, space: { ...space, beat: { $value: '0.625rem', $type: 'dimension' } } };
+  ir.identity.gridGrammar = { ...ir.identity.gridGrammar, rhythmToken: '{space.beat}' };
+  return ir;
+}
 
 interface Harness { store: VersionStore; applier: Applier; base: VersionRecord; events: Array<{ type: string; payload: Record<string, unknown> }>; }
 
@@ -114,7 +127,10 @@ describe('prototype stage', () => {
     expect(rendered.routes[0]!.html).toMatch(/<h1 data-node-id="home-hero-title"/);
     expect(rendered.routes[0]!.html).not.toMatch(/style="[^"]*#[0-9a-f]{3,8}/i);
     // Every responsive rule the composer declared is read back out as a container query.
-    expect(rendered.css).toContain('@container (min-width: 6rem)');
+    // The composer opens its breakpoints at the identity's own container widths, so a query really
+    // separates a phone from a desktop instead of matching at every viewport.
+    expect(rendered.css).toContain('@container (min-width: 40rem)');
+    expect(rendered.css).toContain('@container (min-width: 64rem)');
     expect(rendered.css).toContain('[data-node-id="home-hero-root"] { padding-inline: var(--space-md); }');
   });
 
@@ -147,6 +163,32 @@ describe('prototype stage', () => {
     const hero = repaired.pages.routes[0]!.nodes.find((node) => node.id === 'home-hero-root');
     expect(hero?.props.gap).toBe(repaired.identity.gridGrammar.rhythmToken);
     expect(setup.events.map((event) => event.type)).toContain('prototype.refine.applied');
+  });
+
+  it('pairs each composer result with its own section even when the composers finish out of order', async () => {
+    const setup = harness();
+    // A real ClaudeSectionComposer finishes when its subprocess does, so the scheduler reports the
+    // sections in completion order; the last section to be queued answers first here.
+    const order: string[] = [];
+    const reversed: ComposerProvider = {
+      compose: async (task, section, manifest, signal) => {
+        const composition = await new FakeSectionComposer().compose(task, section, manifest, signal);
+        const delay = section.id === 'home-hero' ? 30 : section.id === 'home-proof' ? 20 : 0;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        order.push(section.id);
+        return composition;
+      },
+    };
+    const outcome = await stageFor(setup, reversed).run({ runId: 'run-order', baseVersionId: setup.base.id });
+
+    expect(order.indexOf('home-hero')).toBeGreaterThan(order.indexOf('home-proof'));
+    const ir = setup.store.get(outcome.compositionVersionId)!.ir;
+    for (const route of outcome.manifest.routes) {
+      const page = ir.pages.routes.find((candidate) => candidate.route === route.route)!;
+      for (const section of route.sections) {
+        expect(page.nodes.slice(section.nodeRange.start, section.nodeRange.start + section.nodeRange.count).map((node) => node.id)).toEqual(section.nodeIds);
+      }
+    }
   });
 
   it('refuses a composition that writes outside the window its section was given', async () => {

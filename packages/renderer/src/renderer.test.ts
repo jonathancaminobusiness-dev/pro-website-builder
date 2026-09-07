@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { renderDesign } from './index.js';
 
+/** Parses the emitted stylesheet into the container queries a browser would apply, widths in px. */
+function containerQueries(css: string): Array<{ minWidthPx: number; selector: string; declarations: string }> {
+  return [...css.matchAll(/@container \(min-width: ([^)]+)\) \{\s*([^{]+?) \{ ([^}]*)\}/g)].map((match) => {
+    const size = /^(\d*\.?\d+)(px|rem|em)?$/.exec(match[1]!.trim())!;
+    const amount = Number.parseFloat(size[1]!);
+    return { minWidthPx: size[2] === 'rem' || size[2] === 'em' ? amount * 16 : amount, selector: match[2]!.trim(), declarations: match[3]!.trim() };
+  });
+}
+
 describe('deterministic renderer', () => {
   it('renders semantic routes with token custom properties and container queries', () => {
     const result = renderDesign(createFixtureIR());
@@ -21,6 +30,57 @@ describe('deterministic renderer', () => {
     const containers = [...css.matchAll(/([a-z]+) \{[^}]*container-type: inline-size/g)].map((match) => match[1]);
     expect(containers).toContain('body');
     expect(containers).not.toContain(subject);
+  });
+
+  it('opens a container query at the identity breakpoint, so 1024 gets a rule 390 does not', () => {
+    const ir = createFixtureIR();
+    const [compact] = ir.identity.gridGrammar.breakpointTokens as [string, string];
+    ir.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: compact, props: { gap: '{space.xl}' } }];
+    const query = containerQueries(renderDesign(ir).css).find((block) => block.selector === '[data-node-id="home-root"]')!;
+
+    expect(query.minWidthPx).toBeGreaterThan(390);
+    expect(query.minWidthPx).toBeLessThanOrEqual(1024);
+    expect(query.declarations).toContain('gap: var(--space-xl);');
+  });
+
+  it('emits a node\'s breakpoints widest last, so the wider condition is the one that wins', () => {
+    const ir = createFixtureIR();
+    // '{space.lg}' sorts before '{space.md}' as a string, and the two are 3rem and 1.5rem as widths.
+    ir.pages.routes[0]!.nodes[0]!.responsive = [
+      { minWidth: '{space.md}', props: { gap: '{space.sm}' } },
+      { minWidth: '{space.lg}', props: { gap: '{space.xl}' } },
+    ];
+    const queries = containerQueries(renderDesign(ir).css).filter((block) => block.selector === '[data-node-id="home-root"]');
+
+    expect(queries.map((block) => block.minWidthPx)).toEqual([24, 48]);
+    // Both conditions match a 4rem container, and the last block in source order decides.
+    expect(queries[queries.length - 1]!.declarations).toContain('gap: var(--space-xl);');
+  });
+
+  it('refuses a responsive width whose token is not a length', () => {
+    const ir = createFixtureIR();
+    ir.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{type.body}', props: { gap: '{space.md}' } }];
+    expect(() => renderDesign(ir)).toThrow(/not a length/);
+  });
+
+  it('resolves a dark scheme to literals, so a pair that swaps two roles is not a custom-property cycle', () => {
+    const ir = createFixtureIR();
+    ir.identity.schemes = { dark: { 'color.paper': 'color.ink', 'color.ink': 'color.paper' } };
+    const dark = /@media \(prefers-color-scheme: dark\) \{\s*:root \{([\s\S]*?)\}/.exec(renderDesign(ir).css)?.[1] ?? '';
+
+    expect(dark).toContain('--color-paper: #18252d;');
+    expect(dark).toContain('--color-ink: #f4efe6;');
+    expect(dark).not.toContain('var(');
+  });
+
+  it('keeps a hidden node out of the layout even when its kind carries a display', () => {
+    const css = renderDesign(createFixtureIR()).css;
+    const layers = /@layer (base|components) \{([\s\S]*?)\n\}/g;
+    const blocks = new Map([...css.matchAll(layers)].map((match) => [match[1]!, match[2]!]));
+
+    expect(blocks.get('components')).toMatch(/\[data-node-kind="stack"\][^\n]*display: grid/);
+    // The hidden rule is important and sits in an earlier layer, so it outranks that display.
+    expect(blocks.get('base')).toContain('[hidden] { display: none !important; }');
   });
 
   it('produces byte-identical output for the same document', () => {

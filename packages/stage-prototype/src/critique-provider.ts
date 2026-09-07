@@ -92,7 +92,7 @@ export class FakeCritiqueProvider implements CritiqueProvider {
         ...base, severity: 'minor' as const, confidence: 0.6,
         observation: `Os irmãos de ${nodeId} desalinham por menos de um gutter.`,
         why: 'Um desalinhamento sub-gutter é lido como erro de execução, não como intenção de composição.',
-        patch: { operation: 'set_constraint' as const, nodeId, minWidth: task.identity.gridGrammar.maxWidthToken, prop: 'paddingInline' as const, token: task.identity.gridGrammar.gutterToken },
+        patch: { operation: 'set_constraint' as const, nodeId, minWidth: task.identity.gridGrammar.breakpointTokens[0]!, prop: 'paddingInline' as const, token: task.identity.gridGrammar.gutterToken },
       };
     }
     if (task.dimension === 'narrative' && check.id === 'QA1-TRUNCATION' && nodeId) {

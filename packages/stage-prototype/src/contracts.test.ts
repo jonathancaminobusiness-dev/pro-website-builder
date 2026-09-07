@@ -49,6 +49,16 @@ describe('prototype contracts', () => {
     expect(() => routeManifestSchema.parse(shared)).toThrow(/claimed by more than one section/);
   });
 
+  it('refuses two sections that share an id, because an id resolves one window and one composer task', async () => {
+    const plan = await manifest();
+    const collision = structuredClone(plan);
+    collision.routes[1]!.sections[0]!.id = 'home-hero';
+    expect(() => routeManifestSchema.parse(collision)).toThrow(/repeats the section id home-hero/);
+
+    // Left unchecked, both sections would resolve to the window of the first one that matches.
+    expect(sectionAllowedPaths(collision, 'home-hero')).toEqual(sectionAllowedPaths(plan, 'home-hero'));
+  });
+
   it('refuses a state that names a node no section declares, and requires a default state', async () => {
     const plan = await manifest();
     const ghost = structuredClone(plan);

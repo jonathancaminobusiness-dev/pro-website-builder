@@ -21,7 +21,7 @@ interface Report {
 }
 
 interface Snapshot {
-  runId: string; seed: 'fixture' | 'off-rhythm'; stopReason: string; stopDetail: string; gate: 'needs_review' | 'vetoed'; journey: string;
+  runId: string; stopReason: string; stopDetail: string; gate: 'needs_review' | 'vetoed'; journey: string;
   before: { versionId: string; label: string }; after: { versionId: string; label: string }; repaired: boolean;
   routes: Array<{ route: string; title: string }>; viewports: number[]; states: string[]; colorSchemes: Array<'light' | 'dark'>;
   qa: Array<{ id: string; tier: number; severity: string; title: string; message: string; nodeIds: string[] }>;
@@ -122,7 +122,6 @@ export default function Gate2(): ReactElement {
   const [lens, setLens] = useState<'perception' | 'comprehension' | 'projection'>('projection');
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [gateReason, setGateReason] = useState('');
-  const [seed, setSeed] = useState<'fixture' | 'off-rhythm'>('fixture');
 
   const act = useCallback(async (action: () => Promise<Snapshot>): Promise<void> => {
     setBusy(true); setError('');
@@ -133,7 +132,7 @@ export default function Gate2(): ReactElement {
 
   useEffect(() => { document.title = 'Gate 2 — protótipo'; }, []);
 
-  const start = (): Promise<void> => act(() => request<Snapshot>('/api/prototype/runs', { method: 'POST', body: JSON.stringify({ approverRole: 'captain', seed, runId: `gate2-${Date.now()}` }) }));
+  const start = (): Promise<void> => act(() => request<Snapshot>('/api/prototype/runs', { method: 'POST', body: JSON.stringify({ approverRole: 'captain', runId: `gate2-${Date.now()}` }) }));
   const decide = async (runId: string, findingId: string, decision: IssueDecision): Promise<void> => act(() => request<Snapshot>(`/api/prototype/runs/${runId}/decision`, {
     method: 'POST', body: JSON.stringify({ approverRole: 'captain', findingId, decision, rationale: reasons[findingId]?.trim() || `${decisionCopy[decision]} sem observação adicional do capitão.` }),
   }));
@@ -153,11 +152,6 @@ export default function Gate2(): ReactElement {
         </header>
         <section className="gate2-intro">
           <p>O protótipo é composto por agentes em paralelo sobre a identidade congelada, verificado por checagens determinísticas antes de qualquer modelo, e criticado por quatro sessões separadas. Nada roda até você pedir.</p>
-          <fieldset className="gate2-seed">
-            <legend>Briefing</legend>
-            <label><input type="radio" name="seed" value="fixture" checked={seed === 'fixture'} onChange={() => setSeed('fixture')} /> Briefing fixo</label>
-            <label><input type="radio" name="seed" value="off-rhythm" checked={seed === 'off-rhythm'} onChange={() => setSeed('off-rhythm')} /> Par de controle · ritmo impossível</label>
-          </fieldset>
           <button className="primary" onClick={() => void start()} disabled={busy}>{busy ? 'Compondo o protótipo…' : 'Executar a etapa de protótipo'}</button>
           {error && <p className="error-banner" role="alert">{error}</p>}
         </section>
@@ -169,7 +163,7 @@ export default function Gate2(): ReactElement {
     <div className="gate2-shell">
       <header className="gate2-top">
         <div>
-          <p className="eyebrow">Gate 02 · protótipo · {snapshot.runId}{snapshot.seed === 'off-rhythm' ? ' · par de controle' : ''}</p>
+          <p className="eyebrow">Gate 02 · protótipo · {snapshot.runId}</p>
           <h1>{snapshot.journey}</h1>
         </div>
         <div className="gate2-badges">
