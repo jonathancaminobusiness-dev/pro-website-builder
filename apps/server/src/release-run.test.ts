@@ -19,7 +19,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(
 interface ReleaseSnapshot {
   digest: string;
   versionId: string;
-  report: { blocked: boolean; bundleDigest: string; irHash: string; approvedVersionId: string; releasedVersionId: string; vetoes: Array<{ id: string }>; rubric: Array<{ dimension: string }>; parity: { matched: boolean }; evidence: unknown[]; escalations: string[]; summary?: { gateAuthority: string } };
+  report: { blocked: boolean; bundleDigest: string; irHash: string; approvedVersionId: string; releasedVersionId: string; vetoes: Array<{ id: string }>; rubric: Array<{ dimension: string }>; parity: { matched: boolean }; evidence: unknown[]; escalations: string[]; refinementCycles: number; summary?: { gateAuthority: string } };
   catalog: Array<{ id: string }>;
   published?: { directory: string };
 }
@@ -239,6 +239,28 @@ describe('Gate 3 over the local API', () => {
     // what the prototype gate approved, not to the proposal they just refused.
     const rejected = await run.reject('finalization', 'captain');
     expect(rejected.currentVersion.id).toBe(prototype.versionId);
+  });
+
+  it('refines the re-produced proposal from a clean gate after the captain rejected the first one', async () => {
+    // An axe run that failed without a critical or serious violation raises a
+    // critic finding, so the refiner writes the review record without a veto.
+    const { origin, runId, run, stageVersionId } = await harness({
+      evidence: [{ id: 'axe-home', runner: 'axe', engine: 'chromium', route: '/', state: 'default', status: 'failed', path: 'p', hash: 'h', vetoes: [], metrics: { critical: 0, serious: 0 }, notes: ['um ponto a revisar'] }],
+    });
+    const first = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(first.report.refinementCycles).toBe(1);
+
+    // The captain rejects, the stage runs again and produces the same document,
+    // so the refiner meets the base its discarded run already patched.
+    await run.reject('finalization', 'captain');
+    await run.runNext();
+    expect(run.snapshot().currentVersion.id).toBe(stageVersionId);
+
+    const second = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(second.report.refinementCycles).toBe(1);
+    expect(second.versionId).toBe(first.versionId);
+    expect(second.report.escalations.join(' ')).not.toMatch(/patch-refiner falhou/);
+    expect(second.report.escalations.join(' ')).not.toMatch(/Idempotent patch|Patch overlap/);
   });
 
   it('refuses to publish a release prepared for the proposal the captain rejected', async () => {

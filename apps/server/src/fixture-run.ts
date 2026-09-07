@@ -65,7 +65,7 @@ export class FixtureRun {
    * the stage gate's compare-and-swap bookkeeping: it proposes against the
    * version the finalization stage produced, which that gate already patched.
    */
-  private readonly releaseGate = new PatchGate();
+  private releaseGate = new PatchGate();
   private finalizationVersion: VersionRecord | undefined;
 
   private releaseRun: ReleaseRun | undefined;
@@ -310,8 +310,13 @@ export class FixtureRun {
     };
   }
 
-  /** A prepared release belongs to one finalization proposal; a new one is prepared for the next. */
+  /**
+   * A prepared release belongs to one finalization proposal, and so does the
+   * compare-and-swap bookkeeping its refinement left behind: both are discarded
+   * as one unit, so the next proposal is refined from a clean gate.
+   */
   private discardPreparedRelease(): void {
+    this.releaseGate = new PatchGate();
     if (this.options.release) this.releaseRun = new ReleaseRun(this.runIdentifier, this.options.release);
   }
 
