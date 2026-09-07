@@ -14,6 +14,15 @@ describe('deterministic renderer', () => {
     expect(result.html).not.toContain('<script');
   });
 
+  it('declares the query container on an ancestor of the element the breakpoint restyles', () => {
+    const css = renderDesign(createFixtureIR()).css;
+    const subject = /@container \(min-width: 48rem\) \{ ([a-z]+) \{/.exec(css)?.[1];
+    expect(subject).toBe('main');
+    const containers = [...css.matchAll(/([a-z]+) \{[^}]*container-type: inline-size/g)].map((match) => match[1]);
+    expect(containers).toContain('body');
+    expect(containers).not.toContain(subject);
+  });
+
   it('produces byte-identical output for the same document', () => {
     const ir = createFixtureIR();
     expect(renderDesign(ir)).toEqual(renderDesign(ir));

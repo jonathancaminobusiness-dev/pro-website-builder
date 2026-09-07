@@ -1,4 +1,4 @@
-import { patchSchema, stagePatchSchemas, type Patch } from '@pwb/domain';
+import { patchSchema, stagePatchSchemas, type AgentTask, type Patch } from '@pwb/domain';
 
 const unsafeSegments = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -10,8 +10,9 @@ export interface GateDecision { ok: true; idempotencyKey: string; paths: string[
 export class PatchGate {
   private readonly accepted = new Map<string, { key: string; paths: string[] }[]>();
 
-  validate(patch: Patch, context: { currentVersionId: string; allowedPaths: string[] }): GateDecision {
+  validate(patch: Patch, context: { currentVersionId: string } & Pick<AgentTask, 'allowedPaths' | 'stage' | 'role'>): GateDecision {
     const parsed = patchSchema.parse(patch);
+    if (parsed.stage !== context.stage || parsed.role !== context.role) throw new Error(`Proposal declares ${parsed.stage}/${parsed.role}; the task is ${context.stage}/${context.role}.`);
     if (parsed.baseVersionId !== context.currentVersionId) throw new Error(`Stale patch base ${parsed.baseVersionId}; current version is ${context.currentVersionId}.`);
     const key = parsed.idempotencyKey;
     if (!key) throw new Error('Patch is missing the idempotency key its producer must derive from the task.');
@@ -23,7 +24,7 @@ export class PatchGate {
       if (!context.allowedPaths.some((allowed) => overlaps(path, allowed))) throw new Error(`Patch path is not allowed: ${path}`);
       if (records.some((record) => record.paths.some((other) => overlaps(path, other)))) throw new Error(`Patch overlap at ${path}.`);
     }
-    stagePatchSchemas[parsed.stage].parse(parsed);
+    stagePatchSchemas[context.stage].parse(parsed);
     return { ok: true, idempotencyKey: key, paths };
   }
 

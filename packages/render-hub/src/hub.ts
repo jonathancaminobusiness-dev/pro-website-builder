@@ -24,12 +24,12 @@ export class RenderHub {
         const networkErrors: string[] = [];
         page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
         page.on('requestfailed', (request) => networkErrors.push(`${request.url()}: ${request.failure()?.errorText ?? 'failed'}`));
-        await page.goto(new URL(renderCase.route, baseUrl).toString(), { waitUntil: 'networkidle' });
+        const response = await page.goto(new URL(renderCase.route, baseUrl).toString(), { waitUntil: 'networkidle' });
         await page.waitForFunction(() => document.fonts?.status === 'loaded');
         const metrics = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, dom: document.documentElement.outerHTML }));
         const accessibilityApi = (page as unknown as { accessibility?: { snapshot: () => Promise<unknown> } }).accessibility;
         const accessibility = accessibilityApi ? await accessibilityApi.snapshot() : await page.locator('body').ariaSnapshot();
-        const qa = evaluateQa({ ...metrics, consoleErrors, networkErrors });
+        const qa = evaluateQa({ ...metrics, status: response?.status() ?? null, consoleErrors, networkErrors });
         const screenshotPath = join(this.options.cacheDir, `${key}.png`);
         await page.screenshot({ path: screenshotPath, fullPage: true });
         await page.close();

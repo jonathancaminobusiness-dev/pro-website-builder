@@ -60,6 +60,21 @@ describe('domain contracts', () => {
     expect(() => designIRSchema.parse(interior)).toThrow(/segments/i);
   });
 
+  it('rejects a node semantic the renderer would not emit for that kind', () => {
+    const landmark = createFixtureIR();
+    (landmark.pages.routes[0]!.nodes[0]! as { semantic: string }).semantic = 'nav';
+    expect(() => designIRSchema.parse(landmark)).toThrow(/nav/);
+    const heading = createFixtureIR();
+    (heading.pages.routes[0]!.nodes[1]! as { semantic: string }).semantic = 'h4';
+    expect(() => designIRSchema.parse(heading)).toThrow(/h4/);
+    const figure = createFixtureIR();
+    (figure.pages.routes[0]!.nodes[2]! as { semantic: string }).semantic = 'figure';
+    expect(() => designIRSchema.parse(figure)).toThrow(/media node renders as figure/i);
+    const relabelled = createFixtureIR();
+    (relabelled.pages.routes[0]!.nodes[0]! as { semantic: string }).semantic = 'section';
+    expect(designIRSchema.parse(relabelled).pages.routes[0]!.nodes[0]!.semantic).toBe('section');
+  });
+
   it('rejects node text the renderer cannot write into the page', () => {
     const numeric = createFixtureIR();
     (numeric.pages.routes[0]!.nodes[1]!.props as Record<string, unknown>).text = 2026;

@@ -209,8 +209,8 @@ export class FixtureRun {
       }
       let next: VersionRecord;
       try {
-        renderDesign(this.applier.dryRun(proposal, current.allowedPaths, this.currentVersion.id).next);
-        next = this.applier.apply(proposal, current.allowedPaths, this.currentVersion.id);
+        renderDesign(this.applier.dryRun(proposal, current, this.currentVersion.id).next);
+        next = this.applier.apply(proposal, current, this.currentVersion.id);
       } catch (error) {
         this.reported.add(`${current.id}#${current.attempt}`);
         await this.record('task.failed', { taskId: current.id, stage: current.stage, attempt: current.attempt, reason: error instanceof Error ? error.message : 'The proposal did not validate.' });

@@ -1,4 +1,4 @@
-import { canonicalize, hashJson, designIRSchema, type DesignIR, type Patch } from '@pwb/domain';
+import { canonicalize, hashJson, designIRSchema, type AgentTask, type DesignIR, type Patch } from '@pwb/domain';
 import { PatchGate } from './patch-gate.js';
 
 export interface VersionRecord { id: string; hash: string; parentId?: string; ir: DesignIR; }
@@ -34,16 +34,17 @@ function applyOperations(base: DesignIR, patch: Patch): { next: DesignIR; diff: 
   return { next: validated, diff: [...new Set(written)] };
 }
 
+export type TaskScope = Pick<AgentTask, 'allowedPaths' | 'stage' | 'role'>;
 export interface DryRun { versionId: string; next: DesignIR; diff: string[]; }
 
 export class Applier {
   constructor(private readonly store: VersionStore, private readonly gate: PatchGate) {}
   createRoot(ir: DesignIR): VersionRecord { const parsed = designIRSchema.parse(ir); const version: VersionRecord = { id: parsed.meta.versionId, hash: hashJson(parsed), ir: parsed }; this.store.save(version); return version; }
   private base(versionId: string): VersionRecord { const base = this.store.get(versionId); if (!base) throw new Error(`Version ${versionId} is not in the store.`); return base; }
-  dryRun(patch: Patch, allowedPaths: string[], currentVersionId: string): DryRun { const base = this.base(currentVersionId); this.gate.validate(patch, { currentVersionId: base.id, allowedPaths }); const result = applyOperations(base.ir, patch); return { versionId: base.id, ...result }; }
-  apply(patch: Patch, allowedPaths: string[], currentVersionId: string): VersionRecord {
+  dryRun(patch: Patch, task: TaskScope, currentVersionId: string): DryRun { const base = this.base(currentVersionId); this.gate.validate(patch, { currentVersionId: base.id, ...task }); const result = applyOperations(base.ir, patch); return { versionId: base.id, ...result }; }
+  apply(patch: Patch, task: TaskScope, currentVersionId: string): VersionRecord {
     const base = this.base(currentVersionId);
-    const decision = this.gate.validate(patch, { currentVersionId: base.id, allowedPaths });
+    const decision = this.gate.validate(patch, { currentVersionId: base.id, ...task });
     const result = applyOperations(base.ir, patch);
     const versionId = `v-${hashJson(result.next).slice(0, 12)}`;
     const existing = this.store.get(versionId);

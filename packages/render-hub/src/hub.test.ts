@@ -18,7 +18,9 @@ describe('render hub', () => {
     const ir = createFixtureIR();
     const rendered = renderDesign(ir);
     expect(cacheKey(rendered, createRenderCases(ir)[0]!)).toHaveLength(64);
-    expect(evaluateQa({ scrollWidth: 100, clientWidth: 100, consoleErrors: [], networkErrors: [] }).passed).toBe(true);
-    expect(evaluateQa({ scrollWidth: 120, clientWidth: 100, consoleErrors: ['boom'], networkErrors: [] }).passed).toBe(false);
+    expect(evaluateQa({ scrollWidth: 100, clientWidth: 100, status: 200, consoleErrors: [], networkErrors: [] }).passed).toBe(true);
+    expect(evaluateQa({ scrollWidth: 120, clientWidth: 100, status: 200, consoleErrors: ['boom'], networkErrors: [] }).passed).toBe(false);
+    expect(evaluateQa({ scrollWidth: 100, clientWidth: 100, status: 404, consoleErrors: [], networkErrors: [] }).passed).toBe(false);
+    expect(evaluateQa({ scrollWidth: 100, clientWidth: 100, status: null, consoleErrors: [], networkErrors: [] }).passed).toBe(false);
   });
 });

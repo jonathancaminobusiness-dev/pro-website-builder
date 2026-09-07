@@ -16,13 +16,16 @@ export const routeSchema = z.string()
   .regex(/^\/$|^(?:\/[A-Za-z0-9\-._~]+)+$/, 'Route must start with / and use non-empty unreserved path segments without a trailing slash.')
   .refine((route) => route.split('/').every((segment) => segment !== '.' && segment !== '..'), 'Route segments must not traverse directories.');
 
+export const semanticSchema = z.enum(['h1', 'h2', 'h3', 'p', 'section', 'figure', 'div']);
+
 export const pageNodeSchema = z.object({
   id: z.string(),
   kind: nodeKindSchema,
-  semantic: z.string(),
+  semantic: semanticSchema,
   props: nodePropsSchema,
   slots: z.record(z.array(z.string())).default({}),
-  responsive: z.array(z.object({ container: z.string(), rule: z.string() })).default([]),
+}).superRefine((node, ctx) => {
+  if ((node.kind === 'media') !== (node.semantic === 'figure')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['semantic'], message: `A media node renders as figure and only a media node does, so ${node.kind} cannot be ${node.semantic}.` });
 });
 
 export function slotChildIds(node: { slots: Record<string, string[]> }): string[] {

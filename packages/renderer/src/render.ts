@@ -52,13 +52,8 @@ function renderNode(node: PageNode, byId: Map<string, PageNode>, values: Record<
     if (!child) throw new Error(`Node ${node.id} references unknown node ${childId}.`);
     return renderNode(child, byId, values);
   }).join('');
-  if (node.kind === 'type') {
-    const tag = node.semantic === 'h1' || node.semantic === 'h2' || node.semantic === 'h3' ? node.semantic : 'p';
-    return `<${tag}${common}>${text}${children}</${tag}>`;
-  }
   if (node.kind === 'media') return `<figure${common}><figcaption>${text}</figcaption>${children}</figure>`;
-  if (node.kind === 'surface') return `<section${common}>${text}${children}</section>`;
-  return `<div${common}>${text}${children}</div>`;
+  return `<${node.semantic}${common}>${text}${children}</${node.semantic}>`;
 }
 
 function renderPage(page: Page, values: Record<string, string | number | boolean>): string {
@@ -78,7 +73,7 @@ function renderCss(ir: DesignIR, values: Record<string, string | number | boolea
   const bodyTypeface = roleVar(ir.identity, 'bodyTypeface', values);
   const baseSpacing = roleVar(ir.identity, 'baseSpacing', values);
   const sectionSpacing = roleVar(ir.identity, 'sectionSpacing', values);
-  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; }\n  main { container-type: inline-size; min-height: 100vh; padding: ${baseSpacing}; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }\n}`;
+  return `@layer tokens, base, components;\n\n@layer tokens {\n  :root {\n${vars}\n  }\n}\n\n@layer base {\n  *, *::before, *::after { box-sizing: border-box; }\n  html { background: ${surface}; color: ${text}; }\n  body { margin: 0; font-family: ${bodyTypeface}; container-type: inline-size; }\n  main { min-height: 100vh; padding: ${baseSpacing}; }\n}\n\n@layer components {\n  [data-node-kind="stack"], [data-node-kind="grid"] { display: grid; }\n  [data-node-kind="cluster"] { display: flex; flex-wrap: wrap; }\n  @container (min-width: 48rem) { main { padding-inline: ${sectionSpacing}; } }\n  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }\n}`;
 }
 
 export function renderDesign(ir: DesignIR): RenderedDocument {

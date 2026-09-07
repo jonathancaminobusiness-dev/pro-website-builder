@@ -3,7 +3,7 @@ import { agentTaskSchema, createFixtureIR, documentPathSchemas, hashJson, stageR
 import { FakeModelProvider } from '@pwb/providers';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, VersionStore } from './index.js';
 
-const ALLOWED = ['/identity', '/pages', '/assets', '/reviewRecord'];
+const ALLOWED = { allowedPaths: ['/identity', '/pages', '/assets', '/reviewRecord'], stage: 'identity' as const, role: 'director' as const };
 
 function task(id: string, baseVersionId = 'v0', overrides: Partial<AgentTask> = {}): AgentTask {
   return { id, attempt: 1, stage: 'identity', role: 'director', state: 'queued', lane: 'claude', baseVersionId, inputDigest: 'brief', promptVersion: '1', modelAlias: 'fake', deadlineMs: 1000, allowedPaths: ['/reviewRecord'], documentSlice: { '/identity': createFixtureIR().identity }, brief: 'fixture', ...overrides };
@@ -33,11 +33,11 @@ describe('orchestrator', () => {
     const touchIdentity = (stage: 'prototype' | 'finalization') => ({ operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'draft' }], baseVersionId: root.id, touchedPaths: ['/identity/meta/status'], rationale: 'freeze breaker', confidence: 1, stage, role: stage === 'prototype' ? 'composer' as const : 'compiler' as const, idempotencyKey: `identity-${stage}` });
     for (const stage of ['prototype', 'finalization'] as const) {
       const task = plan.tasks.find((item) => item.stage === stage)!;
-      expect(() => gate.validate(touchIdentity(stage), { currentVersionId: root.id, allowedPaths: task.allowedPaths })).toThrow(/not allowed/i);
+      expect(() => gate.validate(touchIdentity(stage), { currentVersionId: root.id, allowedPaths: task.allowedPaths, stage, role: task.role })).toThrow(/not allowed/i);
     }
     const compiler = plan.tasks.find((item) => item.stage === 'finalization')!;
     const page = { operations: [{ op: 'replace' as const, path: '/pages/routes/0/title', value: 'Oficina' }], baseVersionId: root.id, touchedPaths: ['/pages/routes/0/title'], rationale: 'finish the page', confidence: 1, stage: 'finalization' as const, role: 'compiler' as const, idempotencyKey: 'finalize-page' };
-    expect(gate.validate(page, { currentVersionId: root.id, allowedPaths: compiler.allowedPaths }).ok).toBe(true);
+    expect(gate.validate(page, { currentVersionId: root.id, allowedPaths: compiler.allowedPaths, stage: 'finalization', role: 'compiler' }).ok).toBe(true);
   });
 
   it('hands every task an immutable slice of the base version and digests it', () => {
@@ -75,7 +75,7 @@ describe('orchestrator', () => {
 
   it('rejects stale and overlapping patches before the applier mutates a version', () => {
     const gate = new PatchGate();
-    const context = { currentVersionId: 'v0', allowedPaths: ['/reviewRecord'] };
+    const context = { currentVersionId: 'v0', allowedPaths: ['/reviewRecord'], stage: 'identity' as const, role: 'director' as const };
     const valid = { operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['one'] }], baseVersionId: 'v0', touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'valid-key' };
     const decision = gate.validate(valid, context);
     expect(decision.ok).toBe(true);
@@ -87,16 +87,30 @@ describe('orchestrator', () => {
 
   it('enforces allowed paths against the operations that actually write, not the declared paths', () => {
     const gate = new PatchGate();
-    const context = { currentVersionId: 'v0', allowedPaths: ['/reviewRecord'] };
+    const context = { currentVersionId: 'v0', allowedPaths: ['/reviewRecord'], stage: 'identity' as const, role: 'director' as const };
     const base = { baseVersionId: 'v0', touchedPaths: ['/reviewRecord/findings'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const };
     expect(() => gate.validate({ ...base, idempotencyKey: 'a', operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'approved' }] }, context)).toThrow(/not allowed/i);
     expect(() => gate.validate({ ...base, idempotencyKey: 'b', operations: [{ op: 'add' as const, path: '/__proto__/polluted', value: true }] }, context)).toThrow(/not allowed/i);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
+  it('validates a proposal against the stage the orchestrator assigned, not the one the agent declared', () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const root = applier.createRoot(createFixtureIR());
+    const identityTask = { allowedPaths: ['/identity', '/reviewRecord'], stage: 'identity' as const, role: 'director' as const };
+    const bumpVersion = { operations: [{ op: 'replace' as const, path: '/identity/meta/version', value: '1.1.0' }], baseVersionId: root.id, touchedPaths: ['/identity/meta/version'], rationale: 'bump the identity version', confidence: 1, idempotencyKey: 'bump' };
+    expect(() => applier.dryRun({ ...bumpVersion, stage: 'prototype', role: 'composer' }, identityTask, root.id)).toThrow(/declares prototype\/composer; the task is identity\/director/);
+    expect(applier.dryRun({ ...bumpVersion, stage: 'identity', role: 'director' }, identityTask, root.id).next.identity.meta.version).toBe('1.1.0');
+    const compilerTask = { allowedPaths: ['/pages', '/assets', '/reviewRecord'], stage: 'finalization' as const, role: 'compiler' as const };
+    const note = { operations: [{ op: 'replace' as const, path: '/reviewRecord/findings', value: ['pronto'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'record the release note', confidence: 1, idempotencyKey: 'note' };
+    expect(() => applier.dryRun({ ...note, stage: 'prototype', role: 'composer' }, compilerTask, root.id)).toThrow(/the task is finalization\/compiler/);
+    expect(applier.dryRun({ ...note, stage: 'finalization', role: 'compiler' }, compilerTask, root.id).next.reviewRecord.findings).toEqual(['pronto']);
+  });
+
   it('rejects a wrong-shaped stage value at the gate, before the applier reads the document', () => {
     const gate = new PatchGate();
-    const context = { currentVersionId: 'v0', allowedPaths: ALLOWED };
+    const context = { currentVersionId: 'v0', ...ALLOWED };
     const base = { baseVersionId: 'v0', touchedPaths: ['/reviewRecord'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const };
     const wrongShape = { ...base, idempotencyKey: 'wrong-shape', operations: [{ op: 'replace' as const, path: '/reviewRecord', value: { findings: [{ note: 'objeto' }], approvals: [] } }] };
     expect(() => gate.validate(wrongShape, context)).toThrow();
@@ -161,8 +175,8 @@ describe('orchestrator', () => {
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(createFixtureIR());
     const patch = { operations: [{ op: 'replace' as const, path: '/identity/meta/status', value: 'draft' }], baseVersionId: root.id, touchedPaths: ['/identity/meta/status'], rationale: 'test', confidence: 1, stage: 'identity' as const, role: 'director' as const, idempotencyKey: 'scoped' };
-    expect(() => applier.apply(patch, ['/reviewRecord'], root.id)).toThrow(/not allowed/i);
-    expect(applier.apply(patch, ['/identity'], root.id).ir.identity.meta.status).toBe('draft');
+    expect(() => applier.apply(patch, { ...ALLOWED, allowedPaths: ['/reviewRecord'] }, root.id)).toThrow(/not allowed/i);
+    expect(applier.apply(patch, { ...ALLOWED, allowedPaths: ['/identity'] }, root.id).ir.identity.meta.status).toBe('draft');
   });
 
   it('inserts array elements on add instead of overwriting them', () => {

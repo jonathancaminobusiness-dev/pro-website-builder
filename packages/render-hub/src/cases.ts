@@ -2,7 +2,7 @@ import { hashJson, type DesignIR } from '@pwb/domain';
 import type { RenderedDocument } from '@pwb/renderer';
 
 export interface RenderCase { route: string; width: 360 | 768 | 1440; state: string; reducedMotion: boolean; }
-export interface QaResult { passed: boolean; overflow: boolean; consoleErrors: string[]; networkErrors: string[]; }
+export interface QaResult { passed: boolean; overflow: boolean; status: number | null; consoleErrors: string[]; networkErrors: string[]; }
 
 export function createRenderCases(ir: DesignIR): RenderCase[] {
   return ir.pages.routes.flatMap((page) => ([360, 768, 1440] as const).flatMap((width) =>
@@ -11,7 +11,8 @@ export function createRenderCases(ir: DesignIR): RenderCase[] {
 
 export function cacheKey(rendered: RenderedDocument, renderCase: RenderCase): string { return hashJson({ irHash: rendered.irHash, rendererVersion: rendered.rendererVersion, renderCase }); }
 
-export function evaluateQa(input: { scrollWidth: number; clientWidth: number; consoleErrors: string[]; networkErrors: string[] }): QaResult {
+export function evaluateQa(input: { scrollWidth: number; clientWidth: number; status: number | null; consoleErrors: string[]; networkErrors: string[] }): QaResult {
   const overflow = input.scrollWidth > input.clientWidth;
-  return { passed: !overflow && input.consoleErrors.length === 0 && input.networkErrors.length === 0, overflow, consoleErrors: input.consoleErrors, networkErrors: input.networkErrors };
+  const served = input.status !== null && input.status >= 200 && input.status < 300;
+  return { passed: served && !overflow && input.consoleErrors.length === 0 && input.networkErrors.length === 0, overflow, status: input.status, consoleErrors: input.consoleErrors, networkErrors: input.networkErrors };
 }
