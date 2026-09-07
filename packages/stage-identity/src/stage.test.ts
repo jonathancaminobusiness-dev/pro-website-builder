@@ -6,7 +6,8 @@ import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
 import { identityAxisBriefs } from './axes.js';
-import { imageryPolicyViolations } from './art-director.js';
+import { generateApprovedImagery, imageryPolicyViolations } from './art-director.js';
+import type { ImagePromptPlan } from './contracts.js';
 import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
 import { IdentityStage } from './stage.js';
@@ -412,25 +413,58 @@ describe('image art director', () => {
     const provider: ModelProvider = {
       async propose(task, signal) {
         const result = await inner.propose(task, signal);
-        if (task.id !== 'identity-art-director-typographic-low-chroma') return result;
+        if (task.id !== 'identity-art-director-modular-technical') return result;
         const plan = result.artifact as Record<string, unknown>;
-        return { ...result, artifact: { ...plan, directionId: 'editorial-material', plans: [{ ...(plan.plans as Record<string, unknown>[])[0], role: 'hero' }] } };
+        return { ...result, artifact: { ...plan, directionId: 'editorial-material' } };
       },
     };
     const { stage } = harness({ provider });
     const result = await stage.run();
-    const candidate = result.candidates.find((entry) => entry.directionId === 'typographic-low-chroma')!;
+    const candidate = result.candidates.find((entry) => entry.directionId === 'modular-technical')!;
     expect(candidate.imagePlan).toBeUndefined();
-    expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-typographic-low-chroma' && /instead of its own seat/.test(failure.reason))).toBe(true);
+    expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-modular-technical' && /instead of its own seat/.test(failure.reason))).toBe(true);
   });
 
-  it('refuses a plan that smuggles photography into a direction that declared none', async () => {
+  it('plans nothing for a direction whose contract admits no generated source', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { stage } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'typographic-low-chroma')!;
+    expect(candidate.imagePlan?.plans).toEqual([]);
+    expect(candidate.imageryViolations).toEqual([]);
+    // Approving it is not blocked, and nothing is generated for a direction that admits only manual imagery.
+    const approval = await stage.approve({ directionId: 'typographic-low-chroma', rationale: 'O documento tipográfico responde ao briefing.', approverRole: 'captain' });
+    expect(calls).toEqual([]);
+    expect(approval.assets).toEqual([]);
+    expect(stage.handoff()!.assets).toEqual([]);
+  });
+
+  it('refuses a plan that smuggles photography or an unadmitted source into a direction that declared neither', async () => {
     const { stage, store } = harness();
     const result = await stage.run();
     const candidate = result.candidates.find((entry) => entry.directionId === 'typographic-low-chroma')!;
-    expect(candidate.imageryViolations).toEqual([]);
-    const smuggled = { ...candidate.imagePlan!, plans: [{ ...candidate.imagePlan!.plans[0]!, role: 'portrait' as const }] };
-    expect(imageryPolicyViolations(smuggled, store.get(candidate.versionId)!.ir)[0]).toMatch(/no-photography/);
+    const smuggled: ImagePromptPlan = {
+      schemaVersion: 1,
+      directionId: 'typographic-low-chroma',
+      plans: [{ id: 'hero-01', role: 'portrait', prompt: 'Retrato documental do capitão em luz lateral rasante.', negatives: ['gradiente roxo-azul'], aspect: '3:2', axis: 'imagery', alt: 'Retrato.', licenceExpectation: 'Uso interno do proprietário.' }],
+    };
+    const violations = imageryPolicyViolations(smuggled, store.get(candidate.versionId)!.ir);
+    expect(violations.some((violation) => /no-photography/.test(violation))).toBe(true);
+    expect(violations.some((violation) => /allowed sources/.test(violation))).toBe(true);
+  });
+
+  it('never submits a raster job for a direction that admits no generated source', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const provider = new HiggsfieldMcpProvider({ configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } });
+    const plan: ImagePromptPlan = {
+      schemaVersion: 1,
+      directionId: 'typographic-low-chroma',
+      plans: [{ id: 'texture-01', role: 'texture', prompt: 'Textura de papel impresso em duas tintas, luz rasante.', negatives: ['fotografia de banco'], aspect: '3:2', axis: 'materiality', alt: 'Textura.', licenceExpectation: 'Uso interno do proprietário.' }],
+    };
+    const generated = await generateApprovedImagery(plan, { provider, identityVersionId: 'v-test', identity: fakeIdentityFor('typographic-low-chroma') });
+    expect(calls).toEqual([]);
+    expect(generated.jobs).toEqual([]);
+    expect(generated.assets).toEqual([]);
   });
 });
 
@@ -545,6 +579,18 @@ describe('gate 1', () => {
     const after = flattenTokens(store.get(changed.versionId)!.ir.identity.tokens).get('space.md')!;
     expect(after).toEqual({ ...before, $value: '2rem' });
     expect(after.$type).toBe('dimension');
+  });
+
+  it('commits nothing for a refused change, so the same token stays changeable', async () => {
+    const { stage } = harness();
+    await stage.run();
+    const approval = await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
+    await expect(stage.changeToken({ tokenPath: 'color.accent', value: '{color.accent}', rationale: 'Alias circular por engano.' })).rejects.toThrow();
+    expect(stage.gateState().state).toBe('closed');
+    // The refused change reserved nothing in the branch's patch gate.
+    const changed = await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Valor correto.' });
+    expect(changed.gate.state).toBe('reopened');
+    expect(changed.versionId).not.toBe(approval.versionId);
   });
 
   it('refuses to replace a whole token group with a single token', async () => {

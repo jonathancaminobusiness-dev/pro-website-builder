@@ -19,8 +19,11 @@ test('captain compares three directions and decides Gate 1, and a token change r
     await expect(card.locator('.direction-rationale')).toContainText('Rationale.');
     await expect(card.getByText('Exclusões e defaults proibidos')).toBeVisible();
     await expect(card.getByText(/Decisões com evidência \(\d+\)/)).toBeVisible();
-    await expect(card.getByText(/geração só após aprovação/)).toBeVisible();
   }
+
+  // Only the directions whose contract admits a generated source carry image plans.
+  await expect(page.locator('.direction-card', { hasText: 'modular-technical' }).getByText(/geração só após aprovação/)).toBeVisible();
+  await expect(page.locator('.direction-card', { hasText: 'typographic-low-chroma' }).getByText(/geração só após aprovação/)).toHaveCount(0);
 
   // Nothing is marked until the server records a decision.
   await expect(page.locator('.direction-card.selected')).toHaveCount(0);

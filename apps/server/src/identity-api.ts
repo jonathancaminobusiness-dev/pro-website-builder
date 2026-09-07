@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tokenValueSchema } from '@pwb/domain';
+import { StageError } from '@pwb/stage-identity';
 import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
 
 export interface IdentityApiOptions {
@@ -55,44 +56,47 @@ export async function handleIdentityRequest(
 
   const input = await body(request);
   let snapshot: IdentityRunSnapshot;
-  switch (action) {
-    case 'start':
-      if (!captain(input, send, 'start')) return true;
-      snapshot = await run.start();
-      break;
-    case 'cancel':
-      snapshot = await run.cancel();
-      break;
-    case 'approve': {
-      if (!captain(input, send, 'approve')) return true;
-      if (typeof input.directionId !== 'string') { send(400, { error: 'A directionId is required.' }); return true; }
-      const rationale = typeof input.rationale === 'string' && input.rationale.trim() ? input.rationale : 'Gate 1 aprovado pelo capitão.';
-      const override = typeof input.overrideRationale === 'string' ? input.overrideRationale : undefined;
-      snapshot = await run.approve({ directionId: input.directionId, approverRole: 'captain', rationale, ...(override ? { overrideRationale: override } : {}) });
-      break;
-    }
-    case 'reject': {
-      if (!captain(input, send, 'reject')) return true;
-      if (typeof input.directionId !== 'string') { send(400, { error: 'A directionId is required.' }); return true; }
-      snapshot = await run.reject({ directionId: input.directionId, approverRole: 'captain', rationale: typeof input.rationale === 'string' ? input.rationale : 'Direção devolvida para revisão.' });
-      break;
-    }
-    case 'token': {
-      if (!captain(input, send, 'change a token after')) return true;
-      if (typeof input.tokenPath !== 'string') { send(400, { error: 'A tokenPath is required.' }); return true; }
-      const parsed = tokenValueSchema.safeParse(input.value);
-      if (!parsed.success) { send(400, { error: 'A token change must carry a value the approved token can take.' }); return true; }
-      try {
-        snapshot = await run.changeToken({ tokenPath: input.tokenPath, value: parsed.data, rationale: typeof input.rationale === 'string' ? input.rationale : 'Mudança de token após o gate.' });
-      } catch (error) {
-        send(400, { error: error instanceof Error ? error.message : 'The approved identity cannot take this token change.' });
-        return true;
+  // One classification for every route: a refusal the captain can fix answers
+  // 400 with its own words, and anything else is a fault the API reports as one.
+  try {
+    switch (action) {
+      case 'start':
+        if (!captain(input, send, 'start')) return true;
+        snapshot = await run.start();
+        break;
+      case 'cancel':
+        snapshot = await run.cancel();
+        break;
+      case 'approve': {
+        if (!captain(input, send, 'approve')) return true;
+        if (typeof input.directionId !== 'string') { send(400, { error: 'A directionId is required.' }); return true; }
+        const rationale = typeof input.rationale === 'string' && input.rationale.trim() ? input.rationale : 'Gate 1 aprovado pelo capitão.';
+        const override = typeof input.overrideRationale === 'string' ? input.overrideRationale : undefined;
+        snapshot = await run.approve({ directionId: input.directionId, approverRole: 'captain', rationale, ...(override ? { overrideRationale: override } : {}) });
+        break;
       }
-      break;
+      case 'reject': {
+        if (!captain(input, send, 'reject')) return true;
+        if (typeof input.directionId !== 'string') { send(400, { error: 'A directionId is required.' }); return true; }
+        snapshot = await run.reject({ directionId: input.directionId, approverRole: 'captain', rationale: typeof input.rationale === 'string' ? input.rationale : 'Direção devolvida para revisão.' });
+        break;
+      }
+      case 'token': {
+        if (!captain(input, send, 'change a token after')) return true;
+        if (typeof input.tokenPath !== 'string') { send(400, { error: 'A tokenPath is required.' }); return true; }
+        const parsed = tokenValueSchema.safeParse(input.value);
+        if (!parsed.success) { send(400, { error: 'A token change must carry a value the approved token can take.' }); return true; }
+        snapshot = await run.changeToken({ tokenPath: input.tokenPath, value: parsed.data, rationale: typeof input.rationale === 'string' ? input.rationale : 'Mudança de token após o gate.' });
+        break;
+      }
+      default:
+        send(404, { error: 'Not found.' });
+        return true;
     }
-    default:
-      send(404, { error: 'Not found.' });
-      return true;
+  } catch (error) {
+    if (!(error instanceof StageError)) throw error;
+    send(400, { error: error.message });
+    return true;
   }
   send(200, snapshot);
   return true;

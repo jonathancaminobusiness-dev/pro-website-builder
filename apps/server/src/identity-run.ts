@@ -4,7 +4,7 @@ import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
-import { approvalOf, identityHash, IdentityStage, pruneRenderCache, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
+import { approvalOf, identityHash, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 
 const duplicateCodes = new Set(['SQLITE_CONSTRAINT_PRIMARYKEY', 'SQLITE_CONSTRAINT_UNIQUE']);
@@ -149,7 +149,7 @@ export class IdentityRun {
   }
 
   async reject(input: { directionId: string; approverRole: string; rationale: string }): Promise<IdentityRunSnapshot> {
-    if (input.approverRole !== 'captain') throw new Error('Only the captain can reject Gate 1 in v1.');
+    if (input.approverRole !== 'captain') throw new StageError('Only the captain can reject Gate 1 in v1.');
     const candidate = this.candidate(input.directionId);
     const record: Approval = { id: `${this.options.runId}-identity-rejection-${this.approvals.length}`, stage: 'identity', approverRole: 'captain', versionId: candidate.versionId, versionHash: this.store.get(candidate.versionId)!.hash, decision: 'rejected', rationale: input.rationale, createdAt: new Date().toISOString() };
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
@@ -208,7 +208,7 @@ export class IdentityRun {
 
   private candidate(directionId: string): IdentityCandidate {
     const candidate = this.result?.candidates.find((entry) => entry.directionId === directionId);
-    if (!candidate) throw new Error(`Direction ${directionId} is not one of this run's candidates.`);
+    if (!candidate) throw new StageError(`Direction ${directionId} is not one of this run's candidates.`);
     return candidate;
   }
 

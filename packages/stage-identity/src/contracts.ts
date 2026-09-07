@@ -29,7 +29,7 @@ export const briefSpecSchema = z.object({
 });
 export type BriefSpec = z.infer<typeof briefSpecSchema>;
 
-export const critiqueDimensionSchema = z.enum(['brand-fit', 'coherence', 'divergence', 'system-accessibility', 'imagery-provenance']);
+export const critiqueDimensionSchema = z.enum(['brand-fit', 'divergence', 'system-accessibility']);
 export type CritiqueDimension = z.infer<typeof critiqueDimensionSchema>;
 
 /** The rubric is absolute and per dimension, so a strong colour cannot pay for an unreadable system. */
@@ -82,7 +82,8 @@ export function belowRubric(report: CritiqueReport): Array<{ dimension: Critique
 /**
  * The art director writes plans for every candidate, but only the approved
  * direction is ever generated. A plan carries the negatives and the licence
- * expectation up front so provenance is never reconstructed after the fact.
+ * expectation up front so provenance is never reconstructed after the fact, and
+ * a direction whose contract admits no generated imagery plans none.
  */
 export const imagePromptPlanSchema = z.object({
   schemaVersion: z.literal(1),
@@ -97,7 +98,7 @@ export const imagePromptPlanSchema = z.object({
     axis: divergenceAxisSchema,
     alt: z.string().min(1),
     licenceExpectation: z.string().min(1),
-  })).min(1).max(4),
+  })).max(4),
 }).strict();
 export type ImagePromptPlan = z.infer<typeof imagePromptPlanSchema>;
 

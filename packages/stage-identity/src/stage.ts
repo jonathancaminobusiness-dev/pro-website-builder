@@ -115,7 +115,8 @@ export interface IdentityApproval {
   overrideRationale?: string;
 }
 
-class StageError extends Error {}
+/** A refusal the caller can fix: a bad value, a decision the gate does not allow, a direction that is not in the run. */
+export class StageError extends Error {}
 
 /** One critic seat: the critic that was asked and the subject it was asked about. */
 function criticSeat(report: CritiqueReport): string {
@@ -631,7 +632,7 @@ export class IdentityStage {
     // placed in the ledger by the stage that owns page media.
     let assets: IdentityAsset[] = [];
     if (candidate.imagePlan && this.options.raster) {
-      const generated = await generateApprovedImagery(candidate.imagePlan, { provider: this.options.raster, identityVersionId: version.id, ...(input.signal ? { signal: input.signal } : {}) });
+      const generated = await generateApprovedImagery(candidate.imagePlan, { provider: this.options.raster, identityVersionId: version.id, identity: version.ir.identity, ...(input.signal ? { signal: input.signal } : {}) });
       assets = generated.assets;
       this.approvedAssets = assets;
       await this.record('identity.imagery.generated', { directionId: candidate.directionId, assets: assets.map((asset) => ({ id: asset.id, status: asset.status, license: asset.provenance.license, hash: asset.provenance.hash })) });
@@ -693,8 +694,13 @@ export class IdentityStage {
       role: stageRoles.identity,
       idempotencyKey: hashJson({ base: baseId, pointer, value: token }),
     };
-    const version = this.branches.applierFor(this.gateRecord.directionId).apply(patch, IDENTITY_TASK_SCOPE, baseId);
-    renderDesign(version.ir);
+    // The gate bucket only closes over a change that is known to work: a value
+    // whose document cannot render is refused before anything is committed, so
+    // the captain can type the path again.
+    const applier = this.branches.applierFor(this.gateRecord.directionId);
+    try { renderDesign(applier.dryRun(patch, IDENTITY_TASK_SCOPE, baseId).next); }
+    catch (error) { throw new StageError(`Token ${input.tokenPath} cannot take this value. ${error instanceof Error ? error.message : 'The identity would stop rendering.'}`); }
+    const version = applier.apply(patch, IDENTITY_TASK_SCOPE, baseId);
     this.currentVersionId = version.id;
     const gate = this.gateState();
     await this.record('identity.gate.reopened', { directionId: this.gateRecord.directionId, versionId: version.id, tokenPath: input.tokenPath, staleRenderKeys: gate.state === 'reopened' ? gate.impact.staleRenderKeys.length : 0 });

@@ -301,6 +301,10 @@ function critiqueFor(criticId: string, subject: CritiqueReport['subject']): Crit
 function imagePlanFor(seedId: IdentityAxisBriefId): ImagePromptPlan {
   const seed = seeds.find((entry) => entry.id === seedId)!;
   const photographyRefused = identityAxisBrief(seedId).required.imagery === 'no-photography';
+  // A direction whose contract admits no generated source plans nothing to generate.
+  if (!seed.imagery.allowedSources.some((source) => source.toLowerCase().startsWith('higgsfield'))) {
+    return { schemaVersion: 1, directionId: seed.id, plans: [] };
+  }
   return {
     schemaVersion: 1,
     directionId: seed.id,
@@ -377,4 +381,3 @@ export class FakeIdentityProvider implements ModelProvider {
   }
 }
 
-export const fakeIdentitySeedIds = identityAxisBriefs.map((seat) => seat.id);

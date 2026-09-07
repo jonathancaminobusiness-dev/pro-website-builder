@@ -266,6 +266,18 @@ describe('identity api', () => {
     });
   });
 
+  it('answers 400 when the captain approves a blocked direction without an override', async () => {
+    await withServer(async (origin) => {
+      await post(origin, '/api/identity/runs', { runId: 'blocked-gate' });
+      await post(origin, '/api/identity/runs/blocked-gate/start', { approverRole: 'captain' });
+      await post(origin, '/api/identity/runs/blocked-gate/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
+      await post(origin, '/api/identity/runs/blocked-gate/token', { approverRole: 'captain', tokenPath: 'type.display', value: 'Inter-only hero, Georgia, serif' });
+      const refused = await post(origin, '/api/identity/runs/blocked-gate/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'Mesmo assim.' });
+      expect(refused.status).toBe(400);
+      expect((await refused.json() as { error: string }).error).toMatch(/automatic selection is not allowed/);
+    });
+  });
+
   it('refuses a value the approved token cannot take with a 400 and the reason', async () => {
     await withServer(async (origin) => {
       await post(origin, '/api/identity/runs', { runId: 'typed-token' });
