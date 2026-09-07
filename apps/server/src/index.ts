@@ -5,6 +5,7 @@ import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
 import { createPreviewServer } from './preview.js';
 import { createModelProvider } from './provider.js';
+import { PrototypeRunRegistry } from './prototype-api.js';
 
 export async function startServer(options: { dbPath?: string; exportRoot?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
   const root = process.cwd();
@@ -17,8 +18,10 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   const repository = new ProjectRepository(database);
   const runs = new Map<string, FixtureRun>();
   const claimed = new Set<string>();
+  const prototypes = new PrototypeRunRegistry({ repository, modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake' });
   const api = createApiServer({
     runs,
+    prototypes,
     createRun: async (id) => {
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
@@ -40,7 +43,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   });
   const preview = createPreviewServer((versionId) => {
     for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return snapshot.rendered; }
-    return undefined;
+    return prototypes.preview(versionId);
   }, options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311));
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);
   await new Promise<void>((resolve) => api.listen(apiPort, '127.0.0.1', resolve));

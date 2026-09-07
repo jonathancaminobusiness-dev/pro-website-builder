@@ -53,9 +53,18 @@ importers:
       '@pwb/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@pwb/qa-deterministic':
+        specifier: workspace:*
+        version: link:../../packages/qa-deterministic
+      '@pwb/render-hub':
+        specifier: workspace:*
+        version: link:../../packages/render-hub
       '@pwb/renderer':
         specifier: workspace:*
         version: link:../../packages/renderer
+      '@pwb/stage-prototype':
+        specifier: workspace:*
+        version: link:../../packages/stage-prototype
       better-sqlite3:
         specifier: ^12.0.0
         version: 12.11.1

@@ -1,13 +1,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { FixtureRun } from './fixture-run.js';
+import type { PrototypeRunRegistry } from './prototype-api.js';
+import { handlePrototypeRequest } from './prototype-routes.js';
 import { STUDIO_ORIGIN } from './security.js';
 
 export class RunConflictError extends Error {
   constructor(runId: string) { super(`Run ${runId} already exists.`); this.name = 'RunConflictError'; }
 }
 
-interface ApiOptions { runs: Map<string, FixtureRun>; createRun: (id: string) => Promise<FixtureRun>; loadRun?: (id: string) => Promise<FixtureRun | undefined>; }
+interface ApiOptions { runs: Map<string, FixtureRun>; createRun: (id: string) => Promise<FixtureRun>; loadRun?: (id: string) => Promise<FixtureRun | undefined>; prototypes?: PrototypeRunRegistry; }
 const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' };
 const allowedOrigins = new Set<string>([STUDIO_ORIGIN]);
 function allowedOrigin(origin: string | undefined): string { return origin && allowedOrigins.has(origin) ? origin : STUDIO_ORIGIN; }
@@ -34,6 +36,10 @@ export function createApiServer(options: ApiOptions): Server {
         catch (error) { if (error instanceof RunConflictError) { send(response, 409, { error: error.message }); return; } throw error; }
         send(response, 201, { runId, snapshot: created.snapshot() });
         return;
+      }
+      if (options.prototypes && pathname.startsWith('/api/prototype/')) {
+        const handled = await handlePrototypeRequest(options.prototypes, request, pathname, body);
+        if (handled) { send(response, handled.status, handled.payload); return; }
       }
       const match = /^\/api\/runs\/([^/]+)(?:\/(stage|approve|reject|cancel|restart))?$/.exec(pathname);
       if (match) {

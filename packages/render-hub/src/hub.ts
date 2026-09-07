@@ -24,7 +24,19 @@ export interface CaptureRequest {
 
 /** Keyboard focus is walked, never scripted, so `:focus-visible` behaves as it does for a real user. */
 const MAX_TAB_STOPS = 25;
+/**
+ * TypeScript transpilers that keep function names (esbuild, tsx) wrap every function in a `__name`
+ * helper, and that helper travels with a function Playwright serializes into the page. This identity
+ * shim is injected as raw text before navigation so the collectors run; it defines one no-op global
+ * and touches nothing the capture measures.
+ */
+const KEEP_NAMES_SHIM = 'globalThis.__name = globalThis.__name || ((value) => value);';
 const axeSourcePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js');
+let axeSourceText: Promise<string> | undefined;
+function axeSource(): Promise<string> {
+  axeSourceText ??= readFile(axeSourcePath, 'utf8');
+  return axeSourceText;
+}
 
 interface AxeResult { violations: Array<{ id: string; impact: string | null; help: string; nodes: Array<{ target: string[] }> }>; }
 
@@ -87,6 +99,7 @@ export class RenderHub {
     page.on('requestfailed', (request) => networkErrors.push(`${request.url()}: ${request.failure()?.errorText ?? 'failed'}`));
     try {
       signal?.throwIfAborted();
+      await page.addInitScript(KEEP_NAMES_SHIM);
       await page.goto(url, { waitUntil: 'networkidle' });
       await page.waitForFunction(() => document.fonts?.status === 'loaded');
       await page.evaluate(applyRenderState, { hiddenNodeIds: condition.hiddenNodeIds, state: condition.state });
@@ -141,7 +154,9 @@ export class RenderHub {
   }
 
   private async runAxe(page: Page): Promise<AxeViolation[]> {
-    await page.addScriptTag({ path: axeSourcePath });
+    // The preview origin serves `script-src 'none'` and must keep doing so, so axe is evaluated
+    // through the debugging protocol instead of injected as a page script.
+    await page.evaluate(await axeSource());
     const raw = await page.evaluate(async () => {
       const runner = (window as unknown as { axe?: { run: (context: Document, options: unknown) => Promise<unknown> } }).axe;
       if (!runner) return { violations: [] };

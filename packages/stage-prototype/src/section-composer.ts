@@ -43,9 +43,12 @@ export class FakeSectionComposer implements ComposerProvider {
       }
       // Every route needs exactly one h1, and it belongs to the section that opens the route.
       const opensRoute = section.nodeRange.start === ROUTE_SHELL_SLOT + 1;
-      const heading = index === 0 && section.role !== 'support';
+      // A state that replaces the whole route needs its own heading, because the route's own h1 is
+      // hidden while that state is showing.
+      const heading = section.role === 'support' || index === 0;
+      const level = section.role === 'support' ? 'h1' : opensRoute ? 'h1' : 'h2';
       return {
-        id, kind: 'type', semantic: heading ? (opensRoute ? 'h1' : 'h2') : 'p',
+        id, kind: 'type', semantic: heading ? level : 'p',
         props: { color: ink, font: `{${identity.tokenRoles.bodyTypeface}}`, text },
         slots: {}, responsive: [],
       };
