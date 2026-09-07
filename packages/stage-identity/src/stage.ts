@@ -320,7 +320,7 @@ export class IdentityStage {
     };
   }
 
-  private candidateOf(directionId: IdentityAxisBriefId, version: VersionRecord, previous?: IdentityCandidate): IdentityCandidate {
+  private candidateOf(directionId: IdentityAxisBriefId, version: VersionRecord, previous?: IdentityCandidate, refinedFrom?: string): IdentityCandidate {
     const vector = version.ir.identity.direction.divergence?.matrix.find((entry) => entry.directionId === directionId);
     if (!vector) throw new StageError(`Candidate ${directionId} carries no divergence vector, so it cannot enter Gate 1.`);
     return {
@@ -332,7 +332,7 @@ export class IdentityStage {
       identity: version.ir.identity,
       vector,
       lint: lintDesign(version.ir),
-      ...(previous ? { refinedFromVersionId: previous.versionId } : {}),
+      ...((refinedFrom ?? previous?.refinedFromVersionId) ? { refinedFromVersionId: (refinedFrom ?? previous!.refinedFromVersionId)! } : {}),
       blocking: previous?.blocking ?? [],
       rubricGaps: previous?.rubricGaps ?? [],
       abstained: previous?.abstained ?? false,
@@ -358,10 +358,12 @@ export class IdentityStage {
   private async critique(brief: BriefSpec, signal?: AbortSignal, only?: IdentityAxisBriefId[]): Promise<CritiqueReport[]> {
     const subjects = only ? this.candidates.filter((candidate) => only.includes(candidate.directionId)) : this.candidates;
     const tasks: AgentTask[] = [];
+    const subjectOf = new Map<string, CritiqueReport['subject']>();
     for (const critic of identityCritics) {
       if (critic.scope === 'matrix') {
         const first = this.candidates[0];
         if (!first || only) continue;
+        subjectOf.set(`identity-critic-${critic.id}`, { kind: 'matrix' });
         tasks.push(this.task({
           id: `identity-critic-${critic.id}`,
           role: 'critic',
@@ -373,6 +375,7 @@ export class IdentityStage {
         continue;
       }
       for (const candidate of subjects) {
+        subjectOf.set(`identity-critic-${critic.id}-${candidate.directionId}`, { kind: 'direction', directionId: candidate.directionId });
         tasks.push(this.task({
           id: `identity-critic-${critic.id}-${candidate.directionId}`,
           role: 'critic',
@@ -394,7 +397,10 @@ export class IdentityStage {
       // A critic is advisory, so an answer that misses its schema costs its own
       // report and the captain's attention, never the whole stage.
       try {
-        reports.push(requireArtifact(critiqueReportSchema, result.artifact, result.taskId, 'CritiqueReport'));
+        // The subject is the seat the task was issued for, not what the critic
+        // says it read: attribution is a fact the stage already knows.
+        const report = requireArtifact(critiqueReportSchema, result.artifact, result.taskId, 'CritiqueReport');
+        reports.push({ ...report, subject: subjectOf.get(result.taskId)! });
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'The critique did not validate.';
         this.failures.push({ taskId: result.taskId, reason });
@@ -469,7 +475,7 @@ export class IdentityStage {
         continue;
       }
       const index = refined.findIndex((entry) => entry.directionId === candidate.directionId);
-      refined[index] = this.candidateOf(candidate.directionId, version, candidate);
+      refined[index] = this.candidateOf(candidate.directionId, version, candidate, candidate.versionId);
       await this.record('identity.refine.applied', { directionId: candidate.directionId, fromVersionId: candidate.versionId, versionId: version.id });
     }
     return refined;

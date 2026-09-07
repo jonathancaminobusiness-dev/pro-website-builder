@@ -139,8 +139,10 @@ describe('identity stage fan-out', () => {
 
   it('keeps the healthy branches when one director\u2019s identity cannot be applied', async () => {
     const inner = new FakeIdentityProvider();
+    const criticCalls: string[] = [];
     const provider: ModelProvider = {
       async propose(task, signal) {
+        if (task.id.startsWith('identity-critic-')) criticCalls.push(task.id);
         const result = await inner.propose(task, signal);
         if (task.id !== 'identity-director-modular-technical' || !result.proposal) return result;
         // A token vocabulary the fixture pages still reference: schema-valid, but no document can be built from it.
@@ -154,6 +156,28 @@ describe('identity stage fan-out', () => {
     expect(result.candidates.map((candidate) => candidate.directionId)).toEqual(['editorial-material', 'typographic-low-chroma']);
     expect(result.failures.some((failure) => failure.taskId === 'identity-director-modular-technical')).toBe(true);
     expect(result.gate.state).toBe('open');
+    // The survivors were re-synced with the smaller matrix; neither of them was refined.
+    expect(result.candidates.map((candidate) => candidate.refinedFromVersionId)).toEqual([undefined, undefined]);
+    expect(criticCalls.filter((id) => id === 'identity-critic-brand-fit-critic-editorial-material')).toHaveLength(1);
+  });
+
+  it('attributes a critique to the seat it was asked about, not to the subject the critic declares', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-critic-system-a11y-critic-typographic-low-chroma') return result;
+        const report = result.artifact as Record<string, unknown>;
+        return { ...result, artifact: { ...report, subject: { kind: 'direction', directionId: 'Documento tipográfico' }, findings: [{ id: 'a11y-9', dimension: 'system-accessibility', severity: 'veto', path: '/identity/tokens/color/muted', observation: 'O par de texto secundário não alcança AA.', why: 'Texto de anotação fica ilegível.', evidenceIds: [], confidence: 0.9 }] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const typographic = result.candidates.find((candidate) => candidate.directionId === 'typographic-low-chroma')!;
+    expect(typographic.blocking.map((finding) => finding.id)).toEqual(['a11y-9']);
+    for (const other of result.candidates.filter((candidate) => candidate.directionId !== 'typographic-low-chroma')) expect(other.blocking).toEqual([]);
+    // The veto is on the card it belongs to, so Gate 1 cannot be closed for it without an override.
+    await expect(stage.approve({ directionId: 'typographic-low-chroma', rationale: 'Gosto dessa.', approverRole: 'captain' })).rejects.toThrow(/automatic selection is not allowed/);
   });
 
   it('spends exactly one corrective re-invocation on an artefact that misses its schema', async () => {

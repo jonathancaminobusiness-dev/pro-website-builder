@@ -118,7 +118,7 @@ export function evaluateIdentityGate(record: IdentityGateRecord | undefined, app
 
 export function approvalOf(record: IdentityGateRecord): Approval {
   return {
-    id: `${record.runId}-identity-approval`,
+    id: `${record.runId}-identity-approval-${record.versionId}`,
     stage: 'identity',
     approverRole: 'captain',
     versionId: record.versionId,

@@ -88,6 +88,9 @@ export function criticPrompt(input: CriticPromptInput): string {
     'Read the rubric and the veto list below before you read the document.',
     `Rubric for ${input.dimension}, scored 0 to 4 with ${RUBRIC_MINIMUM} as the minimum that passes:\n${input.rubric.map((line, index) => `${index}. ${line}`).join('\n')}`,
     `Immediate vetoes, which are not scores:\n${input.vetoes.map((line) => `- ${line}`).join('\n')}`,
+    input.subject.kind === 'matrix'
+      ? 'You are reviewing the whole fan-out at once. Report with `subject` set to { "kind": "matrix" }.'
+      : `You are reviewing the direction ${input.subject.directionId} and no other. Report with \`subject\` set to { "kind": "direction", "directionId": "${input.subject.directionId}" }, using that exact id and not the direction's label.`,
     HOUSE_RULES,
     'Report perception first (what the document literally declares), then comprehension (what that means for the audience and the promise), then findings. Never answer "rewrite the identity": each finding names one cause, its evidence, and the smallest repair that fixes it.',
     'If you cannot decide, set `abstain` to true and say why. That escalates to the captain, which is a better answer than invented precision.',

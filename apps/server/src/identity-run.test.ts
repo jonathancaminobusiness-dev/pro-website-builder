@@ -104,6 +104,25 @@ describe('identity run', () => {
     expect(reopened.handoff?.stale).toBe(true);
   });
 
+  it('persists the re-approval that closes a reopened gate as its own decision', async () => {
+    const run = newRun();
+    await run.initialize();
+    await run.start();
+    const first = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
+    await run.changeToken({ tokenPath: 'color.accent', value: { $value: '#ff7a00', $type: 'color' }, rationale: 'Sinal mais quente.' });
+    const reapproved = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Token revisado e aprovado.' });
+    expect(reapproved.gate.state).toBe('closed');
+
+    const rows = database.sqlite.prepare("SELECT id, version_id, rationale FROM approvals WHERE decision = 'approved' ORDER BY rowid").all() as Array<{ id: string; version_id: string; rationale: string }>;
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(2);
+    expect(rows[1]?.version_id).not.toBe(rows[0]?.version_id);
+    expect(rows[1]?.rationale).toBe('Token revisado e aprovado.');
+    if (first.gate.state !== 'closed') throw new Error('unreachable');
+    expect(rows[0]?.version_id).toBe(first.gate.record.versionId);
+    expect(new Set(reapproved.approvals.map((approval) => approval.id)).size).toBe(2);
+  });
+
   it('reports only the render cache entries it actually removed', async () => {
     const run = new IdentityRun({ runId: 'identity-prune', repository: new ProjectRepository(database), provider: new FakeIdentityProvider(), renderCacheDir: join(directory, 'render-cache') });
     await run.initialize();
