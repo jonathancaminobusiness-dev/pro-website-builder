@@ -62,7 +62,7 @@ export function createFixtureIdentity(): IdentitySpec {
     tokens,
     tokenRoles: { surface: 'color.paper', text: 'color.ink', bodyTypeface: 'type.body', baseSpacing: 'space.md', sectionSpacing: 'space.lg' },
     gridGrammar: { maxWidthToken: '{space.xl}', columns: 12, gutterToken: '{space.md}', rhythmToken: '{space.md}', breakpointTokens: ['{breakpoint.compact}', '{breakpoint.expanded}'], responsive: [{ container: 'narrow', rule: 'stack content before proof' }] },
-    imagery: { treatment: 'Documentary crops with paper texture', focalPolicy: 'Keep the subject off-center', allowedSources: ['manual', 'higgsfield'] },
+    imagery: { treatment: 'Documentary crops with paper texture', focalPolicy: 'Keep the subject off-center', allowedSources: ['manual', 'higgsfield-mcp'] },
     iconography: { family: 'single-line workshop marks', strokeToken: '{color.ink}', naming: 'purpose-first accessible labels' },
     content: { voice: 'direta, humana, específica', message: 'Toda escolha tem motivo.', allowedTerms: ['processo', 'prova', 'oficina'], forbiddenTerms: ['revolucionário', 'mágico'] },
     do: ['Use evidence before decoration', 'Keep asymmetry intentional'],

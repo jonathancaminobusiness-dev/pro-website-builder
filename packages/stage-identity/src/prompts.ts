@@ -1,4 +1,4 @@
-import { documentPathSchemas, documentRules, governedContractFields, stageRoles, visualPropKeys, type DesignIR, type IdentitySpec } from '@pwb/domain';
+import { documentPathSchemas, documentRules, governedContractFields, imagerySourceSchema, RASTER_IMAGERY_SOURCE, stageRoles, visualPropKeys, type DesignIR, type IdentitySpec } from '@pwb/domain';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { identityAxisBrief, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
 import { briefSpecSchema, critiqueReportSchema, imagePromptPlanSchema, IDENTITY_PROMPT_VERSION, RUBRIC_MINIMUM, type BriefSpec, type CritiqueReport } from './contracts.js';
@@ -65,6 +65,7 @@ export function identityDirectorPrompt(input: { brief: BriefSpec; axisBriefId: I
     `The identity contract currently in the document, which you are replacing wholesale. Keep the same token paths so the existing pages keep resolving; change what the tokens mean, not what they are called:\n${JSON.stringify(input.currentIdentity)}`,
     `Every token you define and every one of these governed contract fields needs exactly one entry in \`decisions\`: ${governedContractFields.join(', ')}. A decision carries an axis, at least one evidence id, and a rationale that says what the choice does to hierarchy or use.`,
     `Answer with an AgentResult whose \`proposal\` is a patch. It must set baseVersionId to ${input.baseVersionId}, declare stage "identity" and role "${stageRoles.identity}", touch only ${input.allowedPaths.join(', ')}, and contain exactly one operation: replace /identity with the complete IdentitySpec.`,
+    `The imagery policy you write is enforced: \`imagery.allowedSources\` accepts only ${imagerySourceSchema.options.map((source) => `"${source}"`).join(' and ')}, and "${RASTER_IMAGERY_SOURCE}" is the one source that can be generated. A direction that does not list it is never asked for image prompts and never generates an image.`,
     `A page node may only declare these props: ${[...visualPropKeys].join(', ')} and text, and every visual prop must be a token reference such as {color.ink}. You are not editing pages in this stage.`,
     `The gate also enforces rules no JSON Schema can state, and rejects a proposal that breaks any of them: ${Object.values(documentRules).join(' ')}`,
     `The IdentitySpec schema:\n${JSON.stringify(documentPathSchemas['/identity'])}`,

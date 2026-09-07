@@ -28,7 +28,7 @@ import { lintDesign, type LintReport } from '@pwb/linter';
 import { Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider, RasterProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
-import { generateApprovedImagery, imageryPolicyViolations, type IdentityAsset } from './art-director.js';
+import { admitsGeneratedImagery, generateApprovedImagery, imageryPolicyViolations, type IdentityAsset } from './art-director.js';
 import { identityAxisBrief, identityAxisBriefIds, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
 import { CandidateBranchStore, siblingsOf } from './branches.js';
 import {
@@ -553,7 +553,10 @@ export class IdentityStage {
   // ---------------------------------------------------------------- step 6
 
   private async planImagery(brief: BriefSpec, signal?: AbortSignal): Promise<void> {
-    const tasks = this.candidates.map((candidate) => this.task({
+    // A direction whose contract admits no generated source is not asked for a
+    // plan at all: nothing to generate is a decision, not a blocker.
+    const planning = this.candidates.filter((candidate) => admitsGeneratedImagery(candidate.identity));
+    const tasks = planning.map((candidate) => this.task({
       id: `identity-art-director-${candidate.directionId}`,
       role: 'art-director',
       deadlineMs: this.deadlines.artDirector,
@@ -579,7 +582,7 @@ export class IdentityStage {
         await this.record('identity.imagery.rejected', { directionId, reason });
       }
     }
-    await this.record('identity.imagery.planned', { plans: this.candidates.filter((candidate) => candidate.imagePlan).length, generated: 0 });
+    await this.record('identity.imagery.planned', { plans: this.candidates.filter((candidate) => candidate.imagePlan).length, skipped: this.candidates.length - planning.length, generated: 0 });
   }
 
   // ---------------------------------------------------------------- gate
@@ -632,7 +635,7 @@ export class IdentityStage {
     // placed in the ledger by the stage that owns page media.
     let assets: IdentityAsset[] = [];
     if (candidate.imagePlan && this.options.raster) {
-      const generated = await generateApprovedImagery(candidate.imagePlan, { provider: this.options.raster, identityVersionId: version.id, identity: version.ir.identity, ...(input.signal ? { signal: input.signal } : {}) });
+      const generated = await generateApprovedImagery(candidate.imagePlan, { provider: this.options.raster, identityVersionId: version.id, identity: version.ir.identity, existing: this.approvedAssets, ...(input.signal ? { signal: input.signal } : {}) });
       assets = generated.assets;
       this.approvedAssets = assets;
       await this.record('identity.imagery.generated', { directionId: candidate.directionId, assets: assets.map((asset) => ({ id: asset.id, status: asset.status, license: asset.provenance.license, hash: asset.provenance.hash })) });

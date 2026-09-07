@@ -74,7 +74,7 @@ const seeds: DirectionSeed[] = [
     type: { display: '"Fraunces", Georgia, serif', body: '"Source Serif 4", Georgia, serif' },
     motion: '220ms',
     grid: { columns: 12, responsive: 'a coluna larga precede a estreita até 48rem' },
-    imagery: { treatment: 'Recorte documental do próprio trabalho, com grão de papel', focalPolicy: 'Assunto fora do centro, alinhado à calha', allowedSources: ['manual', 'higgsfield'] },
+    imagery: { treatment: 'Recorte documental do próprio trabalho, com grão de papel', focalPolicy: 'Assunto fora do centro, alinhado à calha', allowedSources: ['manual', 'higgsfield-mcp'] },
     iconography: { family: 'marcas de traço único de anotação', strokeToken: '{color.ink}', naming: 'nome pelo propósito, com rótulo acessível' },
     content: { voice: 'direta, humana, específica', message: 'Toda escolha tem motivo.', allowedTerms: ['processo', 'prova', 'oficina'], forbiddenTerms: ['revolucionário', 'mágico'] },
     descriptors: {
@@ -120,7 +120,7 @@ const seeds: DirectionSeed[] = [
     type: { display: '"Archivo", Helvetica, Arial, sans-serif', body: '"IBM Plex Mono", ui-monospace, monospace' },
     motion: '90ms',
     grid: { columns: 16, responsive: 'o módulo divide por dois abaixo de 40rem, nunca reflui livre' },
-    imagery: { treatment: 'Diagrama técnico cotado, gerado a partir dos próprios dados', focalPolicy: 'Origem no canto superior esquerdo do módulo', allowedSources: ['manual', 'higgsfield'] },
+    imagery: { treatment: 'Diagrama técnico cotado, gerado a partir dos próprios dados', focalPolicy: 'Origem no canto superior esquerdo do módulo', allowedSources: ['manual', 'higgsfield-mcp'] },
     iconography: { family: 'glifos de instrumento com terminais retos', strokeToken: '{color.ink}', naming: 'nome pelo estado que representa' },
     content: { voice: 'precisa, curta, verificável', message: 'A medida está declarada.', allowedTerms: ['medida', 'estado', 'módulo'], forbiddenTerms: ['revolucionário', 'mágico'] },
     descriptors: {
@@ -301,10 +301,6 @@ function critiqueFor(criticId: string, subject: CritiqueReport['subject']): Crit
 function imagePlanFor(seedId: IdentityAxisBriefId): ImagePromptPlan {
   const seed = seeds.find((entry) => entry.id === seedId)!;
   const photographyRefused = identityAxisBrief(seedId).required.imagery === 'no-photography';
-  // A direction whose contract admits no generated source plans nothing to generate.
-  if (!seed.imagery.allowedSources.some((source) => source.toLowerCase().startsWith('higgsfield'))) {
-    return { schemaVersion: 1, directionId: seed.id, plans: [] };
-  }
   return {
     schemaVersion: 1,
     directionId: seed.id,

@@ -3,6 +3,7 @@ import {
   designIRSchema,
   documentRules,
   identitySpecSchema,
+  RASTER_IMAGERY_SOURCE,
   patchSchema,
   createFixtureIdentity,
   createFixtureIR,
@@ -226,6 +227,13 @@ describe('domain contracts', () => {
 
   it('hashes equivalent objects deterministically', () => {
     expect(hashJson({ b: 2, a: 1 })).toBe(hashJson({ a: 1, b: 2 }));
+  });
+
+  it('accepts only the closed imagery source vocabulary, which is what decides generation', () => {
+    const identity = createFixtureIdentity();
+    expect(identitySpecSchema.parse(identity).imagery.allowedSources).toContain(RASTER_IMAGERY_SOURCE);
+    expect(() => identitySpecSchema.parse({ ...identity, imagery: { ...identity.imagery, allowedSources: ['MCP Higgsfield'] } })).toThrow();
+    expect(() => identitySpecSchema.parse({ ...identity, imagery: { ...identity.imagery, allowedSources: ['manual'] } })).not.toThrow();
   });
 
   it('requires every identity token role to name a token the identity defines', () => {

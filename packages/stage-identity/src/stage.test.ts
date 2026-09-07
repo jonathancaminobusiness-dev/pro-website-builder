@@ -371,12 +371,12 @@ describe('the identity stage write boundary', () => {
 });
 
 describe('image art director', () => {
-  it('plans for every direction but generates nothing before the captain decides', async () => {
+  it('plans for every direction that admits generation, and generates nothing before the captain decides', async () => {
     const { stage, events } = harness();
     const result = await stage.run();
-    expect(result.candidates.every((candidate) => candidate.imagePlan)).toBe(true);
+    expect(result.candidates.filter((candidate) => candidate.imagePlan).map((candidate) => candidate.directionId)).toEqual(['editorial-material', 'modular-technical']);
     expect(events.filter((event) => event.type === 'identity.imagery.generated')).toEqual([]);
-    expect(events.find((event) => event.type === 'identity.imagery.planned')?.payload).toMatchObject({ plans: 3, generated: 0 });
+    expect(events.find((event) => event.type === 'identity.imagery.planned')?.payload).toMatchObject({ plans: 2, skipped: 1, generated: 0 });
   });
 
   it('generates only the approved direction and records provenance and licence per image', async () => {
@@ -425,18 +425,62 @@ describe('image art director', () => {
     expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-modular-technical' && /instead of its own seat/.test(failure.reason))).toBe(true);
   });
 
-  it('plans nothing for a direction whose contract admits no generated source', async () => {
+  it('never asks a direction that admits no generated source for a plan, and never generates for it', async () => {
     const calls: Array<Record<string, unknown>> = [];
-    const { stage } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
+    const artDirectorTasks: string[] = [];
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-art-director-')) artDirectorTasks.push(task.id);
+        return inner.propose(task, signal);
+      },
+    };
+    const { stage } = harness({ provider, raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
     const result = await stage.run();
     const candidate = result.candidates.find((entry) => entry.directionId === 'typographic-low-chroma')!;
-    expect(candidate.imagePlan?.plans).toEqual([]);
+    expect(artDirectorTasks).toEqual(['identity-art-director-editorial-material', 'identity-art-director-modular-technical']);
+    expect(candidate.imagePlan).toBeUndefined();
     expect(candidate.imageryViolations).toEqual([]);
     // Approving it is not blocked, and nothing is generated for a direction that admits only manual imagery.
     const approval = await stage.approve({ directionId: 'typographic-low-chroma', rationale: 'O documento tipográfico responde ao briefing.', approverRole: 'captain' });
     expect(calls).toEqual([]);
     expect(approval.assets).toEqual([]);
     expect(stage.handoff()!.assets).toEqual([]);
+  });
+
+  it('takes an empty plan list as a schema failure for a direction that does admit generation', async () => {
+    const inner = new FakeIdentityProvider();
+    const attempts: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-art-director-modular-technical') return result;
+        attempts.push(task.attempt);
+        return { ...result, artifact: { ...(result.artifact as Record<string, unknown>), plans: [] } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'modular-technical')!;
+    // The one corrective re-invocation fires, and the empty answer is a recorded failure, not a silent shipment.
+    expect(attempts).toEqual([1, 2]);
+    expect(candidate.imagePlan).toBeUndefined();
+    expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-modular-technical')).toBe(true);
+  });
+
+  it('reuses the image it already has when a token change reopens and the captain re-approves', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { stage } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
+    await stage.run();
+    const first = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    expect(calls).toHaveLength(1);
+
+    await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    const again = await stage.approve({ directionId: 'modular-technical', rationale: 'Token revisado e aprovado.', approverRole: 'captain' });
+    // A token tweak is not a reshoot: the same prompt keeps the image it already produced.
+    expect(calls).toHaveLength(1);
+    expect(again.assets).toEqual(first.assets);
+    expect(stage.handoff()!.assets.map((asset) => asset.provenance.hash)).toEqual(first.assets.map((asset) => asset.provenance.hash));
   });
 
   it('refuses a plan that smuggles photography or an unadmitted source into a direction that declared neither', async () => {

@@ -4,6 +4,15 @@ import { decisionRecordSchema, divergenceAxes, divergenceSpecSchema, evidenceSch
 import { documentRules } from './rules.js';
 import { flattenTokens, resolveTokens, tokenGroupSchema } from './tokens.js';
 
+/**
+ * Where a direction admits its images from. The vocabulary is closed because it
+ * decides an external side effect: `higgsfield-mcp` is the only raster source in
+ * v1, so a direction that does not list it is never generated.
+ */
+export const imagerySourceSchema = z.enum(['higgsfield-mcp', 'manual']);
+export type ImagerySource = z.infer<typeof imagerySourceSchema>;
+export const RASTER_IMAGERY_SOURCE: ImagerySource = 'higgsfield-mcp';
+
 const provenanceSchema = z.object({
   source: z.string(), author: z.string(), license: z.string(), date: z.string(), hash: z.string(),
 });
@@ -47,7 +56,7 @@ export const identitySpecSchema = z.object({
     breakpointTokens: z.array(z.string()).min(2),
     responsive: z.array(z.object({ container: z.string(), rule: z.string() })),
   }),
-  imagery: z.object({ treatment: z.string(), focalPolicy: z.string(), allowedSources: z.array(z.string()) }),
+  imagery: z.object({ treatment: z.string(), focalPolicy: z.string(), allowedSources: z.array(imagerySourceSchema) }),
   iconography: z.object({ family: z.string(), strokeToken: z.string(), naming: z.string() }),
   content: z.object({ voice: z.string(), message: z.string(), allowedTerms: z.array(z.string()), forbiddenTerms: z.array(z.string()) }),
   do: z.array(z.string()),
