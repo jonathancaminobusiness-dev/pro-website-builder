@@ -49,7 +49,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * publishing over it takes a written reason, kept in the run's log and in the
  * release record beside the bundle.
  */
-export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null; apiOrigin: string }): React.JSX.Element {
+export default function Gate3Panel({ runId, apiOrigin, onPublished }: { runId: string | null; apiOrigin: string; onPublished: (run: unknown) => void }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<ReleaseSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -65,7 +65,12 @@ export default function Gate3Panel({ runId, apiOrigin }: { runId: string | null;
   const prepare = (): void => { if (runId) void act(() => request<ReleaseSnapshot>(`${apiOrigin}/api/runs/${runId}/release`, { method: 'POST' })); };
   const publish = (): void => {
     if (!runId || !snapshot) return;
-    void act(async () => (await request<{ snapshot: ReleaseSnapshot }>(`${apiOrigin}/api/runs/${runId}/release/publish`, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', digest: snapshot.digest, rationale }) })).snapshot);
+    void act(async () => {
+      // Publishing closes the finalization gate, so the pipeline above is told.
+      const published = await request<{ snapshot: ReleaseSnapshot; run: unknown }>(`${apiOrigin}/api/runs/${runId}/release/publish`, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', digest: snapshot.digest, rationale }) });
+      onPublished(published.run);
+      return published.snapshot;
+    });
   };
 
   const report = snapshot?.report;

@@ -46,12 +46,33 @@ async function main(): Promise<void> {
   await mkdir(releaseRoot, { recursive: true });
   const database = openDatabase(databasePath);
   try {
-    const run = new FixtureRun({ repository: new ProjectRepository(database), provider: createModelProvider(process.env.PWB_MODEL_PROVIDER), release: { releaseRoot, evidenceDir } });
+    const run = new FixtureRun({
+      repository: new ProjectRepository(database),
+      provider: createModelProvider(process.env.PWB_MODEL_PROVIDER),
+      release: { releaseRoot, evidenceDir, ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
+    });
     await run.initialize('cli-fixture');
-    const snapshot = await run.runAll();
+    let snapshot = await run.runAll();
+    const report = run.releaseSnapshot()?.report;
+    // A script never signs for the captain. It prints what Gate 3 found and
+    // publishes only a release that left nothing for a human to accept.
+    const open = report ? report.escalations : ['A etapa de finalização não chegou ao Gate 3.'];
+    const publishable = report !== undefined && !report.blocked && open.length === 0;
+    if (publishable) {
+      await run.publishRelease(run.releaseSnapshot()!.digest, 'Publicado por scripts/run-fixture.ts, sem decisão humana: o Gate 3 não deixou nada a aceitar.', 'fixture');
+      snapshot = run.snapshot();
+    }
     const render = process.argv.includes('--render') ? await renderMatrix(snapshot) : undefined;
-    console.log(JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id, releaseDirectory: snapshot.exportManifest ? join(releaseRoot, snapshot.exportManifest.digest) : undefined, routes: snapshot.exportManifest?.routes.map((route) => route.route), ...(render ? { render } : {}) }, null, 2));
-    if (snapshot.status !== 'succeeded' || (render && render.failed.length > 0)) process.exitCode = 1;
+    console.log(JSON.stringify({
+      runId: snapshot.runId,
+      status: snapshot.status,
+      versionId: snapshot.currentVersion.id,
+      gate: report ? { digest: report.bundleDigest, blocked: report.blocked, vetoes: report.vetoes, escalations: report.escalations, rubric: report.rubric } : undefined,
+      releaseDirectory: snapshot.exportManifest ? join(releaseRoot, snapshot.exportManifest.digest) : undefined,
+      routes: snapshot.exportManifest?.routes.map((route) => route.route),
+      ...(render ? { render } : {}),
+    }, null, 2));
+    if (!publishable || (render && render.failed.length > 0)) process.exitCode = 1;
   } finally { database.sqlite.close(); }
 }
 

@@ -30,8 +30,15 @@ export interface ReleaseContext {
   adopt(version: VersionRecord): Promise<void>;
   record(type: string, payload: Record<string, unknown>): Promise<void>;
   /** Publishing the bundle is what closes the finalization gate; there is no second approval. */
-  approveFinalization(rationale: string, manifest: ReleaseManifest): Promise<void>;
+  approveFinalization(approverRole: ReleaseApprover, rationale: string, manifest: ReleaseManifest): Promise<void>;
 }
+
+/**
+ * Who published. Only the captain may accept an open escalation in writing; a
+ * scripted fixture run publishes under its own name and only when the gate left
+ * nothing to accept, so no script ever signs for the captain.
+ */
+export type ReleaseApprover = 'captain' | 'fixture';
 
 export interface ReleaseSnapshot {
   runId: string;
@@ -109,15 +116,18 @@ export class ReleaseRun {
 
   snapshot(): ReleaseSnapshot | undefined { return this.snapshotValue ? structuredClone(this.snapshotValue) : undefined; }
 
-  /** Only the captain publishes, and only the exact bundle the report describes. */
+  /** Only the exact bundle the report describes, and only on terms the publisher may sign. */
   async publish(approverRole: string, digest: string, rationale?: string): Promise<ReleaseManifest> {
-    if (approverRole !== 'captain') throw new Error('Só o capitão aprova o gate de release.');
+    if (approverRole !== 'captain' && approverRole !== 'fixture') throw new Error('Só o capitão aprova o gate de release.');
     const current = this.snapshotValue;
     if (!current || !this.compiled || !this.context) throw new Error('O release ainda não foi preparado nesta execução.');
     if (digest !== current.digest) throw new Error(`O capitão aprovou o bundle ${digest}, e o release atual é ${current.digest}.`);
     if (current.report.blocked) throw new ReleaseVetoError(current.report.vetoes);
     const escalations = current.report.escalations;
     const reason = rationale?.trim() ?? '';
+    if (escalations.length > 0 && approverRole !== 'captain') {
+      throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que só o capitão pode aceitar por escrito: ${escalations.join(' ')}`);
+    }
     if (escalations.length > 0 && reason === '') {
       throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
@@ -127,12 +137,12 @@ export class ReleaseRun {
       approvedVersionId: current.report.approvedVersionId,
       releasedVersionId: current.versionId,
       irHash: current.report.irHash,
-      approverRole: 'captain',
+      approverRole,
       rationale: reason,
       acceptedEscalations: escalations,
     });
-    await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole: 'captain', rationale: reason, escalations });
-    await this.context.approveFinalization(reason, manifest);
+    await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole, rationale: reason, escalations });
+    await this.context.approveFinalization(approverRole, reason, manifest);
     this.snapshotValue = { ...current, published: { directory: join(this.options.releaseRoot, manifest.digest), digest: manifest.digest } };
     return manifest;
   }

@@ -2,14 +2,37 @@ import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR } from '@pwb/domain';
+import { createFixtureIR, type EvidenceArtifact } from '@pwb/domain';
+import { compileRelease, readReleasePublications } from '@pwb/export';
 import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
+import { renderDesign } from '@pwb/renderer';
+import { writeEvidenceArtifact } from '@pwb/stage-finalization';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
 
 /** One bundle root per run, with the evidence directory Gate 3 reads beside it. */
 function releaseOptions(root: string) {
   return { releaseRoot: root, evidenceDir: join(root, '..', 'evidence') };
+}
+
+/**
+ * Every runner and engine Gate 3 requires, clean, stamped with the release the
+ * run is about to evaluate — so the report has nothing left for a human to
+ * accept and a scripted publication is honest.
+ */
+async function completeEvidence(run: FixtureRun, evidenceDir: string): Promise<void> {
+  const { current } = run.releaseContext();
+  const compiled = compileRelease(renderDesign(current.ir), current.ir, { siteUrl: 'https://site.invalid', siteName: 'pro-website-builder' });
+  const base = { releaseDigest: compiled.digest, irHash: compiled.irHash, route: '/', status: 'passed' as const, path: 'p', hash: 'h', vetoes: [], metrics: {}, notes: [] };
+  const artifacts: EvidenceArtifact[] = [
+    { ...base, id: 'vitest', runner: 'vitest', engine: 'node', state: 'unit' },
+    { ...base, id: 'pw-chromium', runner: 'playwright', engine: 'chromium', state: 'width-1440' },
+    { ...base, id: 'pw-firefox', runner: 'playwright', engine: 'firefox', state: 'width-1440' },
+    { ...base, id: 'pw-webkit', runner: 'playwright', engine: 'webkit', state: 'width-1440' },
+    { ...base, id: 'axe-home', runner: 'axe', engine: 'chromium', state: 'default', metrics: { critical: 0, serious: 0 } },
+    { ...base, id: 'lh-mobile', runner: 'lighthouse', engine: 'chromium', state: 'mobile', metrics: { performance: 98 } },
+  ];
+  for (const artifact of artifacts) await writeEvidenceArtifact(evidenceDir, artifact);
 }
 
 /** Walks a run to the finalization gate, which only Gate 3 can close. */
@@ -22,28 +45,58 @@ async function atFinalizationGate(run: FixtureRun): Promise<void> {
 }
 
 describe('phase 0 fixture run', () => {
-  it('crosses all three captain gates and exports three routes', async () => {
+  it('walks the three stages and stops at Gate 3 instead of publishing on its own', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-run-'));
     const db = openDatabase(join(dir, 'run.sqlite'));
-    const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     await run.initialize('run-1');
     const snapshot = await run.runAll();
+    expect(snapshot.status).toBe('needs_review');
+    expect(snapshot.currentStage).toBe('finalization');
+    expect(snapshot.approvals.map((entry) => entry.stage)).toEqual(['identity', 'prototype']);
+    // With no evidence the gate has open points, and only the captain may accept them.
+    const report = run.releaseSnapshot()!.report;
+    expect(report.escalations.length).toBeGreaterThan(0);
+    await expect(run.publishRelease(report.bundleDigest, 'aceito', 'fixture')).rejects.toThrow(/só o capitão pode aceitar/i);
+    await expect(readdir(join(dir, 'releases'))).rejects.toThrow();
+    db.sqlite.close();
+  });
+
+  it('publishes under its own name once Gate 3 has nothing left to accept', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-publish-'));
+    const db = openDatabase(join(dir, 'run.sqlite'));
+    const releaseRoot = join(dir, 'releases');
+    const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await run.initialize('run-publish');
+    await atFinalizationGate(run);
+    await completeEvidence(run, join(releaseRoot, '..', 'evidence'));
+    const prepared = await run.prepareRelease();
+    expect(prepared.report.blocked).toBe(false);
+    expect(prepared.report.escalations).toEqual([]);
+
+    await run.publishRelease(prepared.digest, 'Publicado por um fixture, sem decisão humana.', 'fixture');
+    const snapshot = run.snapshot();
     expect(snapshot.status).toBe('succeeded');
     expect(snapshot.approvals).toHaveLength(3);
+    expect(snapshot.approvals.at(-1)?.approverRole).toBe('fixture');
     expect(snapshot.exportManifest?.routes.map((route) => route.route)).toEqual(['/', '/proof', '/contact']);
-    expect((await readdir(join(dir, 'exports', snapshot.exportManifest!.digest))).sort()).toEqual(['assets', 'contact', 'headers.json', 'index.html', 'licenses.json', 'manifest.json', 'proof', 'robots.txt', 'sitemap.xml']);
+    expect((await readdir(join(releaseRoot, snapshot.exportManifest!.digest))).sort()).toEqual(['assets', 'contact', 'headers.json', 'index.html', 'licenses.json', 'manifest.json', 'proof', 'robots.txt', 'sitemap.xml']);
     db.sqlite.close();
   });
 
   it('writes an append-only event log for the whole journey', async () => {
     const db = openDatabase(':memory:');
     const repository = new ProjectRepository(db);
-    const run = new FixtureRun({ repository, release: releaseOptions(join(await mkdtemp(join(tmpdir(), 'pwb-events-')), 'exports')), provider: new FakeModelProvider() });
+    const releaseRoot = join(await mkdtemp(join(tmpdir(), 'pwb-events-')), 'releases');
+    const run = new FixtureRun({ repository, release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
     await run.initialize('run-events');
     await run.runAll();
+    await completeEvidence(run, join(releaseRoot, '..', 'evidence'));
+    const prepared = await run.prepareRelease();
+    await run.publishRelease(prepared.digest, 'Publicado por um fixture.', 'fixture');
     const events = await repository.listEvents('run-events');
     expect(events.length).toBeGreaterThan(0);
-    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(['run.created', 'run.started', 'task.queued', 'task.started', 'task.succeeded', 'patch.applied', 'version.created', 'approval.recorded', 'run.finished']));
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(['run.created', 'run.started', 'task.queued', 'task.started', 'task.succeeded', 'patch.applied', 'version.created', 'approval.recorded', 'release.published', 'run.finished']));
     expect(events.at(-1)?.type).toBe('run.finished');
     expect(events.filter((event) => event.type === 'approval.recorded')).toHaveLength(3);
     db.sqlite.close();
@@ -66,7 +119,7 @@ describe('phase 0 fixture run', () => {
     const identityTasks = tasks.filter((task) => task.stage === 'identity');
     expect(identityTasks).toHaveLength(2);
     expect(identityTasks.map((task) => task.base_version_id)).toEqual([rejected.currentVersion.id, rejected.currentVersion.id]);
-    expect((await run.runAll()).status).toBe('succeeded');
+    expect((await run.runAll()).currentStage).toBe('finalization');
     db.sqlite.close();
   });
 
@@ -152,6 +205,28 @@ describe('phase 0 fixture run', () => {
     expect(run.snapshot().status).toBe('needs_review');
     expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization')).toHaveLength(0);
     await expect(readdir(releaseRoot)).rejects.toThrow();
+    db.sqlite.close();
+  });
+
+  it('refuses a second publish that races the first one', async () => {
+    const db = openDatabase(':memory:');
+    const repository = new ProjectRepository(db);
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-race-publish-'));
+    const releaseRoot = join(dir, 'releases');
+    const run = new FixtureRun({ repository, release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await run.initialize('run-race-publish');
+    await atFinalizationGate(run);
+    await completeEvidence(run, join(releaseRoot, '..', 'evidence'));
+    const prepared = await run.prepareRelease();
+    const [first, second] = await Promise.allSettled([
+      run.publishRelease(prepared.digest, 'primeira', 'fixture'),
+      run.publishRelease(prepared.digest, 'segunda', 'fixture'),
+    ]);
+    expect(first.status).toBe('fulfilled');
+    expect(second.status).toBe('rejected');
+    expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization')).toHaveLength(1);
+    expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
+    expect((await repository.listEvents('run-race-publish')).filter((event) => event.type === 'run.finished')).toHaveLength(1);
     db.sqlite.close();
   });
 
@@ -348,7 +423,9 @@ describe('phase 0 fixture run', () => {
     expect(run.snapshot().status).toBe('cancelled');
     expect(run.snapshot().currentVersion.id).toBe(rootId);
     await run.restart();
-    expect((await run.runAll()).status).toBe('succeeded');
+    const finished = await run.runAll();
+    expect(finished.currentStage).toBe('finalization');
+    expect(finished.currentVersion.id).not.toBe(rootId);
     db.sqlite.close();
   });
 

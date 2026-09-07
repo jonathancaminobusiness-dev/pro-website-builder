@@ -3,7 +3,7 @@ import { createFixtureIR, type AgentTask, type Approval } from '@pwb/domain';
 import type { ReleaseManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type ScheduleResult, type VersionRecord, VersionStore } from '@pwb/orchestrator';
-import { ReleaseRun, type ReleaseContext, type ReleaseRunOptions, type ReleaseSnapshot } from './release-run.js';
+import { ReleaseRun, type ReleaseApprover, type ReleaseContext, type ReleaseRunOptions, type ReleaseSnapshot } from './release-run.js';
 import type { ModelProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import type { ProjectRepository } from './db/repository.js';
@@ -166,13 +166,19 @@ export class FixtureRun {
     return this.releaseRun.prepare(this.releaseContext(), signal);
   }
 
-  /** Publishing the bundle the captain looked at is what closes the finalization gate. */
-  async publishRelease(digest: string, rationale?: string): Promise<ReleaseManifest> {
+  /**
+   * Publishing the bundle the captain looked at is what closes the finalization
+   * gate. The gate is claimed before the first await, so two publishes that race
+   * cannot both write the bundle and record the approval.
+   */
+  async publishRelease(digest: string, rationale?: string, approverRole: ReleaseApprover = 'captain'): Promise<ReleaseManifest> {
     this.requireInitialized();
     if (!this.releaseRun) throw new Error('A finalização não está habilitada nesta execução.');
     if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new Error('Stage finalization is not awaiting approval.');
     this.requireClean('finalization', this.currentVersion);
-    return this.releaseRun.publish('captain', digest, rationale);
+    this.status = 'queued';
+    try { return await this.releaseRun.publish(approverRole, digest, rationale); }
+    catch (error) { if (this.status === 'queued') this.status = 'needs_review'; throw error; }
   }
 
   /** No gate closes over a document the linter rejects, Gate 3 included. */
@@ -204,15 +210,20 @@ export class FixtureRun {
     return this.snapshot();
   }
 
+  /**
+   * Walks the fixture to Gate 3 and prepares the release, stopping there. A
+   * script never publishes on the captain's behalf: the caller reads the report
+   * and decides, and only a release the gate left nothing to accept for may be
+   * published under the `fixture` role.
+   */
   async runAll(): Promise<FixtureSnapshot> {
     while (this.stageIndex < 3) {
       await this.runNext();
       if (this.status === 'cancelled') break;
       const stage = this.currentStage;
       if (!stage) throw new Error('Run did not produce a gate.');
-      if (stage !== 'finalization') { await this.approve(stage, 'captain'); continue; }
-      const prepared = await this.prepareRelease();
-      await this.publishRelease(prepared.digest, 'O capitão aceita os pontos em aberto desta execução de fixture.');
+      if (stage === 'finalization') { await this.prepareRelease(); break; }
+      await this.approve(stage, 'captain');
     }
     return this.snapshot();
   }
@@ -271,9 +282,9 @@ export class FixtureRun {
       current: this.currentVersion,
       applier: new Applier(this.store, this.releaseGate),
       record: (type, payload) => this.record(type, payload),
-      approveFinalization: async (rationale, manifest) => {
+      approveFinalization: async (approverRole, rationale, manifest) => {
         const version = this.currentVersion;
-        const approval: Approval = { id: `${this.runId()}-finalization-approval`, stage: 'finalization', approverRole: 'captain', versionId: version.id, versionHash: version.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
+        const approval: Approval = { id: `${this.runId()}-finalization-approval`, stage: 'finalization', approverRole, versionId: version.id, versionHash: version.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
         this.approvals.push(approval);
         this.stageIndex += 1;
         this.exportManifest = manifest;
