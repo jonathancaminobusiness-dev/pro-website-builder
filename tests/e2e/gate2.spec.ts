@@ -23,7 +23,11 @@ test.describe('Gate 2 review screen', () => {
     }
     const sources = await frames.evaluateAll((nodes) => nodes.map((node) => (node as HTMLIFrameElement).src));
     expect(new Set(sources).size).toBe(2);
-    expect(sources.every((source) => source.startsWith('http://127.0.0.1:4311/preview/'))).toBe(true);
+    // Both sides come from the preview origin, which is never the Studio's own origin.
+    const previewOrigins = new Set(sources.map((source) => new URL(source).origin));
+    expect(previewOrigins.size).toBe(1);
+    expect([...previewOrigins][0]).not.toBe(new URL(page.url()).origin);
+    expect(sources.every((source) => new URL(source).pathname.startsWith('/preview/'))).toBe(true);
     expect(sources.every((source) => source.endsWith('/'))).toBe(true);
     await expect(page.frameLocator('.compare .base iframe').locator('main[data-route="/"]')).toBeVisible();
 
