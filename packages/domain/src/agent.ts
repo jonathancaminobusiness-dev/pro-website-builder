@@ -1,6 +1,4 @@
 import { z } from 'zod';
-import { designIRSchema } from './ir.js';
-import { identitySpecSchema } from './identity.js';
 import { hashJson } from './tokens.js';
 
 export const stageSchema = z.enum(['identity', 'prototype', 'finalization']);
@@ -21,7 +19,7 @@ export const patchSchema = z.object({
 });
 
 export const agentResultSchema = z.object({
-  taskId: z.string(), status: z.enum(['succeeded', 'failed', 'needs_review']), summary: z.string(), proposal: patchSchema.optional(), output: z.union([identitySpecSchema, designIRSchema]).optional(), errorCode: z.string().optional(),
+  taskId: z.string(), status: z.enum(['succeeded', 'failed', 'needs_review']), summary: z.string(), proposal: patchSchema.optional(), errorCode: z.string().optional(),
 });
 
 export function idempotencyKey(input: Pick<AgentTask, 'stage' | 'role' | 'baseVersionId' | 'inputDigest' | 'promptVersion' | 'modelAlias'>): string {
@@ -31,6 +29,3 @@ export function idempotencyKey(input: Pick<AgentTask, 'stage' | 'role' | 'baseVe
 export type AgentTask = z.infer<typeof agentTaskSchema>;
 export type Patch = z.infer<typeof patchSchema>;
 export type AgentResult = z.infer<typeof agentResultSchema>;
-export const AgentTaskSchema = agentTaskSchema;
-export const PatchSchema = patchSchema;
-export const AgentResultSchema = agentResultSchema;

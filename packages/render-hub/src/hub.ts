@@ -19,7 +19,7 @@ export class RenderHub {
         const key = cacheKey(rendered, renderCase);
         const manifestPath = join(this.options.cacheDir, `${key}.json`);
         try { results.push({ ...(JSON.parse(await readFile(manifestPath, 'utf8')) as RenderCaseResult), cached: true }); continue; } catch { /* cache miss */ }
-        const page = await browser.newPage({ viewport: { width: renderCase.width, height: 900 }, colorScheme: renderCase.theme, reducedMotion: renderCase.reducedMotion ? 'reduce' : 'no-preference' });
+        const page = await browser.newPage({ viewport: { width: renderCase.width, height: 900 }, reducedMotion: renderCase.reducedMotion ? 'reduce' : 'no-preference' });
         const consoleErrors: string[] = [];
         const networkErrors: string[] = [];
         page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });

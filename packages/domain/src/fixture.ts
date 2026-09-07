@@ -52,7 +52,7 @@ export function createFixtureIR(): DesignIR {
       { id: 'page-contact', route: '/contact', title: 'Oficina — contato', rootNodeId: 'contact-root', nodes: [node('contact-root', 'stack', 'main', { gap: '{space.md}', color: '{color.ink}', background: '{color.paper}' }, { children: ['contact-title'] }), node('contact-title', 'type', 'h1', { text: 'Vamos conversar.', color: '{color.ink}', font: '{type.display}' })] },
     ] },
     assets: { items: [{ id: 'fixture-mark', kind: 'vector', uri: 'inline:mark', alt: 'Marca da oficina', provenance: { source: 'fixture', author: 'pro-website-builder', license: 'internal fixture', date: '2026-09-05', hash: 'fixture-mark' }, status: 'ready' }] },
-    stateFixtures: { default: { description: 'Default light state', values: { theme: 'light', motion: 'full' } }, reduced: { description: 'Reduced motion', values: { theme: 'light', motion: 'reduced' } } },
+    stateFixtures: { default: { description: 'Full motion', values: { motion: 'full' } }, reduced: { description: 'Reduced motion', values: { motion: 'reduced' } } },
     reviewRecord: { findings: [], approvals: [] },
   };
 }

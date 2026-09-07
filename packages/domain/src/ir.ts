@@ -55,7 +55,15 @@ export const assetSchema = z.object({
 export const designIRSchema = z.object({
   meta: z.object({ id: z.string(), projectId: z.string(), versionId: z.string(), rendererVersion: z.string(), createdAt: z.string() }),
   identity: identitySpecSchema,
-  pages: z.object({ routes: z.array(pageSchema) }),
+  pages: z.object({ routes: z.array(pageSchema) }).superRefine((pages, ctx) => {
+    for (const key of ['id', 'route'] as const) {
+      const seen = new Set<string>();
+      for (const page of pages.routes) {
+        if (seen.has(page[key])) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Pages must not share the ${key} ${page[key]}.` });
+        seen.add(page[key]);
+      }
+    }
+  }),
   assets: z.object({ items: z.array(assetSchema) }),
   stateFixtures: z.record(z.object({ description: z.string(), values: z.record(visualValueSchema) })),
   reviewRecord: z.object({ findings: z.array(z.string()), approvals: z.array(z.string()) }),
@@ -64,4 +72,3 @@ export const designIRSchema = z.object({
 export type PageNode = z.infer<typeof pageNodeSchema>;
 export type Page = z.infer<typeof pageSchema>;
 export type DesignIR = z.infer<typeof designIRSchema>;
-export const DesignIRSchema = designIRSchema;

@@ -132,18 +132,23 @@ describe('orchestrator', () => {
   it('starts a stage only after the stage it depends on has succeeded', async () => {
     const plan = new RunPlanner().plan('run-dag', 'v0', 'brief');
     const scheduler = new Scheduler({ maxActiveClaude: 3 });
-    const order: string[] = [];
+    const started: string[] = [];
+    const finished: string[] = [];
     let concurrent = 0;
     let peak = 0;
     const result = await scheduler.run(plan.tasks, async (item) => {
+      started.push(item.id);
       concurrent += 1; peak = Math.max(peak, concurrent);
       await new Promise((resolve) => setTimeout(resolve, 5));
-      order.push(item.id);
+      finished.push(item.id);
       concurrent -= 1;
       return item.stage;
     }, { edges: plan.edges });
     expect(peak).toBe(1);
-    expect(order).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
+    expect(finished).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
+    for (const [dependency, dependent] of plan.edges) {
+      expect(started.indexOf(dependent)).toBeGreaterThan(finished.indexOf(dependency));
+    }
     expect(result.results.map((item) => item.state)).toEqual(['succeeded', 'succeeded', 'succeeded']);
   });
 

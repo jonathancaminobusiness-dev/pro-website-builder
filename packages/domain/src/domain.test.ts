@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DesignIRSchema,
-  IdentitySpecSchema,
-  PatchSchema,
+  designIRSchema,
+  identitySpecSchema,
+  patchSchema,
   createFixtureIdentity,
   createFixtureIR,
   hashJson,
@@ -13,9 +13,9 @@ import {
 describe('domain contracts', () => {
   it('accepts the phase 0 fixture and exports model JSON schema', () => {
     const fixture = createFixtureIR();
-    expect(DesignIRSchema.parse(fixture).meta.projectId).toBe('fixture-project');
+    expect(designIRSchema.parse(fixture).meta.projectId).toBe('fixture-project');
     expect(schemaJson.Patch).toBeDefined();
-    expect(PatchSchema.parse({
+    expect(patchSchema.parse({
       operations: [{ op: 'replace', path: '/tokens/color/brand', value: { $value: '#18252d', $type: 'color' } }],
       baseVersionId: 'v1',
       touchedPaths: ['/tokens/color/brand'],
@@ -29,17 +29,26 @@ describe('domain contracts', () => {
   it('rejects a page whose nodes are not reachable from its declared root', () => {
     const orphaned = createFixtureIR();
     orphaned.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title'] };
-    expect(() => DesignIRSchema.parse(orphaned)).toThrow(/home-proof is not reachable/i);
+    expect(() => designIRSchema.parse(orphaned)).toThrow(/home-proof is not reachable/i);
     const dangling = createFixtureIR();
     dangling.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title', 'home-proof', 'ghost'] };
-    expect(() => DesignIRSchema.parse(dangling)).toThrow(/unknown node ghost/i);
+    expect(() => designIRSchema.parse(dangling)).toThrow(/unknown node ghost/i);
     const cyclic = createFixtureIR();
     cyclic.pages.routes[0]!.nodes[1]!.slots = { children: ['home-root'] };
-    expect(() => DesignIRSchema.parse(cyclic)).toThrow(/more than once/i);
+    expect(() => designIRSchema.parse(cyclic)).toThrow(/more than once/i);
+  });
+
+  it('rejects pages that share a route or an id', () => {
+    const duplicateRoute = createFixtureIR();
+    duplicateRoute.pages.routes[1]!.route = '/contact';
+    expect(() => designIRSchema.parse(duplicateRoute)).toThrow(/share the route \/contact/i);
+    const duplicateId = createFixtureIR();
+    duplicateId.pages.routes[1]!.id = 'page-home';
+    expect(() => designIRSchema.parse(duplicateId)).toThrow(/share the id page-home/i);
   });
 
   it('rejects an identity without the visual contract fields', () => {
-    expect(() => IdentitySpecSchema.parse({ meta: { id: 'bad' } })).toThrow();
+    expect(() => identitySpecSchema.parse({ meta: { id: 'bad' } })).toThrow();
   });
 
   it('resolves aliases and rejects circular or orphan aliases', () => {
@@ -60,7 +69,7 @@ describe('domain contracts', () => {
 
   it('requires every identity token role to name a token the identity defines', () => {
     const identity = createFixtureIdentity();
-    expect(IdentitySpecSchema.parse(identity).tokenRoles.surface).toBe('color.paper');
-    expect(() => IdentitySpecSchema.parse({ ...identity, tokenRoles: { ...identity.tokenRoles, surface: 'color.missing' } })).toThrow(/color\.missing/);
+    expect(identitySpecSchema.parse(identity).tokenRoles.surface).toBe('color.paper');
+    expect(() => identitySpecSchema.parse({ ...identity, tokenRoles: { ...identity.tokenRoles, surface: 'color.missing' } })).toThrow(/color\.missing/);
   });
 });

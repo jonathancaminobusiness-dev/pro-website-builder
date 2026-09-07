@@ -51,7 +51,7 @@ export function cssTokenIssues(values: Record<string, string | number | boolean>
     const owner = owners.get(name);
     if (owner === undefined) owners.set(name, path);
     else issues.push({ path, message: `Tokens ${owner} and ${path} both compile to the CSS custom property ${name}.` });
-    if (typeof value === 'string' && /[<>;{}]/.test(value)) issues.push({ path, message: `Token ${path} holds characters that cannot be emitted into CSS.` });
+    if (typeof value === 'string' && (/[<>;{}]/.test(value) || value.includes('/*') || value.includes('*/'))) issues.push({ path, message: `Token ${path} holds characters that cannot be emitted into CSS.` });
   }
   return issues;
 }

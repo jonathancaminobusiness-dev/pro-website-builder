@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { DesignIRSchema, type AgentTask, type DesignIR, type Patch } from '@pwb/domain';
+import { designIRSchema, type AgentTask, type DesignIR, type Patch } from '@pwb/domain';
 import * as schema from './schema.js';
 
 export interface LocalDatabase { sqlite: Database.Database; orm: BetterSQLite3Database<typeof schema>; }
@@ -37,10 +37,8 @@ export class ProjectRepository {
   async createRun(input: RunInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.runs).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
   async saveTask(task: AgentTask, runId: string): Promise<void> { await this.write(() => { this.db.orm.insert(schema.tasks).values({ id: task.id, runId, stage: task.stage, role: task.role, state: task.state, baseVersionId: task.baseVersionId, payload: JSON.stringify(task) }).run(); }); }
   async savePatch(patch: Patch, runId: string): Promise<void> { await this.write(() => { this.db.orm.insert(schema.patches).values({ id: patch.idempotencyKey ?? `${runId}-${patch.baseVersionId}`, runId, baseVersionId: patch.baseVersionId, payload: JSON.stringify(patch), createdAt: new Date().toISOString() }).run(); }); }
-  async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(DesignIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }
-  async getVersion(id: string): Promise<{ id: string; projectId: string; parentId: string | null; hash: string; ir: DesignIR } | undefined> { const row = this.db.sqlite.prepare('SELECT id, project_id as projectId, parent_id as parentId, hash, ir FROM versions WHERE id = ?').get(id) as { id: string; projectId: string; parentId: string | null; hash: string; ir: string } | undefined; return row ? { ...row, ir: DesignIRSchema.parse(JSON.parse(row.ir)) } : undefined; }
+  async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(designIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }
   async createApproval(input: ApprovalInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.approvals).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
-  async listApprovals(projectId: string): Promise<Array<{ id: string; stage: string; decision: string }>> { return this.db.sqlite.prepare('SELECT id, stage, decision FROM approvals WHERE project_id = ? ORDER BY rowid').all(projectId) as Array<{ id: string; stage: string; decision: string }>; }
   async appendEvent(input: EventInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.events).values({ id: input.id, runId: input.runId, type: input.type, payload: JSON.stringify(input.payload), createdAt: new Date().toISOString() }).run(); }); }
   async listEvents(runId: string): Promise<Array<{ id: string; type: string; payload: Record<string, unknown> }>> { return this.db.sqlite.prepare('SELECT id, type, payload FROM events WHERE run_id = ? ORDER BY rowid').all(runId).map((row) => { const item = row as { id: string; type: string; payload: string }; return { id: item.id, type: item.type, payload: JSON.parse(item.payload) as Record<string, unknown> }; }); }
   dump(): string {

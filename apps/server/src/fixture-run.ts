@@ -71,13 +71,13 @@ export class FixtureRun {
     const plan = this.planner.plan(this.runId(), this.currentVersion.id, 'Fixture briefing: compile an original identity into a production site.');
     const planned = plan.tasks[this.stageIndex];
     if (!planned) return this.snapshot();
-    const task = { ...planned, id: `${this.runId()}-${planned.id}`, baseVersionId: this.currentVersion.id };
+    const task = { ...planned, id: `${this.runId()}-${planned.id}-${this.currentVersion.id}`, baseVersionId: this.currentVersion.id };
     this.currentStage = task.stage;
     await ignoringDuplicate(this.options.repository.saveTask(task, this.runId()));
     await this.record('task.queued', { taskId: task.id, stage: task.stage, baseVersionId: task.baseVersionId });
     if (!this.started) { this.started = true; await this.record('run.started', { stage: task.stage }); }
     await this.record('task.started', { taskId: task.id, stage: task.stage });
-    const scheduled = await this.scheduler.run([task], (item, signal) => this.options.provider.propose(item, signal), { edges: plan.edges });
+    const scheduled = await this.scheduler.run([task], (item, signal) => this.options.provider.propose(item, signal));
     const outcome = scheduled.results[0];
     if (this.cancelRequested || outcome?.state === 'cancelled') return this.cancelStage(task);
     const proposal = outcome?.state === 'succeeded' ? outcome.value?.proposal : undefined;
@@ -87,8 +87,15 @@ export class FixtureRun {
       await this.record('task.failed', { taskId: task.id, stage: task.stage, reason });
       throw new Error(`Stage ${task.stage} produced no proposal: ${reason}`);
     }
-    renderDesign(this.applier.dryRun(proposal, task.allowedPaths).next);
-    const next = this.applier.apply(proposal, task.allowedPaths);
+    let next: VersionRecord;
+    try {
+      renderDesign(this.applier.dryRun(proposal, task.allowedPaths).next);
+      next = this.applier.apply(proposal, task.allowedPaths);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'The proposal did not validate.';
+      await this.record('task.failed', { taskId: task.id, stage: task.stage, reason });
+      throw error;
+    }
     await ignoringDuplicate(this.options.repository.savePatch(proposal, this.runId()));
     await ignoringDuplicate(this.options.repository.saveVersion({ id: next.id, projectId: this.projectId(), ...(next.parentId ? { parentId: next.parentId } : {}), hash: next.hash, ir: next.ir }));
     this.currentVersion = next;

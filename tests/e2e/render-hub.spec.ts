@@ -15,7 +15,7 @@ test('render hub captures a screenshot, DOM and accessibility snapshot, then reu
   const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-render-hub-'));
   try {
     const hub = new RenderHub({ cacheDir });
-    const renderCase: RenderCase = { route: `/preview/${ir.meta.versionId}/`, width: 1440, theme: 'light', reducedMotion: false };
+    const renderCase: RenderCase = { route: `/preview/${ir.meta.versionId}/`, width: 1440, state: 'default', reducedMotion: false };
     const [first] = await hub.render(rendered, preview.origin, [renderCase]);
     expect(first?.cached).toBe(false);
     expect((await stat(first!.screenshotPath)).size).toBeGreaterThan(0);

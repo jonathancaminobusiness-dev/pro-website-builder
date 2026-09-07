@@ -55,7 +55,15 @@ The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:43
 
 ## Real local Claude Code
 
-CI and the fixture use `FakeModelProvider`. `PWB_MODEL_PROVIDER` selects the model provider for both `corepack pnpm --filter @pwb/server dev` and `corepack pnpm run:fixture`: `fake` (the default) or `claude-code`. To exercise the real adapter, install and log in to the unmodified Claude Code binary as its owner, verify `claude --version`, then start either entry point with `PWB_MODEL_PROVIDER=claude-code`. The runner uses `execFile` with no shell, a fresh session UUID, `--no-session-persistence`, structured JSON, schema validation, deadlines, and abort signals. It never reads, stores, prints, forwards, or asks for tokens or credentials. No paid API is required by this repository.
+CI and the fixture use `FakeModelProvider`. `PWB_MODEL_PROVIDER` selects the model provider for both `corepack pnpm --filter @pwb/server dev` and `corepack pnpm run:fixture`: `fake` (the default) or `claude-code`. To exercise the real adapter, install and log in to the unmodified Claude Code binary as its owner, verify `claude --version`, then start either entry point with `PWB_MODEL_PROVIDER=claude-code`. The runner uses `execFile` with no shell, a fresh session UUID, `--no-session-persistence`, structured JSON, schema validation, deadlines, abort signals, and a denied tool list, because a worker proposes JSON and never touches the filesystem. It never reads, stores, prints, forwards, or asks for tokens or credentials. No paid API is required by this repository.
+
+Verified once on 2026-09-06 against the owner's signed-in `claude 2.1.263`:
+
+```bash
+PWB_MODEL_PROVIDER=claude-code corepack pnpm run:fixture
+```
+
+The adapter's contract with the binary holds: `--json-schema`, `--session-id`, `--no-session-persistence`, `--max-turns`, `--disallowed-tools` and `--output-format json` are accepted, and the proposal arrives in the envelope's top-level `structured_output`. That run corrected three things. The schema handed to `--json-schema` must be a self-contained object schema: a `$ref` root is rejected by the API (`tools.custom.input_schema.type: Field required`) and `type: [...]` unions are rejected by the CLI's strict validator, so `schemaJson` now emits inline schemas with `anyOf`. One turn is not enough for a structured answer. A headless worker with tools enabled spends its turns exploring the filesystem instead of answering, so the runner denies them. The run then stops at the identity gate: Claude returns a typed `AgentResult`, the applier's dry run rejects the document it would produce (`identity.meta: Required`), `task.failed` is appended to the event log with that reason, and no patch or version is committed. Turning a fixed briefing into a valid identity patch belongs to the next phase; the three-stage journey is proven with `FakeModelProvider`.
 
 Higgsfield is an optional asynchronous raster boundary. If its MCP is not configured, the pipeline continues with a provenance-marked placeholder asset; credentials are never requested or persisted.
 

@@ -1,11 +1,12 @@
-import { hashJson } from '@pwb/domain';
+import { hashJson, type DesignIR } from '@pwb/domain';
 import type { RenderedDocument } from '@pwb/renderer';
 
-export interface RenderCase { route: string; width: 360 | 768 | 1440; theme: 'light' | 'dark'; reducedMotion: boolean; }
+export interface RenderCase { route: string; width: 360 | 768 | 1440; state: string; reducedMotion: boolean; }
 export interface QaResult { passed: boolean; overflow: boolean; consoleErrors: string[]; networkErrors: string[]; }
 
-export function createRenderCases(routes = ['/', '/proof', '/contact']): RenderCase[] {
-  return routes.flatMap((route) => ([360, 768, 1440] as const).flatMap((width) => (['light', 'dark'] as const).flatMap((theme) => [false, true].map((reducedMotion) => ({ route, width, theme, reducedMotion }))))) as RenderCase[];
+export function createRenderCases(ir: DesignIR): RenderCase[] {
+  return ir.pages.routes.flatMap((page) => ([360, 768, 1440] as const).flatMap((width) =>
+    Object.entries(ir.stateFixtures).map(([state, fixture]) => ({ route: page.route, width, state, reducedMotion: fixture.values.motion === 'reduced' }))));
 }
 
 export function cacheKey(rendered: RenderedDocument, renderCase: RenderCase): string { return hashJson({ irHash: rendered.irHash, rendererVersion: rendered.rendererVersion, renderCase }); }

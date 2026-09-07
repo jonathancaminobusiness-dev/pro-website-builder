@@ -1,4 +1,4 @@
-import { PatchSchema, type Patch } from '@pwb/domain';
+import { patchSchema, type Patch } from '@pwb/domain';
 
 const unsafeSegments = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -11,7 +11,7 @@ export class PatchGate {
   private readonly accepted = new Map<string, { key: string; paths: string[] }[]>();
 
   validate(patch: Patch, context: { currentVersionId: string; allowedPaths: string[] }): GateDecision {
-    const parsed = PatchSchema.parse(patch);
+    const parsed = patchSchema.parse(patch);
     if (parsed.baseVersionId !== context.currentVersionId) throw new Error(`Stale patch base ${parsed.baseVersionId}; current version is ${context.currentVersionId}.`);
     const key = parsed.idempotencyKey;
     if (!key) throw new Error('Patch is missing the idempotency key its producer must derive from the task.');

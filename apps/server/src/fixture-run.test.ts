@@ -36,7 +36,8 @@ describe('phase 0 fixture run', () => {
 
   it('lets the captain re-run a stage that was rejected', async () => {
     const db = openDatabase(':memory:');
-    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-reject-')), 'exports'), provider: new FakeModelProvider() });
+    const repository = new ProjectRepository(db);
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-reject-')), 'exports'), provider: new FakeModelProvider() });
     await run.initialize('run-reject');
     await run.runNext();
     const rejected = await run.reject('identity', 'captain');
@@ -46,6 +47,11 @@ describe('phase 0 fixture run', () => {
     expect(rerun.status).toBe('needs_review');
     expect(rerun.currentStage).toBe('identity');
     expect(rerun.currentVersion.id).not.toBe(rejected.currentVersion.id);
+    const tasks = (JSON.parse(repository.dump()) as { tasks: Array<{ id: string; stage: string; base_version_id: string }> }).tasks;
+    const identityTasks = tasks.filter((task) => task.stage === 'identity');
+    expect(identityTasks).toHaveLength(2);
+    expect(new Set(identityTasks.map((task) => task.base_version_id)).size).toBe(2);
+    expect(identityTasks.map((task) => task.base_version_id)).toContain(rejected.currentVersion.id);
     expect((await run.runAll()).status).toBe('succeeded');
     db.sqlite.close();
   });
@@ -101,10 +107,14 @@ describe('phase 0 fixture run', () => {
         return { taskId: task.id, status: 'succeeded', summary: 'Rename a token', proposal: { op: 'proposal', operations: [{ op: 'remove', path: '/identity/tokens/color/ink' }], baseVersionId: task.baseVersionId, touchedPaths: ['/identity/tokens/color/ink'], rationale: 'Rename the ink token', confidence: 1, stage: task.stage, role: task.role, idempotencyKey: `rename-${task.stage}` } };
       },
     };
-    const run = new FixtureRun({ repository: new ProjectRepository(db), exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-rename-')), 'exports'), provider: renamer });
+    const repository = new ProjectRepository(db);
+    const run = new FixtureRun({ repository, exportRoot: join(await mkdtemp(join(tmpdir(), 'pwb-rename-')), 'exports'), provider: renamer });
     await run.initialize('run-rename');
     const before = run.snapshot();
     await expect(run.runNext()).rejects.toThrow(/color\.ink/);
+    const events = await repository.listEvents('run-rename');
+    expect(events.at(-1)?.type).toBe('task.failed');
+    expect(String(events.at(-1)?.payload.reason)).toMatch(/color\.ink/);
     const after = run.snapshot();
     expect(after.currentVersion.id).toBe(before.currentVersion.id);
     expect(after.rendered).toEqual(before.rendered);

@@ -1,4 +1,4 @@
-import { canonicalize, hashJson, DesignIRSchema, type DesignIR, type Patch } from '@pwb/domain';
+import { canonicalize, hashJson, designIRSchema, type DesignIR, type Patch } from '@pwb/domain';
 import { PatchGate } from './patch-gate.js';
 
 export interface VersionRecord { id: string; hash: string; parentId?: string; ir: DesignIR; inverse: Patch; }
@@ -35,7 +35,7 @@ function applyOperations(base: DesignIR, patch: Patch): { next: DesignIR; invers
     }
     else { setAt(next, operation.path, operation.value); inverseOps.unshift({ op: 'replace', path: operation.path, value: previous }); }
   }
-  const validated = DesignIRSchema.parse(next);
+  const validated = designIRSchema.parse(next);
   return { next: validated, inverse: { ...patch, operations: inverseOps }, diff: patch.touchedPaths };
 }
 
@@ -43,7 +43,7 @@ export interface DryRun { versionId: string; next: DesignIR; inverse: Patch; dif
 
 export class Applier {
   constructor(private readonly store: VersionStore, private readonly gate: PatchGate) {}
-  createRoot(ir: DesignIR): VersionRecord { const parsed = DesignIRSchema.parse(ir); const version: VersionRecord = { id: parsed.meta.versionId, hash: hashJson(parsed), ir: parsed, inverse: { op: 'proposal', operations: [], baseVersionId: parsed.meta.versionId, touchedPaths: [], rationale: 'Root version', confidence: 1, stage: 'identity', role: 'director' } }; this.store.save(version); return version; }
+  createRoot(ir: DesignIR): VersionRecord { const parsed = designIRSchema.parse(ir); const version: VersionRecord = { id: parsed.meta.versionId, hash: hashJson(parsed), ir: parsed, inverse: { op: 'proposal', operations: [], baseVersionId: parsed.meta.versionId, touchedPaths: [], rationale: 'Root version', confidence: 1, stage: 'identity', role: 'director' } }; this.store.save(version); return version; }
   private head(): VersionRecord { const head = this.store.head(); if (!head) throw new Error('The version store has no root version yet.'); return head; }
   dryRun(patch: Patch, allowedPaths: string[]): DryRun { const head = this.head(); this.gate.validate(patch, { currentVersionId: head.id, allowedPaths }); const result = applyOperations(head.ir, patch); return { versionId: head.id, ...result }; }
   apply(patch: Patch, allowedPaths: string[]): VersionRecord { const head = this.head(); const decision = this.gate.validate(patch, { currentVersionId: head.id, allowedPaths }); const result = applyOperations(head.ir, patch); const versionId = `v-${hashJson(result.next).slice(0, 12)}`; const ir = { ...result.next, meta: { ...result.next.meta, versionId } }; const next: VersionRecord = { id: versionId, hash: hashJson(ir), parentId: head.id, ir, inverse: result.inverse }; this.store.save(next); this.gate.commit(head.id, decision); return next; }

@@ -17,7 +17,7 @@ async function renderHome(snapshot: FixtureSnapshot): Promise<unknown> {
   const preview = createPreviewServer((requested) => requested === versionId ? snapshot.rendered : undefined, previewPort);
   await preview.start();
   try {
-    const [result] = await new RenderHub({ cacheDir: renderCacheDir }).render(snapshot.rendered, preview.origin, [{ route: `/preview/${versionId}/`, width: 1440, theme: 'light', reducedMotion: false }]);
+    const [result] = await new RenderHub({ cacheDir: renderCacheDir }).render(snapshot.rendered, preview.origin, [{ route: `/preview/${versionId}/`, width: 1440, state: 'default', reducedMotion: false }]);
     return { screenshotPath: result?.screenshotPath, cached: result?.cached, qaPassed: result?.qa.passed };
   } finally { await preview.close(); }
 }

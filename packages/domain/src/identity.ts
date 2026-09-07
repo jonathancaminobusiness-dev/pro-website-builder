@@ -28,4 +28,3 @@ export const identitySpecSchema = z.object({
 });
 
 export type IdentitySpec = z.infer<typeof identitySpecSchema>;
-export const IdentitySpecSchema = identitySpecSchema;

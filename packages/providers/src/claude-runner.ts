@@ -2,38 +2,38 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
-import { AgentResultSchema, idempotencyKey, schemaJson, type AgentResult, type AgentTask } from '@pwb/domain';
+import { agentResultSchema, idempotencyKey, schemaJson, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
 const transientCodes = new Set(['ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN', '429', 'OVERLOADED', 'RATE_LIMIT']);
+const deniedTools = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 
 export class ClaudeRunner implements ModelProvider {
   private readonly options: Required<ClaudeRunnerOptions>;
 
   constructor(options: ClaudeRunnerOptions = {}) {
-    this.options = { executable: 'claude', timeoutMs: 8 * 60_000, maxTurns: 1, ...options };
-  }
-
-  async checkAvailable(): Promise<boolean> {
-    try {
-      await execFileAsync(this.options.executable, ['--version'], { shell: false, timeout: 10_000, windowsHide: true });
-      return true;
-    } catch { return false; }
+    this.options = { executable: 'claude', timeoutMs: 15 * 60_000, maxTurns: 4, ...options };
   }
 
   async propose(task: AgentTask, signal?: AbortSignal): Promise<AgentResult> {
     let correction = false;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        const prompt = correction ? `${task.brief}\nReturn only JSON matching the supplied schema. Correct the previous schema violation.` : task.brief;
+        const prompt = [
+          task.brief,
+          `Answer as the ${task.role} of the ${task.stage} stage for taskId ${task.id}.`,
+          `A proposal must set baseVersionId to ${task.baseVersionId} and may only touch these paths: ${task.allowedPaths.join(', ')}.`,
+          correction ? 'Correct the previous schema violation and return only JSON matching the supplied schema.' : '',
+        ].filter(Boolean).join('\n');
         const { stdout } = await execFileAsync(this.options.executable, [
           '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(schemaJson.AgentResult),
           '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.options.maxTurns),
+          '--disallowed-tools', deniedTools,
         ], { shell: false, timeout: this.options.timeoutMs, signal, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
         const raw: unknown = JSON.parse(stdout);
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
-        const result = AgentResultSchema.parse(structured);
+        const result = agentResultSchema.parse(structured);
         return result.proposal ? { ...result, proposal: { ...result.proposal, idempotencyKey: idempotencyKey(task) } } : result;
       } catch (error) {
         const details = error as { code?: unknown; signal?: unknown; killed?: unknown; name?: unknown };
