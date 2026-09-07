@@ -37,7 +37,7 @@ import {
   briefSpecSchema,
   critiqueReportSchema,
   directionVectorDraftSchema,
-  imagePromptPlanSchema,
+  imagePromptPlanSchemaFor,
   IDENTITY_PROMPT_VERSION,
   type BriefSpec,
   type CritiqueFinding,
@@ -223,7 +223,7 @@ export class IdentityStage {
   private async curate(signal?: AbortSignal): Promise<BriefSpec> {
     const base = this.branches.version(this.options.baseVersionId);
     const task = this.task({ id: 'identity-curator', role: 'curator', deadlineMs: this.deadlines.curator, brief: briefCuratorPrompt(this.options.briefing), allowedPaths: [], ir: base.ir });
-    const [result] = await this.dispatch([task], signal, briefSpecSchema);
+    const [result] = await this.dispatch([task], signal, () => briefSpecSchema);
     if (!result) throw new StageError('The brief curator produced no result.');
     return requireArtifact(briefSpecSchema, result.artifact, task.id, 'BriefSpec');
   }
@@ -240,7 +240,7 @@ export class IdentityStage {
       allowedPaths: IDENTITY_ALLOWED_PATHS,
       ir: base.ir,
     }));
-    const results = await this.dispatch(tasks, signal, directionVectorDraftSchema);
+    const results = await this.dispatch(tasks, signal, () => directionVectorDraftSchema);
 
     // One director failing its schema is a recoverable loss of a branch, not the
     // loss of the stage; the matrix still needs at least two directions to exist.
@@ -396,7 +396,7 @@ export class IdentityStage {
         }));
       }
     }
-    const results = await this.dispatch(tasks, signal, critiqueReportSchema);
+    const results = await this.dispatch(tasks, signal, () => critiqueReportSchema);
     const reports: CritiqueReport[] = [];
     for (const result of results) {
       if (result.proposal) {
@@ -564,16 +564,17 @@ export class IdentityStage {
       ir: this.branches.version(candidate.versionId).ir,
       brief: imageArtDirectorPrompt({ brief, directionId: candidate.directionId, identity: candidate.identity }),
     }));
-    const results = await this.dispatch(tasks, signal, imagePromptPlanSchema);
+    // The seat the task was issued for is the only direction the plan can be
+    // about, so it is pinned in that task's schema: a plan written for another
+    // direction is a schema violation and gets the one corrective re-invocation.
+    const seatOfTask = (taskId: string) => taskId.replace('identity-art-director-', '') as IdentityAxisBriefId;
+    const results = await this.dispatch(tasks, signal, (task) => imagePromptPlanSchemaFor(seatOfTask(task.id)));
     for (const result of results) {
-      const directionId = result.taskId.replace('identity-art-director-', '') as IdentityAxisBriefId;
+      const directionId = seatOfTask(result.taskId);
       const index = this.candidates.findIndex((candidate) => candidate.directionId === directionId);
       if (index < 0) continue;
       try {
-        const plan = requireArtifact(imagePromptPlanSchema, result.artifact, result.taskId, 'ImagePromptPlan');
-        // The seat the task was issued for is the only direction the plan can be
-        // about; otherwise its policy would be checked against another direction.
-        if (plan.directionId !== directionId) throw new StageError(`Art director ${result.taskId} answered for direction ${plan.directionId} instead of its own seat.`);
+        const plan = requireArtifact(imagePromptPlanSchemaFor(directionId), result.artifact, result.taskId, 'ImagePromptPlan');
         const candidate = this.candidates[index]!;
         this.candidates[index] = { ...candidate, imagePlan: plan, imageryViolations: imageryPolicyViolations(plan, this.branches.version(candidate.versionId).ir) };
       } catch (error) {
@@ -740,7 +741,7 @@ export class IdentityStage {
    * exactly one corrective re-invocation, carrying the validation errors, before
    * the answer is handed on as it is and recorded for human review.
    */
-  private async dispatch(tasks: AgentTask[], signal?: AbortSignal, artifactSchema?: { parse: (value: unknown) => unknown }): Promise<Array<{ taskId: string; proposal: Patch | undefined; artifact: unknown }>> {
+  private async dispatch(tasks: AgentTask[], signal?: AbortSignal, artifactSchema?: (task: AgentTask) => { parse: (value: unknown) => unknown }): Promise<Array<{ taskId: string; proposal: Patch | undefined; artifact: unknown }>> {
     for (const task of tasks) await this.record('identity.task.queued', { taskId: task.id, role: task.role, baseVersionId: task.baseVersionId, deadlineMs: task.deadlineMs });
     const corrections = new Map<string, string>();
     const outcome = await this.scheduler.run(tasks, async (task, taskSignal) => {
@@ -752,7 +753,7 @@ export class IdentityStage {
     }, {
       ...(signal ? { signal } : {}),
       ...(artifactSchema ? { settle: async (task: AgentTask, value: AgentResult) => {
-        const problem = artifactProblem(artifactSchema, value.artifact);
+        const problem = artifactProblem(artifactSchema(task), value.artifact);
         if (!problem || task.attempt > 1) return 'approved';
         corrections.set(task.id, problem);
         await this.record('identity.task.correction', { taskId: task.id, role: task.role, attempt: task.attempt, reason: problem });

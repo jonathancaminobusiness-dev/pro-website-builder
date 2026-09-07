@@ -1,7 +1,7 @@
 import { documentPathSchemas, documentRules, governedContractFields, imagerySourceSchema, RASTER_IMAGERY_SOURCE, stageRoles, visualPropKeys, type DesignIR, type IdentitySpec } from '@pwb/domain';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { identityAxisBrief, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
-import { briefSpecSchema, critiqueReportSchema, imagePromptPlanSchema, IDENTITY_PROMPT_VERSION, RUBRIC_MINIMUM, type BriefSpec, type CritiqueReport } from './contracts.js';
+import { briefSpecSchema, critiqueReportSchema, imagePromptPlanSchemaFor, IDENTITY_PROMPT_VERSION, RUBRIC_MINIMUM, type BriefSpec, type CritiqueReport } from './contracts.js';
 
 /**
  * Every prompt in this stage obeys the same six rules the fidelity research
@@ -25,7 +25,6 @@ function schemaBlock(name: string, schema: unknown): string {
 
 const briefSpecJsonSchema = zodToJsonSchema(briefSpecSchema);
 const critiqueReportJsonSchema = zodToJsonSchema(critiqueReportSchema);
-const imagePromptPlanJsonSchema = zodToJsonSchema(imagePromptPlanSchema);
 
 function negatives(forbidden: IdentitySpec['forbiddenDefaults'] | BriefSpec['forbiddenDefaults']): string {
   return [
@@ -114,7 +113,7 @@ export function identityRefinerPrompt(input: { brief: BriefSpec; directionId: st
   ].join('\n\n');
 }
 
-export function imageArtDirectorPrompt(input: { brief: BriefSpec; directionId: string; identity: IdentitySpec }): string {
+export function imageArtDirectorPrompt(input: { brief: BriefSpec; directionId: IdentityAxisBriefId; identity: IdentitySpec }): string {
   return [
     `You are the image art director for direction ${input.directionId}. You write prompt plans only. Nothing is generated until the captain approves one direction, and only that direction is ever generated.`,
     HOUSE_RULES,
@@ -124,7 +123,7 @@ export function imageArtDirectorPrompt(input: { brief: BriefSpec; directionId: s
     'Every plan states the axis it carries, an alt text a screen reader can use, and the licence you expect the provider to return. A plan whose licence you cannot state is not a plan.',
     `The brief and its evidence ids:\n${JSON.stringify(input.brief)}`,
     `The approved-direction contract:\n${JSON.stringify({ direction: input.identity.direction, imagery: input.identity.imagery, iconography: input.identity.iconography, content: input.identity.content })}`,
-    schemaBlock('ImagePromptPlan', imagePromptPlanJsonSchema),
+    schemaBlock('ImagePromptPlan', zodToJsonSchema(imagePromptPlanSchemaFor(input.directionId))),
   ].join('\n\n');
 }
 

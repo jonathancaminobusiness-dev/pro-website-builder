@@ -1,5 +1,5 @@
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -180,16 +180,25 @@ describe('identity run', () => {
     expect(closed.swatches.find((swatch) => swatch.path === 'color.accent')?.value).toBe('#ff7a00');
   });
 
-  it('reports only the render cache entries it actually removed', async () => {
-    const run = new IdentityRun({ runId: 'identity-prune', repository: new ProjectRepository(database), provider: new FakeIdentityProvider(), renderCacheDir: join(directory, 'render-cache') });
+  it('drops the render cache entries the approved identity produced when a token changes', async () => {
+    const cacheDir = join(directory, 'render-cache');
+    await mkdir(cacheDir, { recursive: true });
+    const run = new IdentityRun({ runId: 'identity-prune', repository: new ProjectRepository(database), provider: new FakeIdentityProvider(), renderCacheDir: cacheDir });
     await run.initialize();
     await run.start();
     await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
+
+    // The stale keys belong to the approved version, so a first change names the
+    // same entries a later one has to remove.
     const reopened = await run.changeToken({ tokenPath: 'color.paper', value: '#ffffff', rationale: 'Papel mais claro.' });
-    // Nothing was ever rendered for this run, so nothing was pruned; the count is
-    // what left the cache, not how many keys were tried.
-    expect(reopened.gate.state).toBe('reopened');
-    expect(reopened.prunedRenders).toBe(0);
+    if (reopened.gate.state !== 'reopened') throw new Error('the gate should have reopened');
+    const keys = reopened.gate.impact.staleRenderKeys;
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) await writeFile(join(cacheDir, `${key}.json`), '{}', 'utf8');
+    await writeFile(join(cacheDir, 'unrelated.json'), '{}', 'utf8');
+
+    await run.changeToken({ tokenPath: 'color.paper', value: '#fefefe', rationale: 'Papel ainda mais claro.' });
+    expect(await readdir(cacheDir)).toEqual(['unrelated.json']);
   });
 
   it('refuses a rejection from anyone but the captain', async () => {

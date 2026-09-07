@@ -408,21 +408,48 @@ describe('image art director', () => {
     expect(approval.assets[0]?.provenance.license).toBeTruthy();
   });
 
-  it('refuses a plan that answers for a direction other than the seat it was asked about', async () => {
+  it('takes a plan written for another seat as a schema failure, and records it when the mistake repeats', async () => {
     const inner = new FakeIdentityProvider();
+    const attempts: number[] = [];
     const provider: ModelProvider = {
       async propose(task, signal) {
         const result = await inner.propose(task, signal);
         if (task.id !== 'identity-art-director-modular-technical') return result;
-        const plan = result.artifact as Record<string, unknown>;
-        return { ...result, artifact: { ...plan, directionId: 'editorial-material' } };
+        attempts.push(task.attempt);
+        return { ...result, artifact: { ...(result.artifact as Record<string, unknown>), directionId: 'editorial-material' } };
       },
     };
     const { stage } = harness({ provider });
     const result = await stage.run();
     const candidate = result.candidates.find((entry) => entry.directionId === 'modular-technical')!;
+    expect(attempts).toEqual([1, 2]);
     expect(candidate.imagePlan).toBeUndefined();
-    expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-modular-technical' && /instead of its own seat/.test(failure.reason))).toBe(true);
+    expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-modular-technical')).toBe(true);
+    // The seat that answered for itself is untouched by its neighbour's mistake.
+    expect(result.candidates.find((entry) => entry.directionId === 'editorial-material')!.imagePlan!.directionId).toBe('editorial-material');
+  });
+
+  it('keeps the plan when the art director corrects the seat it answered for', async () => {
+    const inner = new FakeIdentityProvider();
+    const briefs: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-art-director-modular-technical') return result;
+        briefs.push(task.brief);
+        if (task.attempt > 1) return result;
+        return { ...result, artifact: { ...(result.artifact as Record<string, unknown>), directionId: 'editorial-material' } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const candidate = result.candidates.find((entry) => entry.directionId === 'modular-technical')!;
+    expect(briefs).toHaveLength(2);
+    // The prompt names the seat the answer must carry, and the correction carries the error the first answer produced.
+    expect(briefs[0]).toContain('modular-technical');
+    expect(briefs[1]!.startsWith(briefs[0]!)).toBe(true);
+    expect(candidate.imagePlan!.directionId).toBe('modular-technical');
+    expect(result.failures).toEqual([]);
   });
 
   it('never asks a direction that admits no generated source for a plan, and never generates for it', async () => {

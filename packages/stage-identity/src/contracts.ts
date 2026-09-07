@@ -1,6 +1,6 @@
 import { divergenceAxisSchema, evidenceSchema } from '@pwb/domain';
 import { z } from 'zod';
-import { identityAxisBriefIds } from './axes.js';
+import { identityAxisBriefIds, type IdentityAxisBriefId } from './axes.js';
 
 export const IDENTITY_PROMPT_VERSION = 'identity-v1';
 
@@ -86,9 +86,9 @@ export function belowRubric(report: CritiqueReport): Array<{ dimension: Critique
  * direction whose contract admits no generated source is never asked for a plan,
  * so an answer here always carries at least one.
  */
-export const imagePromptPlanSchema = z.object({
+export const imagePromptPlanSchemaFor = (directionId: IdentityAxisBriefId) => z.object({
   schemaVersion: z.literal(1),
-  directionId: z.string().min(1),
+  directionId: z.literal(directionId),
   plans: z.array(z.object({
     id: z.string().min(1),
     role: z.enum(['hero', 'proof', 'texture', 'portrait', 'diagram']),
@@ -101,7 +101,7 @@ export const imagePromptPlanSchema = z.object({
     licenceExpectation: z.string().min(1),
   })).min(1).max(4),
 }).strict();
-export type ImagePromptPlan = z.infer<typeof imagePromptPlanSchema>;
+export type ImagePromptPlan = z.infer<ReturnType<typeof imagePromptPlanSchemaFor>>;
 
 /**
  * What a director returns beside its patch. The axis keys are assigned by the

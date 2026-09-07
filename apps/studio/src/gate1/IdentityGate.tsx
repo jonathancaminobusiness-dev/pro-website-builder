@@ -72,8 +72,9 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     ...(snapshot?.divergence?.blockedPairs ?? []),
   ], [snapshot]);
 
-  // A closed gate is the only decided state: a token change reopens it, and the
-  // captain has to be able to decide again from here.
+  // A decided gate is closed or reopened. A token change reopens it and only a
+  // re-approval closes it again, so approving stays available there while
+  // returning a card does not: the decision it would answer is already made.
   const closed = snapshot?.gate.state === 'closed';
   const decided = closed || snapshot?.gate.state === 'reopened';
   const record = decided ? (snapshot.gate as { record: GateRecord }).record : undefined;
@@ -178,7 +179,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
             {direction.abstained && <p className="gate-check blocked">Um crítico respondeu “incerto”: a decisão sobe para o capitão.</p>}
 
             <div className="actions">
-              <button className="secondary" onClick={() => props.onReject(direction.directionId, rationale || 'Direção devolvida para revisão.')} disabled={props.busy || closed}>Devolver</button>
+              <button className="secondary" onClick={() => props.onReject(direction.directionId, rationale || 'Direção devolvida para revisão.')} disabled={props.busy || decided}>Devolver</button>
               <button className="primary" onClick={() => props.onApprove(direction.directionId, rationale || `Gate 1: ${direction.label}.`, override || undefined)} disabled={props.busy || closed}>
                 Aprovar esta direção
               </button>

@@ -60,7 +60,6 @@ export interface IdentityRunSnapshot {
   previewVersionId?: string;
   /** What the prototype stage plans against once Gate 1 closes. */
   handoff?: IdentityHandoff;
-  prunedRenders?: number;
   error?: string;
 }
 
@@ -80,7 +79,6 @@ export class IdentityRun {
   private status: IdentityRunStatus = 'queued';
   private assets: IdentityAsset[] = [];
   private failure: string | undefined;
-  private prunedRenders: number | undefined;
   private started = false;
   private inFlight: Promise<void> | undefined;
   private abort: AbortController | undefined;
@@ -168,7 +166,7 @@ export class IdentityRun {
       this.status = 'reopened';
       // The renders the approved identity produced are unreachable now; drop them
       // instead of keeping screenshots of an identity nobody approved.
-      this.prunedRenders = this.options.renderCacheDir ? (await pruneRenderCache(this.options.renderCacheDir, changed.gate.impact.staleRenderKeys)).length : 0;
+      if (this.options.renderCacheDir) await pruneRenderCache(this.options.renderCacheDir, changed.gate.impact.staleRenderKeys);
     }
     this.result = this.stage.snapshot();
     return this.snapshot();
@@ -201,7 +199,6 @@ export class IdentityRun {
       assets: structuredClone(this.assets),
       ...(this.stage.approvedVersionId ? { previewVersionId: this.stage.approvedVersionId } : {}),
       ...(handoff ? { handoff } : {}),
-      ...(this.prunedRenders === undefined ? {} : { prunedRenders: this.prunedRenders }),
       ...(this.failure ? { error: this.failure } : {}),
     };
   }
