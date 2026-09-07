@@ -49,7 +49,7 @@ async function main(): Promise<void> {
       runId: outcome.runId,
       provider: claude ? 'claude-code' : 'fake',
       evidence: useBrowser ? 'render-hub' : 'derived',
-      matrix: fullMatrix ? 'full' : 'representative',
+      matrix: useBrowser && fullMatrix ? 'full' : 'representative',
       routes: outcome.manifest.routes.map((route) => route.route),
       versions: { base: outcome.baseVersionId, architect: outcome.architectVersionId, composition: outcome.compositionVersionId, reviewed: outcome.versionId },
       cycles: outcome.cycles.length,

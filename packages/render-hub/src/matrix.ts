@@ -46,7 +46,6 @@ export function renderColorSchemes(ir: DesignIR): RenderColorScheme[] {
 export interface RenderMatrixOptions {
   viewports?: readonly RenderViewport[];
   routes?: readonly string[];
-  states?: readonly string[];
 }
 
 /** Enumerates every capture the deterministic gate expects: route × viewport × state × colour scheme. */
@@ -54,7 +53,7 @@ export function createRenderMatrix(ir: DesignIR, options: RenderMatrixOptions = 
   const viewports = options.viewports ?? RENDER_VIEWPORTS;
   const routes = options.routes ?? ir.pages.routes.map((page) => page.route);
   const schemes = renderColorSchemes(ir);
-  const conditions = readStateConditions(ir).filter((condition) => !options.states || options.states.includes(condition.state));
+  const conditions = readStateConditions(ir);
   return routes.flatMap((route) => viewports.flatMap((width) => conditions.flatMap((condition) => schemes.map((colorScheme) => ({
     route, width, state: condition.state, reducedMotion: condition.reducedMotion, colorScheme,
   })))));

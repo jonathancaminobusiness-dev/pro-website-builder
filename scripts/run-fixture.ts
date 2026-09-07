@@ -4,7 +4,8 @@ import { openDatabase, ProjectRepository } from '../apps/server/src/db/repositor
 import { FixtureRun, type FixtureSnapshot } from '../apps/server/src/fixture-run.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
 import { createModelProvider } from '../apps/server/src/provider.js';
-import { createRenderCases, RenderHub, type RenderCase } from '../packages/render-hub/src/index.js';
+import { createRenderMatrix, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../packages/render-hub/src/index.js';
+import { renderDesign } from '../packages/renderer/src/index.js';
 
 interface RenderMatrixSummary { cases: number; passed: number; cached: number; failed: (RenderCase & { status: number | null; overflow: boolean; consoleErrors: string[]; networkErrors: string[] })[]; }
 
@@ -16,11 +17,16 @@ const previewPort = Number(process.env.PWB_PREVIEW_PORT ?? 4311);
 
 async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSummary> {
   const versionId = snapshot.currentVersion.id;
-  const preview = createPreviewServer((requested) => requested === versionId ? snapshot.rendered : undefined, previewPort);
+  const reviewed = renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` });
+  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, previewPort);
   await preview.start();
   try {
-    const cases = createRenderCases(snapshot.currentVersion.ir, `/preview/${versionId}`);
-    const results = await new RenderHub({ cacheDir: renderCacheDir }).render(snapshot.rendered, preview.origin, cases);
+    // `createRenderMatrix` owns the matrix; this CLI only chooses how wide a sweep to pay for and
+    // addresses each case through the prefix the reviewed document was rendered for.
+    const viewports = process.argv.includes('--full-matrix') ? RENDER_VIEWPORTS : REPRESENTATIVE_VIEWPORTS;
+    const cases = createRenderMatrix(snapshot.currentVersion.ir, { viewports })
+      .map((renderCase) => ({ ...renderCase, route: renderCase.route === '/' ? `/preview/${versionId}/` : `/preview/${versionId}${renderCase.route}` }));
+    const results = await new RenderHub({ cacheDir: renderCacheDir }).render(reviewed, preview.origin, cases);
     return {
       cases: results.length,
       passed: results.filter((result) => result.qa.passed).length,
