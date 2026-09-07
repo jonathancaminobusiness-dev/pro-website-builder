@@ -165,6 +165,17 @@ describe('domain contracts', () => {
     expect(refusal.success ? [] : refusal.error.issues.map((issue) => issue.message)).toContain(documentRules.visualPropTokens);
   });
 
+  it('treats an Object.prototype key as a token the identity does not define', () => {
+    const inherited = createFixtureIR();
+    inherited.pages.routes[0]!.nodes[1]!.props.color = '{constructor}';
+    const refusal = designIRSchema.safeParse(inherited);
+    expect(refusal.success).toBe(false);
+    expect(refusal.success ? [] : refusal.error.issues.map((issue) => issue.message)).toContainEqual(expect.stringContaining('{constructor}'));
+    const shadowing = resolveTokens(JSON.parse('{"toString":{"$value":"#101010","$type":"color"}}'));
+    expect(shadowing.values['toString']).toBe('#101010');
+    expect(Object.keys(shadowing.values)).toEqual(['toString']);
+  });
+
   it('rejects an identity without the visual contract fields', () => {
     expect(() => identitySpecSchema.parse({ meta: { id: 'bad' } })).toThrow();
   });

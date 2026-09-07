@@ -59,8 +59,8 @@ export function cssTokenIssues(values: Record<string, string | number | boolean>
 
 export function resolveTokens(tokens: TokenTree): ResolvedTokenSet {
   const flat = flattenTokens(tokens);
-  const values: Record<string, string | number | boolean> = {};
-  const types: Record<string, z.infer<typeof tokenTypeSchema> | undefined> = {};
+  const values: Record<string, string | number | boolean> = Object.create(null);
+  const types: Record<string, z.infer<typeof tokenTypeSchema> | undefined> = Object.create(null);
   const resolving: string[] = [];
 
   const resolve = (path: string): string | number | boolean => {

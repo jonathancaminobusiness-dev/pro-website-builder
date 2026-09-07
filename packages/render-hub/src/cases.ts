@@ -9,13 +9,13 @@ export interface QaResult { passed: boolean; overflow: boolean; status: number |
  * emulation. Enumerating a state it cannot apply would report duplicate output as state coverage,
  * so an unsupported value is refused here rather than silently ignored.
  */
-export function createRenderCases(ir: DesignIR): RenderCase[] {
+export function createRenderCases(ir: DesignIR, routePrefix: string): RenderCase[] {
   for (const [state, fixture] of Object.entries(ir.stateFixtures)) {
     const unsupported = Object.keys(fixture.values).filter((key) => key !== 'motion');
     if (unsupported.length > 0) throw new Error(`State fixture ${state} sets ${unsupported.join(', ')}, which the render hub cannot apply; it only applies motion.`);
   }
   return ir.pages.routes.flatMap((page) => ([360, 768, 1440] as const).flatMap((width) =>
-    Object.entries(ir.stateFixtures).map(([state, fixture]) => ({ route: page.route, width, state, reducedMotion: fixture.values.motion === 'reduced' }))));
+    Object.entries(ir.stateFixtures).map(([state, fixture]) => ({ route: `${routePrefix}${page.route}`, width, state, reducedMotion: fixture.values.motion === 'reduced' }))));
 }
 
 export function cacheKey(rendered: RenderedDocument, renderCase: RenderCase): string { return hashJson({ rendered, renderCase }); }
