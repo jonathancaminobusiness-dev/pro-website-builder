@@ -7,7 +7,8 @@ import { identitySpecSchema } from './identity.js';
 type Stage = z.infer<typeof stageSchema>;
 type Role = z.infer<typeof taskRoleSchema>;
 
-function withoutUnionTypes(node: unknown): unknown {
+/** Rewrites `type: [...]` unions into `anyOf`, which the Claude Code strict schema validator accepts. */
+export function withoutUnionTypes(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(withoutUnionTypes);
   if (!node || typeof node !== 'object') return node;
   const entry = Object.fromEntries(Object.entries(node as Record<string, unknown>).map(([key, value]) => [key, withoutUnionTypes(value)]));

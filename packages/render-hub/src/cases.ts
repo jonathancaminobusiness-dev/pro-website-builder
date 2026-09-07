@@ -1,7 +1,9 @@
 import { hashJson, type DesignIR } from '@pwb/domain';
 import type { RenderedDocument } from '@pwb/renderer';
 
-export interface RenderCase { route: string; width: 360 | 768 | 1440; state: string; reducedMotion: boolean; }
+export type RenderViewport = 320 | 360 | 390 | 768 | 1024 | 1440;
+export type RenderColorScheme = 'light' | 'dark';
+export interface RenderCase { route: string; width: RenderViewport; state: string; reducedMotion: boolean; colorScheme?: RenderColorScheme; }
 export interface QaResult { passed: boolean; overflow: boolean; status: number | null; consoleErrors: string[]; networkErrors: string[]; }
 
 /**

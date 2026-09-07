@@ -3,7 +3,8 @@ import type { NodeGeometry, RenderContext, RenderEvidence } from './evidence.js'
 import { lengthToPx } from './checks.js';
 
 /**
- * Builds the evidence a clean capture would produce for one context, straight from the IR.
+ * Builds the evidence a capture with a clean runtime would produce for one context, with the geometry
+ * derived from the resolved tokens so a spacing that leaves the grid rhythm still shows up as one.
  * Tests and the fake RenderHub use it so the deterministic gate can be exercised without a browser;
  * the real hub replaces every field with a measurement.
  */
@@ -14,9 +15,14 @@ export function createCleanEvidence(ir: DesignIR, context: RenderContext, screen
   const rhythmPath = /^\{([^}]+)\}$/.exec(ir.identity.gridGrammar.rhythmToken)?.[1];
   const rhythm = rhythmPath === undefined ? 16 : lengthToPx(values[rhythmPath] ?? 16) ?? 16;
   const parents = parentIndex(page);
+  const px = (value: string | number | boolean | undefined): number | null => {
+    const reference = typeof value === 'string' ? /^\{([^}]+)\}$/.exec(value) : null;
+    if (!reference) return null;
+    const resolved = values[reference[1]!];
+    return resolved === undefined ? null : lengthToPx(resolved) ?? null;
+  };
   const nodes: NodeGeometry[] = page.nodes.map((node, index) => {
     const parentNodeId = parents.get(node.id);
-    const gap = typeof node.props.gap === 'string' ? rhythm : null;
     return {
       nodeId: node.id,
       tag: node.kind === 'type' ? node.semantic : 'div',
@@ -26,10 +32,10 @@ export function createCleanEvidence(ir: DesignIR, context: RenderContext, screen
       overflowHidden: false, displayed: true, focusable: false, ellipsis: false,
       accessibleName: typeof node.props.text === 'string' ? node.props.text : '',
       text: typeof node.props.text === 'string' ? node.props.text : '',
-      gapPx: gap,
-      paddingBlockPx: typeof node.props.padding === 'string' || typeof node.props.paddingBlock === 'string' ? rhythm : null,
-      paddingInlinePx: typeof node.props.padding === 'string' || typeof node.props.paddingInline === 'string' ? rhythm : null,
-      marginBlockPx: null,
+      gapPx: px(node.props.gap),
+      paddingBlockPx: px(node.props.paddingBlock ?? node.props.padding),
+      paddingInlinePx: px(node.props.paddingInline ?? node.props.padding),
+      marginBlockPx: px(node.props.margin),
     };
   });
   return {
