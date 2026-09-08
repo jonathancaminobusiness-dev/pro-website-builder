@@ -207,7 +207,7 @@ export class IdentityRun {
     this.refuseIfCancelled('create another one to run the identity stage.');
     // A failure is not the end of the run: the captain can ask again here, on
     // the same terms a restarted process already offers.
-    if (this.status === 'failed') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
+    if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
     if (this.started) { await this.inFlight; return this.snapshot(); }
     this.started = true;
     this.status = 'running';

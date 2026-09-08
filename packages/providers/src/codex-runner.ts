@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { ZodError } from 'zod';
 import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { JsonModelRunner, JsonRunRequest } from './json-runner.js';
@@ -152,6 +154,19 @@ async function executeCodex(executable: string, args: string[], options: CodexEx
   });
 }
 
+async function withSchemaFile<T>(cwd: string, schema: unknown, operation: (schemaPath: string) => Promise<T>): Promise<T> {
+  const directory = await mkdtemp(join(cwd, '.pwb-codex-schema-'));
+  try {
+    const serialized = JSON.stringify(schema);
+    if (serialized === undefined) throw new Error('Codex output schema could not be serialized.');
+    const schemaPath = join(directory, 'schema.json');
+    await writeFile(schemaPath, serialized, 'utf8');
+    return await operation(schemaPath);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 export class CodexJsonRunner implements JsonModelRunner {
   private readonly executable: string;
   private readonly cwd: string;
@@ -167,13 +182,16 @@ export class CodexJsonRunner implements JsonModelRunner {
 
   async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
     try {
-      const args = [
+      const execute = (schemaPath?: string): Promise<{ stdout: string; stderr: string }> => this.execute(this.executable, [
         'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
         '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false',
-        '--json', ...(request.strictSchema === false ? [] : ['--output-schema', JSON.stringify(request.schema)]),
+        '--json', ...(schemaPath ? ['--output-schema', schemaPath] : []),
         '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, request.prompt,
-      ];
-      const result = await this.execute(this.executable, args, { cwd: this.cwd, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
+      ], { cwd: this.cwd, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
+      const result = request.strictSchema === false ? await execute() : await withSchemaFile(this.cwd, request.schema, execute);
+      if (!result.stdout.trim() && CODEX_AUTH_FAILURE.test(result.stderr)) {
+        throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
+      }
       try {
         return parseCodexOutput(result.stdout);
       } catch (error) {

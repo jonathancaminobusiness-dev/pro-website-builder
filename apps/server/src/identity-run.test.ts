@@ -70,6 +70,34 @@ describe('identity run', () => {
     ]));
   });
 
+  it('clears restored task failures before retrying an interrupted run', async () => {
+    const repository = new ProjectRepository(database);
+    const runId = 'identity-codex-interrupted-retry';
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    await run.initialize();
+    await repository.appendEvent({ id: 'identity-stage-started', runId, type: 'identity.stage.started', payload: {} });
+    await repository.appendEvent({ id: 'identity-task-failed', runId, type: 'identity.task.failed', payload: { taskId: 'identity-curator', reason: 'previous provider failure' } });
+
+    const currentProvider: ModelProvider = {
+      async propose(task) {
+        return { taskId: task.id, status: 'failed', summary: 'current provider failure', errorCode: 'CURRENT_FAILURE' };
+      },
+    };
+    const restored = new IdentityRun({ runId, repository, provider: currentProvider });
+    expect(await restored.restore()).toBe(true);
+    expect(restored.snapshot().failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'previous provider failure' }),
+    ]));
+
+    const retried = await restored.start();
+
+    expect(retried.status).toBe('failed');
+    expect(retried.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'identity-curator', reason: expect.stringMatching(/current provider failure/) }),
+    ]));
+    expect(retried.failures.every((failure) => !failure.reason.includes('previous provider failure'))).toBe(true);
+  });
+
   it('persists every candidate version and the events behind the fan-out', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({ runId: 'identity-events', repository, provider: new FakeIdentityProvider() });

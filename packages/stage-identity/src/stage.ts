@@ -1004,7 +1004,7 @@ export class IdentityStage {
       const correction = corrections.get(task.id);
       const brief = correction ? `${task.brief}\n\n## Correção\nA resposta anterior não passou no schema desta função. Corrija exatamente estes erros e responda de novo, no mesmo formato:\n${correction}` : task.brief;
       const result = agentResultSchema.parse(await this.options.provider.propose({ ...task, brief }, taskSignal));
-      if (result.status === 'failed') throw new Error(`${task.id} failed: ${result.summary}`);
+      if (result.status !== 'succeeded') throw new Error(`${task.id} returned ${result.status}: ${result.summary}`);
       return result;
     }, {
       ...(signal ? { signal } : {}),

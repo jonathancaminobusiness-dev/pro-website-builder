@@ -222,6 +222,20 @@ describe('identity stage fan-out', () => {
     expect(result.failures.some((failure) => failure.taskId === 'identity-director-modular-technical')).toBe(true);
   });
 
+  it('records a non-succeeded provider result as a task failure', async () => {
+    const provider: ModelProvider = {
+      async propose(task) {
+        return { taskId: task.id, status: 'needs_review', summary: 'Codex returned an invalid structured proposal.', errorCode: 'SCHEMA_INVALID' };
+      },
+    };
+    const { stage } = harness({ provider });
+
+    await expect(stage.run()).rejects.toThrow(/Codex returned an invalid structured proposal/);
+    expect(stage.recordedFailures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'identity-curator', reason: expect.stringMatching(/Codex returned an invalid structured proposal/) }),
+    ]));
+  });
+
   it('stops the stage when the fan-out cannot produce two comparable directions', async () => {
     const inner = new FakeIdentityProvider();
     const provider: ModelProvider = {
