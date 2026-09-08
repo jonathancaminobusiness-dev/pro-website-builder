@@ -4,3 +4,13 @@
 node_modules/
 .no-mistakes/
 .DS_Store
+.treehouse/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+exports/
+.vite/
