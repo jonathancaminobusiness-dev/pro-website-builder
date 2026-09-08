@@ -4,6 +4,7 @@ import {
   createFixtureIR,
   divergenceAxes,
   identityColorValues,
+  measuredAxes,
   measuredAxisSignals,
   paletteSignature,
   toOklch,
@@ -20,7 +21,10 @@ function vectorFor(directionId: Parameters<typeof fakeIdentityFor>[0], overrides
   return {
     directionId,
     label: directionId,
-    axes: Object.fromEntries(divergenceAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: `${axis} descriptor for ${directionId}`, signal: signals[axis] }])) as DirectionVector['axes'],
+    axes: {
+      ...Object.fromEntries(measuredAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: `${axis} descriptor for ${directionId}`, signal: signals[axis] }])),
+      color: { key: seat.required.color, descriptor: `color descriptor for ${directionId}` },
+    } as DirectionVector['axes'],
     paletteSignature: paletteSignature(identityColorValues(identity)),
     ...overrides,
   };
@@ -48,7 +52,7 @@ describe('divergence axes and the hue rule', () => {
 
   it('keeps colours it cannot parse in the comparison instead of dropping them', () => {
     const signature = paletteSignature(['#1d2321', 'rebeccapurple']);
-    expect(signature.unparsed).toEqual(['rebeccapurple']);
+    expect(signature.entries).toHaveLength(2);
     expect(signature.entries).toContain('raw:rebeccapurple');
   });
 
@@ -93,20 +97,10 @@ describe('DIV-030 through the linter registry', () => {
     expect(findings[0]?.severity).toBe('error');
   });
 
-  it('refuses a palette signature that does not match the identity it belongs to', () => {
+  it('states a palette signature that does not match the identity it belongs to once', () => {
     const matrix = identityAxisBriefs.map((seat) => vectorFor(seat.id));
     const tampered = matrix.map((vector) => vector.directionId === 'editorial-material' ? { ...vector, paletteSignature: paletteSignature(['#000000']) } : vector);
     const findings = lintDesign(irWithMatrix(tampered, 'editorial-material')).findings.filter((finding) => finding.id === 'DIV-030');
-    expect(findings.some((finding) => /palette signature recorded/i.test(finding.message))).toBe(true);
-  });
-
-  it('states a stale colour measurement once instead of twice', () => {
-    const matrix = identityAxisBriefs.map((seat) => vectorFor(seat.id));
-    const black = paletteSignature(['#000000']);
-    const stale = matrix.map((vector) => vector.directionId === 'editorial-material'
-      ? { ...vector, paletteSignature: black, axes: { ...vector.axes, color: { ...vector.axes.color, signal: black.entries.join(' ') } } }
-      : vector);
-    const findings = lintDesign(irWithMatrix(stale, 'editorial-material')).findings.filter((finding) => finding.id === 'DIV-030');
     expect(findings).toHaveLength(1);
     expect(findings[0]?.message).toMatch(/palette signature recorded/i);
   });

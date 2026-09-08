@@ -7,6 +7,7 @@ import {
   identityColorValues,
   identitySpecSchema,
   idempotencyKey,
+  measuredAxes,
   measuredAxisSignals,
   MINIMUM_DISTINCT_AXES,
   paletteSignature,
@@ -418,7 +419,10 @@ export class IdentityStage {
     return {
       directionId: seatId,
       label: draft.label,
-      axes: Object.fromEntries(divergenceAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: draft.descriptors[axis], signal: signals[axis] }])) as DirectionVector['axes'],
+      axes: {
+        ...Object.fromEntries(measuredAxes.map((axis) => [axis, { key: seat.required[axis], descriptor: draft.descriptors[axis], signal: signals[axis] }])),
+        color: { key: seat.required.color, descriptor: draft.descriptors.color },
+      } as DirectionVector['axes'],
       paletteSignature: paletteSignature(identityColorValues(identity)),
     };
   }

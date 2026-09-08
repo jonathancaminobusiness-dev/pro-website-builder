@@ -63,17 +63,16 @@ function quantize(value: number, steps: number): number {
  * in a notation this module cannot read are kept verbatim under a `raw:` prefix
  * so they still take part in the comparison instead of being silently dropped.
  */
-export interface PaletteSignature { entries: string[]; unparsed: string[]; }
+export interface PaletteSignature { entries: string[]; }
 
 export function paletteSignature(colors: string[]): PaletteSignature {
   const entries: string[] = [];
-  const unparsed: string[] = [];
   for (const color of colors) {
     const oklch = toOklch(color);
-    if (!oklch) { const raw = `raw:${color.trim().toLowerCase()}`; entries.push(raw); unparsed.push(color); continue; }
+    if (!oklch) { entries.push(`raw:${color.trim().toLowerCase()}`); continue; }
     entries.push(`${quantize(oklch.l, LIGHTNESS_STEPS).toFixed(2)}|${quantize(oklch.c, CHROMA_STEPS).toFixed(2)}`);
   }
-  return { entries: [...entries].sort(), unparsed: [...unparsed].sort() };
+  return { entries: [...entries].sort() };
 }
 
 export function paletteSignaturesMatch(a: PaletteSignature, b: PaletteSignature): boolean {

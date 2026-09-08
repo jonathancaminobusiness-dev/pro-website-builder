@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR } from '@pwb/domain';
+import { createFixtureIR, hashJson } from '@pwb/domain';
 import { openDatabase, ProjectRepository, scanSecrets } from './repository.js';
 
 describe('sqlite persistence', () => {
@@ -52,21 +52,33 @@ describe('sqlite persistence', () => {
     const ir = createFixtureIR();
     const stored = (id: string, allowedSources: string[]): void => {
       const document = { ...ir, identity: { ...ir.identity, imagery: { ...ir.identity.imagery, allowedSources } } };
-      seeding.sqlite.prepare('INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)').run(id, 'fixture-project', null, `hash-${id}`, JSON.stringify(document), new Date().toISOString());
+      seeding.sqlite.prepare('INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)').run(id, 'fixture-project', null, hashJson(document), JSON.stringify(document), new Date().toISOString());
     };
     stored('v-raster', ['manual', 'higgsfield']);
     stored('v-unknown', ['midjourney']);
+    stored('v-current', ['higgsfield-mcp']);
     seeding.sqlite.pragma('user_version = 2');
     seeding.sqlite.close();
 
     const upgraded = openDatabase(file);
-    const versions = await new ProjectRepository(upgraded).listVersions('fixture-project');
+    const repo = new ProjectRepository(upgraded);
+    const versions = await repo.listVersions('fixture-project');
     // Every row is still there, and every document parses again: the raster
     // source under its new name, and one this build cannot generate from as
     // `manual`.
     expect(versions.map((version) => [version.id, version.ir.identity.imagery.allowedSources])).toEqual([
       ['v-raster', ['manual', 'higgsfield-mcp']],
       ['v-unknown', ['manual']],
+      ['v-current', ['higgsfield-mcp']],
+    ]);
+    // A row's hash describes the document the row holds, whether the migration
+    // rewrote it or left it alone, so a captain decision cannot be recorded
+    // against a document that no longer exists.
+    const rows = (JSON.parse(repo.dump()) as { versions: Array<{ id: string; hash: string; ir: string }> }).versions;
+    expect(rows.map((row) => [row.id, row.hash === hashJson(JSON.parse(row.ir))])).toEqual([
+      ['v-raster', true],
+      ['v-unknown', true],
+      ['v-current', true],
     ]);
     upgraded.sqlite.close();
   });

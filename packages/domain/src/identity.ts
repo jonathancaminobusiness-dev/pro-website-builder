@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { paletteSignature } from './color.js';
-import { decisionRecordSchema, divergenceAxes, divergenceSpecSchema, evidenceSchema, rejectedAlternativeSchema, type DivergenceAxis } from './divergence.js';
+import { decisionRecordSchema, divergenceSpecSchema, evidenceSchema, measuredAxes, rejectedAlternativeSchema, type MeasuredAxis } from './divergence.js';
 import { documentRules } from './rules.js';
 import { flattenTokens, resolveTokens, tokenGroupSchema } from './tokens.js';
 
@@ -112,23 +111,23 @@ export function identityColorValues(identity: IdentitySpec): string[] {
  * What the document itself shows on each divergence axis, measured from the
  * tokens and the contract rather than declared. Two directions whose seats
  * demanded opposite strategies but whose documents carry the same grid, the
- * same families, the same palette, the same imagery policy and the same motion
- * are not divergent, and DIV-030 compares these signals to say so.
+ * same families, the same imagery policy and the same motion are not divergent,
+ * and DIV-030 compares these signals to say so. The colour axis is measured by
+ * the palette fingerprint instead, so it is not signalled here.
  */
-export function measuredAxisSignals(identity: IdentitySpec): Record<DivergenceAxis, string> {
+export function measuredAxisSignals(identity: IdentitySpec): Record<MeasuredAxis, string> {
   const { values } = resolveTokens(identity.tokens);
   const group = (prefix: string): string => Object.entries(values)
     .filter(([path]) => path.startsWith(`${prefix}.`))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([path, value]) => `${path}=${String(value)}`)
     .join(' ');
-  const signals: Record<DivergenceAxis, string> = {
+  const signals: Record<MeasuredAxis, string> = {
     composition: `columns=${identity.gridGrammar.columns}`,
     typography: group('type'),
     materiality: `density=${identity.direction.density} ${group('radius')}`,
-    color: paletteSignature(identityColorValues(identity)).entries.join(' '),
     imagery: `sources=${[...identity.imagery.allowedSources].sort().join(',')} treatment=${identity.imagery.treatment} focal=${identity.imagery.focalPolicy}`,
     motion: group('motion'),
   };
-  return Object.fromEntries(divergenceAxes.map((axis) => [axis, signals[axis] || `${axis}=unstated`])) as Record<DivergenceAxis, string>;
+  return Object.fromEntries(measuredAxes.map((axis) => [axis, signals[axis] || `${axis}=unstated`])) as Record<MeasuredAxis, string>;
 }

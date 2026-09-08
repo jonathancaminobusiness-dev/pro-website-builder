@@ -1,10 +1,10 @@
 import {
   compareDivergenceMatrix,
-  divergenceAxes,
   flattenTokens,
   governedContractFields,
   identityColorValues,
   isGroundedDecision,
+  measuredAxes,
   measuredAxisSignals,
   MINIMUM_DISTINCT_AXES,
   paletteSignature,
@@ -87,9 +87,8 @@ export function divergenceDistance(ir: DesignIR): LintIssue[] {
       issues.push({ path: '/identity/direction/divergence/matrix', message: `The palette signature recorded for ${spec.directionId} does not match the identity's colour tokens, so its divergence claim cannot be verified.` });
     }
     const signals = measuredAxisSignals(ir.identity);
-    for (const axis of divergenceAxes) {
-      // The palette fingerprint above is the colour measurement; the signal recorded for that axis is the same fact.
-      if (axis === 'color' || own.axes[axis].signal === signals[axis]) continue;
+    for (const axis of measuredAxes) {
+      if (own.axes[axis].signal === signals[axis]) continue;
       issues.push({ path: '/identity/direction/divergence/matrix', message: `The ${axis} signal recorded for ${spec.directionId} says "${own.axes[axis].signal}" but the document shows "${signals[axis]}", so its divergence claim cannot be verified.` });
     }
   } catch { measurable = false; }

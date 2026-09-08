@@ -37,11 +37,13 @@ export function openDatabase(filename: string): LocalDatabase {
  * project is parsed to read any run of it. The documents are rewritten in place
  * rather than dropped: the raster source keeps its meaning under its new name,
  * and a source this build does not know becomes `manual`, which generates
- * nothing.
+ * nothing. The row's hash describes its document, so a rewritten document is
+ * stored with the hash of what it now says; the content-derived row id is not
+ * touched, because `parent_id` and `approvals.version_id` point at it.
  */
 function renameImagerySources(sqlite: Database.Database): void {
   const rows = sqlite.prepare('SELECT id, ir FROM versions').all() as Array<{ id: string; ir: string }>;
-  const update = sqlite.prepare('UPDATE versions SET ir = ? WHERE id = ?');
+  const update = sqlite.prepare('UPDATE versions SET ir = ?, hash = ? WHERE id = ?');
   for (const row of rows) {
     let document: { identity?: { imagery?: { allowedSources?: unknown } } };
     try { document = JSON.parse(row.ir) as typeof document; } catch { continue; }
@@ -51,7 +53,7 @@ function renameImagerySources(sqlite: Database.Database): void {
     const renamed = [...new Set(sources.map(knownImagerySource))];
     if (renamed.length === sources.length && renamed.every((source, index) => source === sources[index])) continue;
     imagery.allowedSources = renamed;
-    update.run(JSON.stringify(document), row.id);
+    update.run(JSON.stringify(document), hashJson(document), row.id);
   }
 }
 

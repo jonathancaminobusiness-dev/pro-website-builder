@@ -21,17 +21,28 @@ export const axisKeyVocabulary: Record<DivergenceAxis, readonly string[]> = {
   motion: ['no-motion', 'weighted-settle', 'mechanical-step', 'typographic-reveal', 'parallax-depth'],
 };
 
-export const axisValueSchema = z.object({
+export const declaredAxisSchema = z.object({
   key: z.string().min(1),
   descriptor: z.string().min(8, 'An axis value must say what the strategy means for this direction.'),
+});
+
+export const axisValueSchema = declaredAxisSchema.extend({
   /** What the document measurably shows on this axis; see `measuredAxisSignals` in `./identity.js`. */
   signal: z.string().min(1),
 });
 export type AxisValue = z.infer<typeof axisValueSchema>;
 
+/**
+ * The axes whose divergence a document reports as a signal. Colour is not one
+ * of them: its measurement is the hue-free palette fingerprint below, which is
+ * what DIV-030 compares, so recording it twice would only let the two copies
+ * disagree.
+ */
+export const measuredAxes = divergenceAxes.filter((axis) => axis !== 'color') as MeasuredAxis[];
+export type MeasuredAxis = Exclude<DivergenceAxis, 'color'>;
+
 export const paletteSignatureSchema = z.object({
   entries: z.array(z.string()).min(1),
-  unparsed: z.array(z.string()).default([]),
 });
 
 export const directionVectorSchema = z.object({
@@ -39,7 +50,7 @@ export const directionVectorSchema = z.object({
   label: z.string().min(1),
   axes: z.object({
     composition: axisValueSchema, typography: axisValueSchema, materiality: axisValueSchema,
-    color: axisValueSchema, imagery: axisValueSchema, motion: axisValueSchema,
+    color: declaredAxisSchema, imagery: axisValueSchema, motion: axisValueSchema,
   }),
   /** Hue-free fingerprint of this direction's colour tokens; see `packages/domain/src/color.ts`. */
   paletteSignature: paletteSignatureSchema,
@@ -125,8 +136,10 @@ export function compareDirections(a: DirectionVector, b: DirectionVector): Direc
       }
       return { axis, distinct: true, reason: `${left.key} versus ${right.key}, with different lightness and chroma.` };
     }
-    if (left.signal === right.signal) {
-      return { axis, distinct: false, reason: `${left.key} versus ${right.key}, but both documents show the same ${axis}: ${left.signal}.` };
+    const leftSignal = a.axes[axis].signal;
+    const rightSignal = b.axes[axis].signal;
+    if (leftSignal === rightSignal) {
+      return { axis, distinct: false, reason: `${left.key} versus ${right.key}, but both documents show the same ${axis}: ${leftSignal}.` };
     }
     return { axis, distinct: true, reason: `${left.key} versus ${right.key}.` };
   });
