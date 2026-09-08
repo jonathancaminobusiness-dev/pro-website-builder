@@ -259,6 +259,8 @@ export class IdentityStage {
     };
   }
 
+  get recordedFailures(): Array<{ taskId: string; reason: string }> { return [...this.failures]; }
+
   /**
    * Rebuilds a stage that already ran, so an open Gate 1 survives a restart and
    * stays decidable. Nothing here starts a model: every version comes back from
@@ -311,7 +313,7 @@ export class IdentityStage {
     const base = this.branches.version(this.options.baseVersionId);
     const task = this.task({ id: 'identity-curator', role: 'curator', deadlineMs: this.deadlines.curator, brief: briefCuratorPrompt(this.options.briefing), allowedPaths: [], ir: base.ir });
     const [result] = await this.dispatch([task], signal, () => briefSpecSchema);
-    if (!result) throw new StageError('The brief curator produced no result.');
+    if (!result) throw new StageError(this.failures.at(-1)?.reason ?? 'The brief curator produced no result.');
     return requireArtifact(briefSpecSchema, result.artifact, task.id, 'BriefSpec');
   }
 

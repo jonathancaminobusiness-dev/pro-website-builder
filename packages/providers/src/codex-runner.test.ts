@@ -122,6 +122,11 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
   });
 
+  it('does not treat a missing model as an unavailable CLI when the process reports it', async () => {
+    const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error("model 'gpt-5.6-sol' not found"), { code: 'EIO', stderr: "model 'gpt-5.6-sol' not found" }); } });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
+  });
+
   it('maps a process timeout and preserves an abort signal', async () => {
     let timeoutMs = 0;
     const timeout = new CodexJsonRunner({ timeoutMs: 10_000, execute: async (_executable, _args, options) => { timeoutMs = options.timeoutMs; throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }); } });
@@ -136,6 +141,26 @@ describe('Codex provider', () => {
   it('turns an authentication failure event into a clear login error', async () => {
     const runner = new CodexJsonRunner({ execute: async () => ({ stdout: `${JSON.stringify({ type: 'turn.failed', error: { message: 'Please run codex login.' } })}\n`, stderr: '' }) });
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED', message: expect.stringMatching(/codex login/i) });
+  });
+
+  it('classifies authentication JSONL captured on stdout after a non-zero exit', async () => {
+    const stdout = `${JSON.stringify({ type: 'turn.failed', error: { message: 'Please run codex login.' } })}\n`;
+    const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error('Codex exited'), { code: 'EIO', stdout, stderr: '' }); } });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED' });
+  });
+
+  it('retries a schema correction when malformed JSONL was captured on stdout after a non-zero exit', async () => {
+    let calls = 0;
+    const malformed = `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'not-json' } })}\n`;
+    const provider = new CodexRunner({
+      execute: async (_executable, args) => {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error('Codex exited'), { code: 'EIO', stdout: malformed, stderr: '' });
+        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(result) } })}\n`, stderr: '' };
+      },
+    });
+    await expect(provider.propose(task)).resolves.toMatchObject({ taskId: task.id, status: 'succeeded' });
+    expect(calls).toBe(2);
   });
 
   it('rejects a malformed final message instead of using an earlier answer', async () => {
