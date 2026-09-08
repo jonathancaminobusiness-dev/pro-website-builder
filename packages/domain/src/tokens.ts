@@ -57,16 +57,34 @@ export function cssNodeSelector(nodeId: string): string {
 }
 
 /**
- * An unclosed `(` makes the CSS tokenizer consume component values until it finds a
- * match, so it swallows the declaration's `;` and every rule that follows it.
+ * A token value is emitted verbatim into one declaration of a `:root` block inside a
+ * `<style>` element, so it has to be self-contained: it may hold no character that ends
+ * the declaration, the rule or the element, and it may leave no string, function or
+ * escape open — an open construct consumes the declaration's `;` and whatever follows it
+ * until the parser finds the match, which silently drops the next tokens too.
  */
-function balancedParentheses(value: string): boolean {
+function cssValueIssue(value: string): string | undefined {
+  if (/[<>;{}]/.test(value) || value.includes('/*') || value.includes('*/')) return 'holds characters that cannot be emitted into CSS';
+  let quote: string | undefined;
   let depth = 0;
-  for (const char of value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]!;
+    if (char === '\\') {
+      if (index === value.length - 1) return 'ends inside an escape';
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === '\n') return 'leaves a quoted string open';
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") { quote = char; continue; }
     if (char === '(') depth += 1;
-    else if (char === ')') { depth -= 1; if (depth < 0) return false; }
+    else if (char === ')') { depth -= 1; if (depth < 0) return 'closes a parenthesis it never opened'; }
   }
-  return depth === 0;
+  if (quote) return 'leaves a quoted string open';
+  return depth === 0 ? undefined : 'leaves a parenthesis open';
 }
 
 export function cssTokenIssues(values: Record<string, string | number | boolean>): Array<{ path: string; message: string }> {
@@ -78,8 +96,8 @@ export function cssTokenIssues(values: Record<string, string | number | boolean>
     const owner = owners.get(name);
     if (owner === undefined) owners.set(name, path);
     else issues.push({ path, message: `${documentRules.cssTokens} Tokens ${owner} and ${path} both compile to the CSS custom property ${name}.` });
-    if (typeof value === 'string' && (/[<>;{}]/.test(value) || value.includes('/*') || value.includes('*/'))) issues.push({ path, message: `${documentRules.cssTokens} Token ${path} holds characters that cannot be emitted into CSS.` });
-    if (typeof value === 'string' && !balancedParentheses(value)) issues.push({ path, message: `${documentRules.cssTokens} Token ${path} leaves a parenthesis unbalanced, so it cannot be emitted into CSS.` });
+    const unsafe = typeof value === 'string' ? cssValueIssue(value) : undefined;
+    if (unsafe) issues.push({ path, message: `${documentRules.cssTokens} Token ${path} ${unsafe}, so it cannot be emitted into CSS.` });
   }
   return issues;
 }

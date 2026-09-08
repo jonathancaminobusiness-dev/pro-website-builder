@@ -50,8 +50,15 @@ describe('sqlite persistence', () => {
     const file = join(dir, 'v2.sqlite');
     const seeding = openDatabase(file);
     const ir = createFixtureIR();
+    // A genuine version-2 row predates strategy.evidence, direction.rejectedAlternatives
+    // and identity.decisions, which this build defaults in when it parses the row.
     const stored = (id: string, allowedSources: string[]): void => {
-      const document = { ...ir, identity: { ...ir.identity, imagery: { ...ir.identity.imagery, allowedSources } } };
+      const identity = structuredClone(ir.identity) as Record<string, unknown> & { strategy: Record<string, unknown>; direction: Record<string, unknown>; imagery: Record<string, unknown> };
+      delete identity.decisions;
+      delete identity.strategy.evidence;
+      delete identity.direction.rejectedAlternatives;
+      identity.imagery = { ...identity.imagery, allowedSources };
+      const document = { ...ir, identity };
       seeding.sqlite.prepare('INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)').run(id, 'fixture-project', null, hashJson(document), JSON.stringify(document), new Date().toISOString());
     };
     stored('v-raster', ['manual', 'higgsfield']);
@@ -71,14 +78,12 @@ describe('sqlite persistence', () => {
       ['v-unknown', ['manual']],
       ['v-current', ['higgsfield-mcp']],
     ]);
-    // A row's hash describes the document the row holds, whether the migration
-    // rewrote it or left it alone, so a captain decision cannot be recorded
+    // A rewritten row's hash describes the document a reader gets back, not the raw
+    // bytes the migration happened to write, so a captain decision cannot be recorded
     // against a document that no longer exists.
-    const rows = (JSON.parse(repo.dump()) as { versions: Array<{ id: string; hash: string; ir: string }> }).versions;
-    expect(rows.map((row) => [row.id, row.hash === hashJson(JSON.parse(row.ir))])).toEqual([
+    expect(versions.filter((version) => version.id !== 'v-current').map((version) => [version.id, version.hash === hashJson(version.ir)])).toEqual([
       ['v-raster', true],
       ['v-unknown', true],
-      ['v-current', true],
     ]);
     upgraded.sqlite.close();
   });

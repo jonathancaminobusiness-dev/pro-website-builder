@@ -1243,18 +1243,21 @@ describe('gate 1', () => {
     expect(after.$type).toBe('dimension');
   });
 
-  it('refuses a colour the browser cannot read, whether an odd-length hex or an unclosed function', async () => {
+  it('refuses a token value that would not close its own CSS declaration', async () => {
     const { stage, store } = harness();
     await stage.run();
     const approval = await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
-    for (const value of ['#ff7a0', 'rgb(255 0 0', 'oklch(0.7 0.2']) {
-      await expect(stage.changeToken({ tokenPath: 'color.accent', value, rationale: 'Sinal mais quente.' })).rejects.toThrow(/color token expects/);
-      expect(flattenTokens(store.get(stage.approvedVersionId!)!.ir.identity.tokens).get('color.accent')).toEqual(flattenTokens(store.get(approval.versionId)!.ir.identity.tokens).get('color.accent'));
+    const accentBefore = flattenTokens(store.get(approval.versionId)!.ir.identity.tokens).get('color.accent');
+    const bodyBefore = flattenTokens(store.get(approval.versionId)!.ir.identity.tokens).get('type.body');
+    for (const [tokenPath, value] of [['color.accent', '#ff7a0'], ['color.accent', 'rgb(255 0 0'], ['type.body', '"Inter, Arial, sans-serif'], ['type.body', 'var(--x']] as const) {
+      await expect(stage.changeToken({ tokenPath, value, rationale: 'Colado pela metade.' })).rejects.toThrow();
+      const tokens = flattenTokens(store.get(stage.approvedVersionId!)!.ir.identity.tokens);
+      expect([tokens.get('color.accent'), tokens.get('type.body')]).toEqual([accentBefore, bodyBefore]);
     }
 
-    for (const value of ['#ff7a00', 'rgb(255 122 0)', 'oklch(0.72 0.18 45)']) {
-      const changed = await stage.changeToken({ tokenPath: 'color.accent', value, rationale: 'Sinal mais quente.' });
-      expect(flattenTokens(store.get(changed.versionId)!.ir.identity.tokens).get('color.accent')?.$value).toBe(value);
+    for (const [tokenPath, value] of [['color.accent', '#ff7a00'], ['color.accent', 'rgb(255 122 0)'], ['color.accent', 'oklch(0.72 0.18 45)'], ['type.body', '"O\'Neil Sans", Inter, sans-serif']] as const) {
+      const changed = await stage.changeToken({ tokenPath, value, rationale: 'Ajuste do capitão.' });
+      expect(flattenTokens(store.get(changed.versionId)!.ir.identity.tokens).get(tokenPath)?.$value).toBe(value);
     }
   });
 

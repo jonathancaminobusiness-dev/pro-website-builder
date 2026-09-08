@@ -37,9 +37,10 @@ export function openDatabase(filename: string): LocalDatabase {
  * project is parsed to read any run of it. The documents are rewritten in place
  * rather than dropped: the raster source keeps its meaning under its new name,
  * and a source this build does not know becomes `manual`, which generates
- * nothing. The row's hash describes its document, so a rewritten document is
- * stored with the hash of what it now says; the content-derived row id is not
- * touched, because `parent_id` and `approvals.version_id` point at it.
+ * nothing. A rewritten row is stored as the schema normalizes it, under the hash
+ * of that same normalized document, because that is what every reader of the row
+ * sees; the content-derived row id is not touched, because `parent_id` and
+ * `approvals.version_id` point at it.
  */
 function renameImagerySources(sqlite: Database.Database): void {
   const rows = sqlite.prepare('SELECT id, ir FROM versions').all() as Array<{ id: string; ir: string }>;
@@ -53,7 +54,9 @@ function renameImagerySources(sqlite: Database.Database): void {
     const renamed = [...new Set(sources.map(knownImagerySource))];
     if (renamed.length === sources.length && renamed.every((source, index) => source === sources[index])) continue;
     imagery.allowedSources = renamed;
-    update.run(JSON.stringify(document), hashJson(document), row.id);
+    const normalized = designIRSchema.safeParse(document);
+    const rewritten = normalized.success ? normalized.data : document;
+    update.run(JSON.stringify(rewritten), hashJson(rewritten), row.id);
   }
 }
 
