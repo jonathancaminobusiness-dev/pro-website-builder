@@ -2,8 +2,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ClaudeRunner, FakeModelProvider } from '@pwb/providers';
-import { createModelProvider, createRasterProvider } from './provider.js';
+import { ClaudeRunner, CodexRunner, FakeModelProvider } from '@pwb/providers';
+import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
 
 const request = { id: 'asset-job', digest: 'digest', prompt: 'papel impresso em duas tintas', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' };
 
@@ -14,11 +14,13 @@ afterEach(async () => {
 });
 
 describe('model provider selection', () => {
-  it('defaults to the fake provider and honors the claude-code choice', () => {
+  it('defaults to the fake provider and honors the local provider choices', () => {
     expect(createModelProvider()).toBeInstanceOf(FakeModelProvider);
     expect(createModelProvider('fake')).toBeInstanceOf(FakeModelProvider);
     expect(createModelProvider('claude-code')).toBeInstanceOf(ClaudeRunner);
-    expect(() => createModelProvider('openai')).toThrow(/fake or claude-code/i);
+    expect(createModelProvider('codex')).toBeInstanceOf(CodexRunner);
+    expect(createIdentityProvider('codex')).toBeInstanceOf(CodexRunner);
+    expect(() => createModelProvider('openai')).toThrow(/fake, claude-code, or codex/i);
   });
 });
 

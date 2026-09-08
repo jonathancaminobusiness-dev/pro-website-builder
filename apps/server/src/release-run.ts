@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
 import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type FontDecision, type ReleaseManifest } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
-import { ClaudeJsonRunner } from '@pwb/providers';
+import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
 import {
   ClaudeReleaseCriticProvider, ClaudeReleaseRefiner, ClaudeReleaseSummarizer, DeterministicReleaseSummarizer,
   FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage, PatchRefiner, readEvidence, writeReleaseDocument,
@@ -61,8 +61,8 @@ export interface ReleaseSnapshot {
 
 function providers(name: string): { critic: ReleaseCriticProvider; refiner: ReleaseRefinerProvider; summarizer: ReleaseSummarizerProvider } {
   if (name === 'fake') return { critic: new FakeReleaseCriticProvider(), refiner: new FakeReleaseRefiner(), summarizer: new DeterministicReleaseSummarizer() };
-  if (name !== 'claude-code') throw new Error(`Unknown model provider ${name}; use fake or claude-code.`);
-  const runner = new ClaudeJsonRunner();
+  if (name !== 'claude-code' && name !== 'codex') throw new Error(`Unknown model provider ${name}; use fake, claude-code, or codex.`);
+  const runner = name === 'codex' ? new CodexJsonRunner() : new ClaudeJsonRunner();
   return { critic: new ClaudeReleaseCriticProvider(runner), refiner: new ClaudeReleaseRefiner(runner), summarizer: new ClaudeReleaseSummarizer(runner) };
 }
 

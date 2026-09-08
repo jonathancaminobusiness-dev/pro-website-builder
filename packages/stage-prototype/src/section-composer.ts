@@ -1,5 +1,5 @@
 import { hashJson, resolveTokens, slotChildIds, visualPropKeys, type AgentTask, type IdentitySpec, type PageNode, type Patch } from '@pwb/domain';
-import { ClaudeSession, type ClaudeSessionOptions } from './claude-session.js';
+import { ClaudeSession, type ClaudeSessionOptions, type StructuredSession } from './claude-session.js';
 import { locateSection, ROUTE_SHELL_SLOT, sectionAllowedPaths, sectionCompositionSchema, stagePrototypeContractSchemaJson, type RouteManifest, type SectionComposition, type SectionPlan } from './contracts.js';
 
 export const COMPOSER_PROMPT_VERSION = 'prototype-composer-v1';
@@ -76,8 +76,11 @@ export class FakeSectionComposer implements ComposerProvider {
 
 /** The real composer: one local Claude Code session per section, all of them under the scheduler's lane limit. */
 export class ClaudeSectionComposer implements ComposerProvider {
-  private readonly session: ClaudeSession;
-  constructor(options: ClaudeSessionOptions = {}) { this.session = new ClaudeSession({ maxTurns: 5, ...options }); }
+  private readonly session: StructuredSession;
+  constructor(options: ClaudeSessionOptions & { session?: StructuredSession } = {}) {
+    const { session, ...sessionOptions } = options;
+    this.session = session ?? new ClaudeSession({ maxTurns: 5, ...sessionOptions });
+  }
 
   async compose(task: AgentTask, section: SectionPlan, manifest: RouteManifest, signal?: AbortSignal): Promise<SectionComposition> {
     const identity = task.documentSlice['/identity'] as IdentitySpec;

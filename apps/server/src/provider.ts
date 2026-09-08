@@ -1,12 +1,13 @@
-import { ClaudeRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type ModelProvider, type RasterProvider } from '@pwb/providers';
+import { ClaudeRunner, CodexRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { FakeIdentityProvider } from '@pwb/stage-identity';
 
-export type ModelProviderName = 'fake' | 'claude-code';
+export type ModelProviderName = 'fake' | 'claude-code' | 'codex';
 
 export function createModelProvider(name: string = 'fake'): ModelProvider {
   if (name === 'fake') return new FakeModelProvider();
   if (name === 'claude-code') return new ClaudeRunner();
-  throw new Error(`Unknown model provider ${name}; use fake or claude-code.`);
+  if (name === 'codex') return new CodexRunner();
+  throw new Error(`Unknown model provider ${name}; use fake, claude-code, or codex.`);
 }
 
 /**
@@ -18,7 +19,8 @@ export function createModelProvider(name: string = 'fake'): ModelProvider {
 export function createIdentityProvider(name: string = 'fake'): ModelProvider {
   if (name === 'fake') return new FakeIdentityProvider();
   if (name === 'claude-code') return new ClaudeRunner();
-  throw new Error(`Unknown model provider ${name}; use fake or claude-code.`);
+  if (name === 'codex') return new CodexRunner();
+  throw new Error(`Unknown model provider ${name}; use fake, claude-code, or codex.`);
 }
 
 /**

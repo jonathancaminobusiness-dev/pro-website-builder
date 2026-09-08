@@ -7,7 +7,7 @@ import { readStateConditions } from '@pwb/render-hub';
 import {
   ClaudeInformationArchitect, ClaudeSectionComposer, ClaudeCritiqueRunner, criticRegistry, CRITIC_DEADLINE_MS,
   DEFAULT_LOOP_BUDGET, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
-  PrototypeStage, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
+  CodexSession, PrototypeStage, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
 } from '@pwb/stage-prototype';
 import type { ProjectRepository } from './db/repository.js';
 
@@ -110,7 +110,7 @@ function describeStep(type: string, payload: Record<string, unknown>): string {
 
 export interface PrototypeRegistryOptions {
   repository: ProjectRepository;
-  /** `fake` keeps CI and the fixture deterministic; `claude-code` runs the owner's local binary. */
+  /** `fake` keeps CI and the fixture deterministic; the named local providers run their CLI. */
   modelProvider?: string;
   /** Where the deterministic gate's evidence is measured; the server always hands it the RenderHub. */
   evidence: EvidenceSource;
@@ -222,12 +222,14 @@ export class PrototypeRunRegistry {
     const { runId } = record;
     const identity = record.store.get(baseVersionId)!.ir.identity;
     const claude = this.options.modelProvider === 'claude-code';
+    const codex = this.options.modelProvider === 'codex';
+    const model = claude || codex;
     const stage = new PrototypeStage({
       store: record.store, applier,
       scheduler: new Scheduler(),
-      architect: claude ? new ClaudeInformationArchitect() : new FakeInformationArchitect(),
-      composer: claude ? new ClaudeSectionComposer() : new FakeSectionComposer(),
-      critique: claude ? new ClaudeCritiqueRunner() : new FakeCritiqueProvider(),
+      architect: model ? new ClaudeInformationArchitect(codex ? { session: new CodexSession() } : {}) : new FakeInformationArchitect(),
+      composer: model ? new ClaudeSectionComposer(codex ? { session: new CodexSession() } : {}) : new FakeSectionComposer(),
+      critique: model ? new ClaudeCritiqueRunner(codex ? { session: new CodexSession() } : {}) : new FakeCritiqueProvider(),
       evidence: this.options.evidence,
       brief: BRIEF,
       onEvent: async (type, payload) => {
@@ -242,7 +244,7 @@ export class PrototypeRunRegistry {
     const task = agentTaskSchema.parse({
       id: `${runId}-prototype`, attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'raster',
       baseVersionId, inputDigest: hashJson([BRIEF, baseVersionId]), promptVersion: 'gate2-run-v1',
-      modelAlias: claude ? 'claude-local' : 'fake', deadlineMs: DEFAULT_LOOP_BUDGET.deadlineMs + STAGE_DEADLINE_SLACK_MS,
+      modelAlias: claude ? 'claude-local' : codex ? 'codex-gpt-5.6-sol' : 'fake', deadlineMs: DEFAULT_LOOP_BUDGET.deadlineMs + STAGE_DEADLINE_SLACK_MS,
       allowedPaths: [], brief: BRIEF, documentSlice: { '/identity': identity },
     });
 
