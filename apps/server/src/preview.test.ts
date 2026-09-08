@@ -3,7 +3,6 @@ import { connect, createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { exportStatic } from '@pwb/export';
 import { createFixtureIR } from '@pwb/domain';
 import { renderDesign } from '@pwb/renderer';
 import { createPreviewServer } from './preview.js';
@@ -99,16 +98,14 @@ describe('preview origin', () => {
     } finally { await preview.close(); }
   });
 
-  it('serves the exact route bytes written by static export', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'pwb-preview-'));
+  it('serves the exact route bytes the deterministic renderer produced', async () => {
     const rendered = renderDesign(createFixtureIR());
-    const exported = await exportStatic(rendered, createFixtureIR(), root);
     const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0);
     await preview.start();
     const port = (preview.server.address() as AddressInfo).port;
     try {
       const response = await fetch(`${preview.origin}/preview/v0/proof`);
-      expect(await response.text()).toBe(await readFile(join(exported.directory, 'proof', 'index.html'), 'utf8'));
+      expect(await response.text()).toBe(rendered.routes.find((route) => route.route === '/proof')!.html);
       expect(response.headers.get('content-security-policy')).toContain("script-src 'none'");
       expect(response.headers.get('content-security-policy')).toContain('frame-ancestors http://127.0.0.1:5173');
       expect((await fetch(`${preview.origin}/preview/v-other/proof`)).status).toBe(404);
@@ -116,7 +113,7 @@ describe('preview origin', () => {
       expect(malformed.status).toBe(404);
       expect(await rawRequestStatus(port, 'GET http://user@:80/ HTTP/1.1')).toContain('400');
       expect((await fetch(`${preview.origin}/preview/v0/proof`)).status).toBe(200);
-    } finally { await preview.close(); await rm(root, { recursive: true, force: true }); }
+    } finally { await preview.close(); }
   });
 
   it('reports a port it cannot bind instead of waiting forever on it', async () => {

@@ -144,7 +144,7 @@ describe('preview and release parity', () => {
   it('catches a release whose stylesheet no longer resolves what the preview showed', () => {
     const { ir, compiled } = compiledFixture();
     const stylesheet = compiled.files.find((file) => file.path === compiled.stylesheetPath)!;
-    stylesheet.contents = (stylesheet.contents as string).replace('[data-page-id="page-home"] [data-node-id="home-title"]{', '[data-page-id="page-home"] [data-node-id="home-title"]{opacity:0;');
+    stylesheet.contents = (stylesheet.contents as string).replace('[data-node-id="home-title"] {', '[data-node-id="home-title"] { opacity: 0;');
     const report = checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir));
     expect(report.matched).toBe(false);
     expect(report.routes.find((route) => route.route === '/')?.differences.join(' ')).toMatch(/home-title/);

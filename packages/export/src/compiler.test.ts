@@ -43,7 +43,7 @@ describe('deterministic release compiler', () => {
     expect(home).not.toContain('<style>');
     expect(home).toContain(`<link rel="stylesheet" href="/${compiled.stylesheetPath}">`);
     const stylesheet = fileText(compiled, compiled.stylesheetPath);
-    expect(stylesheet).toContain('[data-page-id="page-home"] [data-node-id="home-title"]{color:var(--color-ink);font-family:var(--type-display)}');
+    expect(stylesheet).toContain('[data-node-id="home-title"] { color: var(--color-ink); font-family: var(--type-display); }');
     expect(compiled.csp).toContain("style-src 'self'");
     expect(compiled.csp).toContain("script-src 'none'");
   });

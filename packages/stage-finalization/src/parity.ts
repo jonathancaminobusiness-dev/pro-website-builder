@@ -44,20 +44,31 @@ function documentSkeleton(html: string): Pick<DocumentView, 'title' | 'lang' | '
   };
 }
 
-/** The preview view: styles live in the `style` attribute the renderer emits. */
-function previewView(html: string): DocumentView {
+/**
+ * Per-node declarations, read out of a stylesheet.
+ *
+ * The renderer emits one rule per node so a container query can reach it, and
+ * the compiler may scope a rule to its page. Both forms are read here, by a
+ * parser that shares no code with either writer, so parity cannot pass by
+ * agreeing with itself.
+ */
+const NODE_RULE = /(?:\[data-page-id="((?:[^"\\]|\\.)*)"\]\s*)?\[data-node-id="((?:[^"\\]|\\.)*)"\]\s*\{([^}]*)\}/g;
+
+function nodeDeclarations(stylesheet: string, pageId: string | undefined): Map<string, string> {
   const styles = new Map<string, string>();
-  for (const tag of scanTags(html)) {
-    if (tag.closing) continue;
-    const id = tag.attributes.find((attribute) => attribute.name === 'data-node-id')?.value;
-    const style = tag.attributes.find((attribute) => attribute.name === 'style')?.value;
-    if (id === undefined || style === undefined) continue;
-    styles.set(decode(id), normalizeDeclarations(decode(style)));
+  NODE_RULE.lastIndex = 0;
+  for (let match = NODE_RULE.exec(stylesheet); match; match = NODE_RULE.exec(stylesheet)) {
+    const scope = match[1] === undefined ? undefined : unescapeCss(match[1]);
+    if (scope !== undefined && pageId !== undefined && scope !== pageId) continue;
+    styles.set(unescapeCss(match[2]!), normalizeDeclarations(match[3]!));
   }
-  return { ...documentSkeleton(html), styles };
+  return styles;
 }
 
-const NODE_RULE = /\[data-page-id="((?:[^"\\]|\\.)*)"\]\s*\[data-node-id="((?:[^"\\]|\\.)*)"\]\{([^}]*)\}/g;
+/** The preview view: the document the captain reviewed, styled by the renderer's own sheet. */
+function previewView(html: string, stylesheet: string, pageId: string): DocumentView {
+  return { ...documentSkeleton(html), styles: nodeDeclarations(stylesheet, pageId) };
+}
 
 /**
  * The release view: the same styles, read back out of the compiled stylesheet by
@@ -65,13 +76,7 @@ const NODE_RULE = /\[data-page-id="((?:[^"\\]|\\.)*)"\]\s*\[data-node-id="((?:[^
  * cannot pass by agreeing with itself.
  */
 function releaseView(html: string, stylesheet: string, pageId: string): DocumentView {
-  const styles = new Map<string, string>();
-  NODE_RULE.lastIndex = 0;
-  for (let match = NODE_RULE.exec(stylesheet); match; match = NODE_RULE.exec(stylesheet)) {
-    if (unescapeCss(match[1]!) !== pageId) continue;
-    styles.set(unescapeCss(match[2]!), normalizeDeclarations(match[3]!));
-  }
-  return { ...documentSkeleton(html), styles };
+  return { ...documentSkeleton(html), styles: nodeDeclarations(stylesheet, pageId) };
 }
 
 function faceName(decision: FontDecision): string {
@@ -134,17 +139,17 @@ export function checkPreviewReleaseParity(rendered: RenderedDocument, compiled: 
   const css = typeof stylesheet?.contents === 'string' ? stylesheet.contents : '';
   const faces = previewFaces === undefined ? [] : compareFonts(previewFaces, compiled.fonts);
   const routes = rendered.routes.map((route) => {
-    const differences = [...routeDifferences(route, compiled, css, pageIdByRoute), ...faces];
+    const differences = [...routeDifferences(route, compiled, css, rendered.css, pageIdByRoute), ...faces];
     return { route: route.route, matched: differences.length === 0, differences };
   });
   return { matched: routes.every((route) => route.matched), routes };
 }
 
-function routeDifferences(route: RenderedDocument['routes'][number], compiled: CompiledSite, css: string, pageIdByRoute: Map<string, string>): string[] {
+function routeDifferences(route: RenderedDocument['routes'][number], compiled: CompiledSite, css: string, previewCss: string, pageIdByRoute: Map<string, string>): string[] {
   const compiledRoute = compiled.routes.find((candidate) => candidate.route === route.route);
   const file = compiledRoute ? compiled.files.find((candidate) => candidate.path === compiledRoute.path) : undefined;
   if (!compiledRoute || !file || typeof file.contents !== 'string') return [`A rota ${route.route} existe no preview e não no release.`];
   const pageId = pageIdByRoute.get(route.route);
   if (pageId === undefined) return [`A rota ${route.route} não tem página correspondente no documento.`];
-  return compare(route.route, previewView(route.html), releaseView(file.contents, css, pageId));
+  return compare(route.route, previewView(route.html, previewCss, pageId), releaseView(file.contents, css, pageId));
 }
