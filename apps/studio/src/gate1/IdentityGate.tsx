@@ -235,8 +235,9 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         <p><strong>Decisão registrada.</strong> {record.directionId} · versão <code>{record.versionId}</code> · hash da identidade <code>{record.identityHash.slice(0, 16)}…</code></p>
         <p>{record.rationale}</p>
         {record.overrideRationale && <p className="gate-override"><strong>Override registrado:</strong> {record.overrideRationale}</p>}
+        {snapshot.assets.some((asset) => asset.status === 'generating') && <p className="gate-check" role="status">Gerando as imagens da direção aprovada na raia raster, uma de cada vez. A decisão já está registrada.</p>}
         {snapshot.assets.length > 0 && <ul className="asset-list">{snapshot.assets.map((asset) => <li key={asset.id}>
-          <code>{asset.id}</code> · {asset.status} · licença: {asset.provenance.license}
+          <code>{asset.id}</code> · {asset.status === 'generating' ? 'gerando…' : asset.status} · licença: {asset.provenance.license}
         </li>)}</ul>}
       </div>}
 

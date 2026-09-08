@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { ClaudeRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type McpServerConfig, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { FakeIdentityProvider } from '@pwb/stage-identity';
 
@@ -31,12 +28,12 @@ export function createIdentityProvider(name: string = 'fake'): ModelProvider {
  *
  * - `PWB_HIGGSFIELD_MCP_COMMAND` (with optional space-separated
  *   `PWB_HIGGSFIELD_MCP_ARGS`) speaks stdio to a local server;
- * - `PWB_HIGGSFIELD_MCP_URL` speaks streamable HTTP to a remote one;
- * - `PWB_HIGGSFIELD_MCP=claude-code` reuses the `higgsfield` server the owner's
- *   Claude Code already declares.
+ * - `PWB_HIGGSFIELD_MCP_URL` speaks streamable HTTP to a remote one, with
+ *   `PWB_HIGGSFIELD_MCP_TOKEN` as the bearer that endpoint asks for.
  *
- * Only the endpoint is ever read. The MCP server owns its own authentication,
- * and no credential is read, stored or logged anywhere on this path.
+ * The product never reads another tool's credential store, and the token it is
+ * handed lives in this process only: it is sent as one header, and it is never
+ * persisted, logged, echoed in an error or written to an event.
  */
 export function createRasterProvider(env: NodeJS.ProcessEnv = process.env): RasterProvider {
   const config = rasterMcpConfig(env);
@@ -47,20 +44,7 @@ function rasterMcpConfig(env: NodeJS.ProcessEnv): McpServerConfig | undefined {
   const command = env.PWB_HIGGSFIELD_MCP_COMMAND?.trim();
   if (command) return { command, args: (env.PWB_HIGGSFIELD_MCP_ARGS ?? '').split(' ').map((argument) => argument.trim()).filter(Boolean) };
   const url = env.PWB_HIGGSFIELD_MCP_URL?.trim();
-  if (url) return { url };
-  if (env.PWB_HIGGSFIELD_MCP?.trim() !== 'claude-code') return undefined;
-  return claudeCodeHiggsfield(env.HOME ?? homedir());
-}
-
-function claudeCodeHiggsfield(home: string): McpServerConfig | undefined {
-  let declared: unknown;
-  try { declared = JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8')); } catch { return undefined; }
-  const servers = (declared as { mcpServers?: Record<string, unknown> } | null)?.mcpServers;
-  const server = servers?.higgsfield as { url?: unknown; command?: unknown; args?: unknown } | undefined;
-  if (!server) return undefined;
-  if (typeof server.url === 'string' && server.url.trim()) return { url: server.url.trim() };
-  if (typeof server.command === 'string' && server.command.trim()) {
-    return { command: server.command.trim(), args: Array.isArray(server.args) ? server.args.filter((argument): argument is string => typeof argument === 'string') : [] };
-  }
-  return undefined;
+  if (!url) return undefined;
+  const token = env.PWB_HIGGSFIELD_MCP_TOKEN?.trim();
+  return { url, ...(token ? { token } : {}) };
 }

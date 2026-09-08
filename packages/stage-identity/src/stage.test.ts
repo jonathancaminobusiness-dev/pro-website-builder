@@ -7,7 +7,7 @@ import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
 import { identityAxisBriefs } from './axes.js';
-import { generateApprovedImagery, imageryPolicyViolations } from './art-director.js';
+import { imageryPolicyViolations, plannedImagery } from './art-director.js';
 import { directionVectorDraftSchemaFor, type ImagePromptPlan } from './contracts.js';
 import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
@@ -697,9 +697,12 @@ describe('image art director', () => {
     const { stage, store } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
     const result = await stage.run();
     const approval = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    // The gate closes on the planned images; the raster lane shoots them after.
+    expect(approval.assets.map((entry) => entry.status)).toEqual(['generating']);
+    await stage.imagerySettled();
     expect(calls).toHaveLength(result.candidates.find((candidate) => candidate.directionId === 'modular-technical')!.imagePlan!.plans.length);
-    expect(approval.assets).toHaveLength(1);
-    const [asset] = approval.assets;
+    expect(stage.approvedImagery).toHaveLength(1);
+    const [asset] = stage.approvedImagery;
     expect(asset?.status).toBe('ready');
     expect(asset?.provenance.license).toBe('provider terms 2026');
     expect(asset?.provenance.prompt).toBeTruthy();
@@ -707,7 +710,7 @@ describe('image art director', () => {
     expect(asset?.alt).toBeTruthy();
     // The stage may not write /assets, so the imagery travels on the handoff with its licence.
     const handed = stage.handoff()!;
-    expect(handed.assets.map((entry) => entry.id)).toEqual(approval.assets.map((entry) => entry.id));
+    expect(handed.assets.map((entry) => entry.id)).toEqual(stage.approvedImagery.map((entry) => entry.id));
     expect(handed.assets.every((entry) => entry.provenance.license.trim().length > 0)).toBe(true);
     expect(store.get(handed.versionId)!.ir.assets.items.some((entry) => entry.id.startsWith('asset-modular-technical'))).toBe(false);
   });
@@ -715,10 +718,11 @@ describe('image art director', () => {
   it('still records provenance when Higgsfield is not configured, instead of leaving a silent gap', async () => {
     const { stage } = harness();
     await stage.run();
-    const approval = await stage.approve({ directionId: 'editorial-material', rationale: 'Direção aprovada.', approverRole: 'captain' });
-    expect(approval.assets[0]?.status).toBe('placeholder');
-    expect(approval.assets[0]?.provenance.source).toMatch(/not configured/);
-    expect(approval.assets[0]?.provenance.license).toBeTruthy();
+    await stage.approve({ directionId: 'editorial-material', rationale: 'Direção aprovada.', approverRole: 'captain' });
+    await stage.imagerySettled();
+    expect(stage.approvedImagery[0]?.status).toBe('placeholder');
+    expect(stage.approvedImagery[0]?.provenance.source).toMatch(/not configured/);
+    expect(stage.approvedImagery[0]?.provenance.license).toBeTruthy();
   });
 
   it('takes two plans under one id as a schema failure, and keeps the corrected plan', async () => {
@@ -899,34 +903,44 @@ describe('image art director', () => {
     const calls: Array<Record<string, unknown>> = [];
     const { stage } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
     await stage.run();
-    const first = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    await stage.imagerySettled();
+    const first = stage.approvedImagery;
     expect(calls).toHaveLength(1);
 
     await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
     const again = await stage.approve({ directionId: 'modular-technical', rationale: 'Token revisado e aprovado.', approverRole: 'captain' });
-    // A token tweak is not a reshoot: the same prompt keeps the image it already produced.
+    await stage.imagerySettled();
+    // A token tweak is not a reshoot: the same prompt keeps the image it already
+    // produced, so nothing is queued on the raster lane at all.
     expect(calls).toHaveLength(1);
-    expect(again.assets).toEqual(first.assets);
-    expect(stage.handoff()!.assets.map((asset) => asset.provenance.hash)).toEqual(first.assets.map((asset) => asset.provenance.hash));
+    expect(again.assets).toEqual(first);
+    expect(stage.handoff()!.assets.map((asset) => asset.provenance.hash)).toEqual(first.map((asset) => asset.provenance.hash));
   });
 
-  it('asks again for an image the provider never finished, under the same digest', async () => {
+  it('asks again for an image the provider named no uri for, under the same digest', async () => {
     const calls: Array<Record<string, unknown>> = [];
     let uri: string | undefined;
     const { stage } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { ...(uri ? { uri } : {}), license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
     await stage.run();
-    // The MCP accepted the prompt but returned no image, so the handoff carries a placeholder.
-    const first = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
-    expect(first.assets.map((asset) => asset.status)).toEqual(['placeholder']);
+    // The MCP accepted the prompt and named no image, which is a recorded
+    // failure the captain can see, never a placeholder that looks unfinished.
+    await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    await stage.imagerySettled();
+    const first = stage.approvedImagery;
+    expect(first.map((asset) => asset.status)).toEqual(['failed']);
+    expect(first[0]?.provenance.termsNote).toMatch(/no image/);
 
     uri = 'higgsfield://asset-1';
     await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
-    const again = await stage.approve({ directionId: 'modular-technical', rationale: 'Token revisado e aprovado.', approverRole: 'captain' });
+    await stage.approve({ directionId: 'modular-technical', rationale: 'Token revisado e aprovado.', approverRole: 'captain' });
+    await stage.imagerySettled();
+    const again = stage.approvedImagery;
     // The unchanged digest is the idempotency key, so asking again costs nothing and picks up the finished image.
     expect(calls).toHaveLength(2);
     expect(calls[1]!.idempotency_key).toBe(calls[0]!.idempotency_key);
-    expect(again.assets.map((asset) => asset.status)).toEqual(['ready']);
-    expect(again.assets.map((asset) => asset.provenance.hash)).toEqual(first.assets.map((asset) => asset.provenance.hash));
+    expect(again.map((asset) => asset.status)).toEqual(['ready']);
+    expect(again.map((asset) => asset.provenance.hash)).toEqual(first.map((asset) => asset.provenance.hash));
     expect(stage.handoff()!.assets.map((asset) => asset.uri)).toEqual(['higgsfield://asset-1']);
   });
 
@@ -944,18 +958,48 @@ describe('image art director', () => {
     expect(violations.some((violation) => /allowed sources/.test(violation))).toBe(true);
   });
 
-  it('never submits a raster job for a direction that admits no generated source', async () => {
-    const calls: Array<Record<string, unknown>> = [];
-    const provider = new HiggsfieldMcpProvider({ configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } });
+  it('shoots on the raster lane after the gate closes, and a cancellation lands on the asset', async () => {
+    let reached: AbortSignal | undefined;
+    const transport = {
+      callTool: async (_name: string, _args: Record<string, unknown>, signal?: AbortSignal) => {
+        reached = signal;
+        // A server that accepts the prompt and never answers.
+        return new Promise<{ uri?: string }>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('the call was cancelled')), { once: true });
+        });
+      },
+    };
+    const { stage } = harness({ raster: { configured: true, transport } });
+    await stage.run();
+    const approval = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+
+    // The decision is recorded and returned while the image is still in flight.
+    expect(approval.assets.map((asset) => asset.status)).toEqual(['generating']);
+    expect(stage.gateState().state).toBe('closed');
+    expect(reached).toBeDefined();
+    expect(reached!.aborted).toBe(false);
+
+    await stage.cancelImagery();
+    expect(reached!.aborted).toBe(true);
+    const settled = stage.approvedImagery;
+    expect(settled.map((asset) => asset.status)).toEqual(['failed']);
+    expect(settled[0]?.provenance.termsNote).toMatch(/cancelled/);
+    // The image is gone; the decision it was shot for is not.
+    expect(settled[0]?.provenance.prompt).toBeTruthy();
+    expect(settled[0]?.provenance.termsNote).toMatch(/Expected licence:/);
+    expect(stage.gateState().state).toBe('closed');
+    expect(stage.handoff()!.assets.map((asset) => asset.id)).toEqual(settled.map((asset) => asset.id));
+  });
+
+  it('plans no image at all for a direction that admits no generated source', async () => {
     const plan: ImagePromptPlan = {
       schemaVersion: 1,
       directionId: 'typographic-low-chroma',
       plans: [{ id: 'texture-01', role: 'texture', prompt: 'Textura de papel impresso em duas tintas, luz rasante.', negatives: ['fotografia de banco'], aspect: '3:2', axis: 'materiality', alt: 'Textura.', licenceExpectation: 'Uso interno do proprietário.' }],
     };
-    const generated = await generateApprovedImagery(plan, { provider, identityVersionId: 'v-test', identity: fakeIdentityFor('typographic-low-chroma') });
-    expect(calls).toEqual([]);
-    expect(generated.jobs).toEqual([]);
-    expect(generated.assets).toEqual([]);
+    // Nothing is queued on the raster lane, so nothing can be submitted for it.
+    expect(plannedImagery(plan, { identity: fakeIdentityFor('typographic-low-chroma') })).toEqual([]);
+    expect(plannedImagery(plan, { identity: fakeIdentityFor('modular-technical') }).map((asset) => asset.status)).toEqual(['generating']);
   });
 });
 

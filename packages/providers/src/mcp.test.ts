@@ -65,10 +65,54 @@ describe('mcp tool transport', () => {
     expect(await new McpToolTransport({ url }).callTool('higgsfield_generate_image', {})).toMatchObject({ uri: 'higgsfield://asset-1' });
   });
 
-  it('turns inlined image bytes into the data URI a ready asset must carry', async () => {
-    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : { content: [{ type: 'image', mimeType: 'image/webp', data: 'AAAB' }] });
+  it('reads the url a tool returned as plain text', async () => {
+    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : { content: [{ type: 'text', text: 'Pronto: https://cdn.higgsfield.ai/x.png' }] });
     const url = await listen(fake);
-    expect(await new McpToolTransport({ url }).callTool('higgsfield_generate_image', {})).toEqual({ uri: 'data:image/webp;base64,AAAB' });
+    expect(await new McpToolTransport({ url }).callTool('higgsfield_generate_image', {})).toEqual({ uri: 'https://cdn.higgsfield.ai/x.png' });
+  });
+
+  it('records an answer it recognises no image in as a failed asset naming the shape', async () => {
+    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : { content: [{ type: 'audio' }], structuredContent: { jobId: 'j-1', state: 'running' } });
+    const url = await listen(fake);
+    const job = await new HiggsfieldMcpProvider({ configured: true, transport: new McpToolTransport({ url }) })
+      .submit({ id: 'asset-job', digest: 'digest', prompt: 'papel impresso', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' });
+
+    // An unanticipated shape is visible, not a job that merely looks unfinished.
+    expect(job.status).toBe('failed');
+    expect(job.provenance.termsNote).toContain('content: [audio]');
+    expect(job.provenance.termsNote).toContain('structuredContent: {jobId, state}');
+    // The keys are named; the values they held are not repeated.
+    expect(job.provenance.termsNote).not.toContain('j-1');
+  });
+
+  it('sends the bearer the owner supplied, and never repeats it when the server refuses', async () => {
+    const seen: Array<string | undefined> = [];
+    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : generated);
+    const url = await listen(fake);
+    fake.server.removeAllListeners('request');
+    fake.server.on('request', (incoming, response: ServerResponse) => {
+      seen.push(incoming.headers.authorization === undefined ? undefined : String(incoming.headers.authorization));
+      response.writeHead(401, { 'content-type': 'application/json' }).end('{}');
+    });
+    const job = await new HiggsfieldMcpProvider({ configured: true, transport: new McpToolTransport({ url, token: 'owner-bearer-value' }) })
+      .submit({ id: 'asset-job', digest: 'digest', prompt: 'papel impresso', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' });
+
+    expect(seen).toEqual(['Bearer owner-bearer-value']);
+    expect(job.status).toBe('failed');
+    expect(job.error).toContain('401');
+    expect(JSON.stringify(job)).not.toContain('owner-bearer-value');
+  });
+
+  it('drops a call the caller aborted instead of holding the endpoint open', async () => {
+    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : generated);
+    const url = await listen(fake);
+    fake.server.removeAllListeners('request');
+    fake.server.on('request', () => { /* accepted and never answered */ });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 30);
+    const job = await new HiggsfieldMcpProvider({ configured: true, transport: new McpToolTransport({ url }) })
+      .submit({ id: 'asset-job', digest: 'digest', prompt: 'papel impresso', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' }, controller.signal);
+    expect(job.status).toBe('failed');
   });
 
   it('records a tool error as a failed asset instead of failing the gate', async () => {

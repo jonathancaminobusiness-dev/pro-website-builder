@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ModelProvider } from '@pwb/providers';
+import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
@@ -366,6 +367,56 @@ describe('identity run', () => {
   it('does not invent a run the ledger never held', async () => {
     const run = new IdentityRun({ runId: 'never-created', repository: new ProjectRepository(database), provider: new FakeIdentityProvider() });
     expect(await run.restore()).toBe(false);
+  });
+
+  it('returns the gate decision while the imagery is still being shot, and settles it after', async () => {
+    const repository = new ProjectRepository(database);
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const raster = new HiggsfieldMcpProvider({
+      configured: true,
+      transport: { callTool: async () => { await held; return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } },
+    });
+    const run = new IdentityRun({ runId: 'identity-raster', repository, provider: new FakeIdentityProvider(), raster });
+    await run.initialize();
+    await run.start();
+
+    const approved = await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
+    expect(approved.gate.state).toBe('closed');
+    expect(approved.assets.map((asset) => asset.status)).toEqual(['generating']);
+
+    release();
+    // Cancelling waits for what is in flight, which is how the run learns the image settled.
+    await run.cancel();
+    const settled = run.snapshot();
+    expect(settled.assets.map((asset) => asset.status)).toEqual(['ready']);
+    expect(settled.handoff?.assets.map((asset) => asset.provenance.license)).toEqual(['provider terms 2026']);
+
+    // The settled image is on the checkpoint, so a restart does not show it generating forever.
+    const restored = new IdentityRun({ runId: 'identity-raster', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    expect(restored.snapshot().assets.map((asset) => asset.status)).toEqual(['ready']);
+  });
+
+  it('cancels imagery the raster lane never finished, keeping the decision', async () => {
+    const repository = new ProjectRepository(database);
+    const raster = new HiggsfieldMcpProvider({
+      configured: true,
+      transport: {
+        callTool: async (_name, _args, signal) => new Promise<{ uri?: string }>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('the call was cancelled')), { once: true });
+        }),
+      },
+    });
+    const run = new IdentityRun({ runId: 'identity-raster-cancel', repository, provider: new FakeIdentityProvider(), raster });
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
+
+    const cancelled = await run.cancel();
+    expect(cancelled.gate.state).toBe('closed');
+    expect(cancelled.assets.map((asset) => asset.status)).toEqual(['failed']);
+    expect(cancelled.status).toBe('approved');
   });
 
   it('refuses a rejection from anyone but the captain', async () => {

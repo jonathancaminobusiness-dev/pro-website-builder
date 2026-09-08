@@ -28,7 +28,7 @@ import { lintDesign, type LintFinding, type LintReport } from '@pwb/linter';
 import { Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider, RasterProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
-import { admitsGeneratedImagery, generateApprovedImagery, imageryPolicyViolations, type IdentityAsset } from './art-director.js';
+import { admitsGeneratedImagery, generateImageAsset, imageryPolicyViolations, plannedImagery, type IdentityAsset } from './art-director.js';
 import { identityAxisBrief, identityAxisBriefIds, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
 import { CandidateBranchStore, siblingsOf } from './branches.js';
 import {
@@ -63,8 +63,8 @@ export const IDENTITY_READABLE_PATHS = ['/identity', '/pages', '/assets', '/revi
 /** The identity stage's write scope, pinned to the stage and role the foundation assigns it. */
 export const IDENTITY_TASK_SCOPE: TaskScope = { allowedPaths: IDENTITY_ALLOWED_PATHS, stage: 'identity', role: stageRoles.identity };
 
-export interface IdentityStageDeadlines { curator: number; director: number; critic: number; refiner: number; artDirector: number; }
-export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 5 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000 };
+export interface IdentityStageDeadlines { curator: number; director: number; critic: number; refiner: number; artDirector: number; raster: number; }
+export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 5 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000, raster: 5 * 60_000 };
 
 export interface IdentityStageOptions {
   runId: string;
@@ -205,6 +205,8 @@ export class IdentityStage {
   private currentVersionId: string | undefined;
   private approvedAssets: IdentityAsset[] = [];
   private refinementCyclesUsed = 0;
+  private imagery: Promise<void> | undefined;
+  private imageryAbort: AbortController | undefined;
 
   constructor(private readonly options: IdentityStageOptions) {
     this.scheduler = options.scheduler ?? new Scheduler();
@@ -768,12 +770,89 @@ export class IdentityStage {
     // placed in the ledger by the stage that owns page media.
     let assets: IdentityAsset[] = [];
     if (candidate.imagePlan && this.options.raster) {
-      const generated = await generateApprovedImagery(candidate.imagePlan, { provider: this.options.raster, identityVersionId: version.id, identity: version.ir.identity, existing: this.approvedAssets, ...(input.signal ? { signal: input.signal } : {}) });
-      assets = generated.assets;
+      // The decision is recorded now and the shooting happens on the raster
+      // lane, which is what carries the deadline, the one-at-a-time limit and
+      // the abort. The captain gets the gate back immediately, holding the
+      // images this direction is about to be shot.
+      assets = plannedImagery(candidate.imagePlan, { identity: version.ir.identity, existing: this.approvedAssets });
       this.approvedAssets = assets;
-      await this.record('identity.imagery.generated', { directionId: candidate.directionId, assets: assets.map((asset) => ({ id: asset.id, status: asset.status, license: asset.provenance.license, hash: asset.provenance.hash })) });
+      await this.startImagery(candidate.imagePlan, version, input.signal);
     }
     return { record, assets, versionId: version.id };
+  }
+
+  /**
+   * One raster task per image, on the lane the foundation reserved for them:
+   * `maxActiveRaster` shoots one at a time, each task carries its own deadline,
+   * and the scheduler aborts the worker the moment the run is cancelled. The
+   * signal reaches the MCP client, so a stalled endpoint is dropped rather than
+   * held open.
+   */
+  private async startImagery(plan: ImagePromptPlan, version: VersionRecord, signal?: AbortSignal): Promise<void> {
+    await this.imagery;
+    const raster = this.options.raster;
+    if (!raster) return;
+    const pending = plan.plans.filter((item) => !this.approvedAssets.some((asset) => asset.id === `asset-${plan.directionId}-${item.id}` && asset.status === 'ready'));
+    if (pending.length === 0) return;
+    const controller = new AbortController();
+    this.imageryAbort = controller;
+    signal?.addEventListener('abort', () => controller.abort(), { once: true });
+    const tasks = pending.map((item) => this.task({
+      id: `identity-imagery-${plan.directionId}-${item.id}`,
+      role: 'art-director',
+      lane: 'raster',
+      deadlineMs: this.deadlines.raster,
+      allowedPaths: [],
+      ir: version.ir,
+      baseVersionId: version.id,
+      brief: item.prompt,
+    }));
+    for (const task of tasks) await this.record('identity.task.queued', { taskId: task.id, role: task.role, baseVersionId: task.baseVersionId, deadlineMs: task.deadlineMs });
+
+    this.imagery = (async () => {
+      const outcome = await this.scheduler.run(tasks, async (task, taskSignal) => {
+        const item = pending.find((entry) => task.id === `identity-imagery-${plan.directionId}-${entry.id}`)!;
+        return generateImageAsset(plan, item, { provider: raster, identityVersionId: version.id, identity: version.ir.identity, existing: this.approvedAssets, signal: taskSignal });
+      }, { signal: controller.signal });
+
+      for (const entry of outcome.results) {
+        if (entry.state === 'succeeded' && entry.value) { this.replaceAsset(entry.value.asset); continue; }
+        const reason = entry.error instanceof Error ? entry.error.message : `Task ${entry.task.id} ended as ${entry.state}.`;
+        this.failures.push({ taskId: entry.task.id, reason });
+        this.replaceAsset(this.failedAsset(entry.task.id, reason));
+      }
+      await this.record('identity.imagery.generated', {
+        directionId: plan.directionId,
+        cancelled: outcome.cancelled,
+        assets: this.approvedAssets.map((asset) => ({ id: asset.id, status: asset.status, license: asset.provenance.license, hash: asset.provenance.hash })),
+      });
+    })();
+  }
+
+  private replaceAsset(asset: IdentityAsset): void {
+    const index = this.approvedAssets.findIndex((entry) => entry.id === asset.id);
+    if (index < 0) this.approvedAssets = [...this.approvedAssets, asset];
+    else this.approvedAssets = this.approvedAssets.map((entry, position) => position === index ? asset : entry);
+  }
+
+  /** An image the lane could not finish keeps its prompt and licence expectation, and says why. */
+  private failedAsset(taskId: string, reason: string): IdentityAsset {
+    const id = taskId.replace('identity-imagery-', 'asset-');
+    const existing = this.approvedAssets.find((entry) => entry.id === id);
+    if (!existing) throw new StageError(`The raster task ${taskId} names no planned asset.`);
+    return { ...existing, status: 'failed', provenance: { ...existing.provenance, termsNote: `${existing.provenance.termsNote} Higgsfield MCP returned no image: ${reason}` } };
+  }
+
+  /** The imagery of the approved direction as it stands, in flight or settled. */
+  get approvedImagery(): IdentityAsset[] { return structuredClone(this.approvedAssets); }
+
+  /** Resolves once the imagery for the approved direction has settled, however it settled. */
+  async imagerySettled(): Promise<void> { await this.imagery; }
+
+  /** Drops imagery still in flight; the assets it did not finish stay recorded as failed. */
+  async cancelImagery(): Promise<void> {
+    this.imageryAbort?.abort();
+    await this.imagery;
   }
 
   /**
@@ -845,7 +924,7 @@ export class IdentityStage {
 
   // ---------------------------------------------------------------- plumbing
 
-  private task(input: { id: string; role: AgentTask['role']; deadlineMs: number; brief: string; allowedPaths: string[]; ir: DesignIR; baseVersionId?: string }): AgentTask {
+  private task(input: { id: string; role: AgentTask['role']; deadlineMs: number; brief: string; allowedPaths: string[]; ir: DesignIR; baseVersionId?: string; lane?: AgentTask['lane'] }): AgentTask {
     const baseVersionId = input.baseVersionId ?? this.options.baseVersionId;
     const documentSlice = documentSliceOf(input.ir, IDENTITY_READABLE_PATHS);
     return {
@@ -854,7 +933,7 @@ export class IdentityStage {
       stage: 'identity',
       role: input.role,
       state: 'queued',
-      lane: 'claude',
+      lane: input.lane ?? 'claude',
       baseVersionId,
       inputDigest: hashJson({ runId: this.options.runId, brief: input.brief, documentSlice }),
       promptVersion: IDENTITY_PROMPT_VERSION,

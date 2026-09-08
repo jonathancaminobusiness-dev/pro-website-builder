@@ -99,6 +99,7 @@ export class IdentityRun {
   private failure: string | undefined;
   private started = false;
   private inFlight: Promise<void> | undefined;
+  private settling: Promise<void> | undefined;
   private abort: AbortController | undefined;
 
   constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string }) {
@@ -198,6 +199,10 @@ export class IdentityRun {
   async cancel(): Promise<IdentityRunSnapshot> {
     this.abort?.abort();
     await this.inFlight;
+    // Imagery outlives the approve call, so cancelling the run has to reach it
+    // too; what it did not finish stays recorded as a failed asset.
+    await this.stage.cancelImagery();
+    await this.settling;
     return this.snapshot();
   }
 
@@ -215,7 +220,22 @@ export class IdentityRun {
     this.status = 'approved';
     this.result = this.stage.snapshot();
     await this.checkpoint();
+    // The gate is decided; the images are still being shot on the raster lane.
+    // The snapshot carries them as `generating` and is written again when they
+    // settle, so a restart reads what the lane actually produced.
+    this.settling = this.settleImagery();
     return this.snapshot();
+  }
+
+  private async settleImagery(): Promise<void> {
+    try {
+      await this.stage.imagerySettled();
+      this.assets = this.stage.approvedImagery;
+      this.result = this.stage.snapshot();
+      await this.checkpoint();
+    } catch (error) {
+      this.failure = error instanceof Error ? error.message : 'The imagery for the approved direction did not settle.';
+    }
   }
 
   async reject(input: { directionId: string; approverRole: string; rationale: string }): Promise<IdentityRunSnapshot> {

@@ -85,6 +85,16 @@ export default function App() {
     // the screen forgets it and offers to create or open another one.
     void identityGet(remembered).then(setIdentity, forgetIdentityRun);
   }, [identityGet]);
+
+  // Imagery is shot on the raster lane after the gate closes, so the decided
+  // screen follows it until every asset has settled.
+  const generating = identity?.assets.some((asset) => asset.status === 'generating') ?? false;
+  useEffect(() => {
+    if (!identity || !generating) return;
+    const runId = identity.runId;
+    const timer = setTimeout(() => { void identityGet(runId).then(setIdentity, () => undefined); }, 1500);
+    return () => { clearTimeout(timer); };
+  }, [generating, identity, identityGet]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
   const startIdentityRun = () => identity && identityAct(() => identityPost(`/api/identity/runs/${identity.runId}/start`));

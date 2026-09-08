@@ -1,22 +1,30 @@
 import type { RasterJob, RasterProvider, RasterRequest } from './raster.js';
 
-export interface HiggsfieldMcpTransport { callTool(name: string, arguments_: Record<string, unknown>): Promise<{ uri?: string; cost?: number; license?: string; termsNote?: string }>; }
+export interface HiggsfieldMcpTransport { callTool(name: string, arguments_: Record<string, unknown>, signal?: AbortSignal): Promise<{ uri?: string; cost?: number; license?: string; termsNote?: string }>; }
 
 export type HiggsfieldMcpOptions = { configured: false } | { configured: true; transport: HiggsfieldMcpTransport };
 
 export class HiggsfieldMcpProvider implements RasterProvider {
   constructor(private readonly options: HiggsfieldMcpOptions = { configured: false }) {}
 
-  async submit(request: RasterRequest): Promise<RasterJob> {
-    if (!this.options.configured) return { ...request, status: 'not_configured', provenance: { prompt: request.prompt, model: request.model, aspect: request.aspect, status: 'not_configured', license: 'pending provider terms', termsNote: 'Higgsfield MCP is not configured; placeholder asset only.', identityVersionId: request.identityVersionId } };
+  async submit(request: RasterRequest, signal?: AbortSignal): Promise<RasterJob> {
+    const provenance = (status: RasterJob['status'], license: string, termsNote: string): RasterJob['provenance'] =>
+      ({ prompt: request.prompt, model: request.model, aspect: request.aspect, status, license, termsNote, identityVersionId: request.identityVersionId });
+    if (!this.options.configured) return { ...request, status: 'not_configured', provenance: provenance('not_configured', 'pending provider terms', 'Higgsfield MCP is not configured; placeholder asset only.') };
     try {
-      const result = await this.options.transport.callTool('higgsfield_generate_image', { prompt: request.prompt, model: request.model, aspect: request.aspect, idempotency_key: request.digest });
-      return { ...request, status: result.uri ? 'succeeded' : 'queued', ...(result.uri ? { uri: result.uri } : {}), provenance: { prompt: request.prompt, model: request.model, aspect: request.aspect, status: result.uri ? 'succeeded' : 'queued', ...(result.cost === undefined ? {} : { cost: result.cost }), license: result.license ?? 'pending provider terms', termsNote: result.termsNote ?? 'Higgsfield MCP output requires owner review.', identityVersionId: request.identityVersionId } };
+      const result = await this.options.transport.callTool('higgsfield_generate_image', { prompt: request.prompt, model: request.model, aspect: request.aspect, idempotency_key: request.digest }, signal);
+      // An answer that names no image is a recorded failure, never a job left
+      // looking unfinished: the owner has to be able to tell the two apart.
+      if (!result.uri) throw new Error('The MCP tool answered with no image.');
+      return {
+        ...request,
+        status: 'succeeded',
+        uri: result.uri,
+        provenance: { ...provenance('succeeded', result.license ?? 'pending provider terms', result.termsNote ?? 'Higgsfield MCP output requires owner review.'), ...(result.cost === undefined ? {} : { cost: result.cost }) },
+      };
     } catch (error) {
-      // A provider that cannot answer is a failed asset, never a failed gate:
-      // the captain's decision is recorded and the image is asked for again.
       const reason = error instanceof Error ? error.message : 'The Higgsfield MCP call did not complete.';
-      return { ...request, status: 'failed', error: reason, provenance: { prompt: request.prompt, model: request.model, aspect: request.aspect, status: 'failed', license: 'pending provider terms', termsNote: `Higgsfield MCP returned no image: ${reason}`, identityVersionId: request.identityVersionId } };
+      return { ...request, status: 'failed', error: reason, provenance: provenance('failed', 'pending provider terms', `Higgsfield MCP returned no image: ${reason}`) };
     }
   }
 }

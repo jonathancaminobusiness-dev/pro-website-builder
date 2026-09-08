@@ -1,4 +1,4 @@
-import { createServer, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -20,8 +20,9 @@ afterEach(async () => {
 });
 
 // Ephemeral ports: several worktrees of this repo run their suites on one machine.
-async function mcpEndpoint(): Promise<string> {
+async function mcpEndpoint(watch: (headers: IncomingHttpHeaders) => void = () => undefined): Promise<string> {
   const server = createServer((incoming, response: ServerResponse) => {
+    watch(incoming.headers);
     const chunks: Buffer[] = [];
     incoming.on('data', (chunk: Buffer) => chunks.push(chunk));
     incoming.on('end', () => {
@@ -60,23 +61,20 @@ describe('raster provider selection', () => {
     expect(job.provenance).toMatchObject({ license: 'provider terms 2026', prompt: request.prompt, identityVersionId: 'v0' });
   });
 
-  it('reuses the higgsfield server the owner Claude Code already declares, and reads only its endpoint', async () => {
-    const url = await mcpEndpoint();
-    directory = await mkdtemp(join(tmpdir(), 'pwb-claude-home-'));
-    await writeFile(join(directory, '.claude.json'), JSON.stringify({
-      mcpServers: { higgsfield: { type: 'http', url }, other: { url: 'http://127.0.0.1:1/never' } },
-      oauthAccount: { accessToken: 'must-never-be-read' },
-    }), 'utf8');
-
-    const job = await createRasterProvider({ PWB_HIGGSFIELD_MCP: 'claude-code', HOME: directory }).submit(request);
+  it('sends the bearer the environment supplies and keeps it out of the job', async () => {
+    const seen: Array<string | undefined> = [];
+    const url = await mcpEndpoint((headers) => seen.push(headers.authorization === undefined ? undefined : String(headers.authorization)));
+    const job = await createRasterProvider({ PWB_HIGGSFIELD_MCP_URL: url, PWB_HIGGSFIELD_MCP_TOKEN: 'owner-bearer-value' }).submit(request);
     expect(job.status).toBe('succeeded');
-    expect(JSON.stringify(job)).not.toContain('must-never-be-read');
+    expect(new Set(seen)).toEqual(new Set(['Bearer owner-bearer-value']));
+    expect(JSON.stringify(job)).not.toContain('owner-bearer-value');
   });
 
-  it('keeps the placeholder path when the owner declares no higgsfield server', async () => {
-    directory = await mkdtemp(join(tmpdir(), 'pwb-claude-home-'));
-    await writeFile(join(directory, '.claude.json'), JSON.stringify({ mcpServers: {} }), 'utf8');
-    expect((await createRasterProvider({ PWB_HIGGSFIELD_MCP: 'claude-code', HOME: directory }).submit(request)).status).toBe('not_configured');
+  it('sends no authorization header when the owner supplies no token', async () => {
+    const seen: Array<string | undefined> = [];
+    const url = await mcpEndpoint((headers) => seen.push(headers.authorization === undefined ? undefined : String(headers.authorization)));
+    await createRasterProvider({ PWB_HIGGSFIELD_MCP_URL: url }).submit(request);
+    expect(seen.every((entry) => entry === undefined)).toBe(true);
   });
 
   it('starts the stdio server the environment names, with the arguments it lists', async () => {
