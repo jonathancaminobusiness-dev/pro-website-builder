@@ -40,9 +40,35 @@ describe('sqlite persistence', () => {
     await repo.saveTask(task, 'run-new');
     const tasks = (JSON.parse(repo.dump()) as { tasks: Array<{ id: string; run_id: string; attempt: number }> }).tasks;
     expect(tasks.map((row) => [row.id, row.run_id, row.attempt])).toEqual([['task-identity', 'run-new', 2]]);
-    expect((db.sqlite.pragma('user_version') as Array<{ user_version: number }>)[0]?.user_version).toBe(2);
+    expect((db.sqlite.pragma('user_version') as Array<{ user_version: number }>)[0]?.user_version).toBe(3);
     expect(Object.keys(JSON.parse(repo.dump()) as Record<string, unknown>)).not.toContain('assets');
     db.sqlite.close();
+  });
+
+  it('renames the imagery sources of a database written before the vocabulary closed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-imagery-'));
+    const file = join(dir, 'v2.sqlite');
+    const seeding = openDatabase(file);
+    const ir = createFixtureIR();
+    const stored = (id: string, allowedSources: string[]): void => {
+      const document = { ...ir, identity: { ...ir.identity, imagery: { ...ir.identity.imagery, allowedSources } } };
+      seeding.sqlite.prepare('INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)').run(id, 'fixture-project', null, `hash-${id}`, JSON.stringify(document), new Date().toISOString());
+    };
+    stored('v-raster', ['manual', 'higgsfield']);
+    stored('v-unknown', ['midjourney']);
+    seeding.sqlite.pragma('user_version = 2');
+    seeding.sqlite.close();
+
+    const upgraded = openDatabase(file);
+    const versions = await new ProjectRepository(upgraded).listVersions('fixture-project');
+    // Every row is still there, and every document parses again: the raster
+    // source under its new name, and one this build cannot generate from as
+    // `manual`.
+    expect(versions.map((version) => [version.id, version.ir.identity.imagery.allowedSources])).toEqual([
+      ['v-raster', ['manual', 'higgsfield-mcp']],
+      ['v-unknown', ['manual']],
+    ]);
+    upgraded.sqlite.close();
   });
 
   it('records captain decisions in order for a project', async () => {

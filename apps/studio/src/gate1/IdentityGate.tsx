@@ -74,7 +74,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [rationale, setRationale] = useState('');
   const [override, setOverride] = useState('');
   const [openRunId, setOpenRunId] = useState('');
-  const [confirmingCreate, setConfirmingCreate] = useState(false);
+  const [confirming, setConfirming] = useState('');
   const [tokenPath, setTokenPath] = useState('color.accent');
   const [tokenValue, setTokenValue] = useState('#ff7a00');
 
@@ -85,18 +85,27 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   </form>;
 
   /**
+   * The question the captain is being asked, if any: which run a new one would
+   * replace, and where it was asked. A yes that cannot be given where it was
+   * asked for — because the run started working, or because the screen now
+   * offers a different run — is dropped rather than carried somewhere else.
+   */
+  const asking = snapshot ? `run:${snapshot.runId}` : `recovery:${props.unreachableRunId}`;
+  if (confirming !== '' && (props.inFlight || confirming !== asking)) setConfirming('');
+
+  /**
    * Creating a run costs the one pointer this browser keeps, so it is never a
    * single click while another run is reachable: the id about to be replaced is
    * named and the captain says yes twice. While the run on screen is working
    * there is no second yes to give — the stop is the only way out of it.
    */
-  const createConfirm = (replacing: string, offer: string): ReactElement => confirmingCreate && !props.inFlight
+  const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !props.inFlight
     ? <div className="token-form open-run" role="group">
         <span>Uma execução nova substitui <code>{replacing}</code> como a que este navegador lembra.</span>
-        <button className="secondary" onClick={() => setConfirmingCreate(false)} disabled={props.busy}>Manter esta execução</button>
-        <button className="primary" onClick={() => { setConfirmingCreate(false); props.onCreate(); }} disabled={props.busy}>Criar mesmo assim</button>
+        <button className="secondary" onClick={() => setConfirming('')} disabled={props.busy}>Manter esta execução</button>
+        <button className="primary" onClick={() => { setConfirming(''); props.onCreate(); }} disabled={props.busy}>Criar mesmo assim</button>
       </div>
-    : <button className="secondary" onClick={() => setConfirmingCreate(true)} disabled={props.busy || props.inFlight}>{offer}</button>;
+    : <button className="secondary" onClick={() => setConfirming(asking)} disabled={props.busy || props.inFlight}>{offer}</button>;
 
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),

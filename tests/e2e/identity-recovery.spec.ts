@@ -41,8 +41,14 @@ test('a decided run survives an API outage and is reopened from the screen', asy
   await recovery.getByRole('button', { name: 'Manter esta execução' }).click();
   await expect(recovery).toContainText(runId);
 
+  // A question left unanswered here is not carried to the screen that follows.
+  await recovery.getByRole('button', { name: 'Criar execução nova' }).click();
+  await expect(recovery).toContainText('Uma execução nova substitui');
+
   await page.unroute('**/api/identity/**');
   await recovery.getByRole('button', { name: 'Tentar novamente' }).click();
+  await expect(page.getByText('Uma execução nova substitui')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Nova execução' })).toBeVisible();
 
   // The decision, and the run it belongs to, come back untouched.
   await expect(page.locator('.gate-record')).toContainText('Decisão registrada.');
@@ -61,10 +67,16 @@ test('the captain can stop a run before its gate, and it stays stopped', async (
   await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
   await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
 
+  // A question the captain opens and never answers before the run starts
+  // working is dropped, not held until the work ends.
+  await page.getByRole('button', { name: 'Nova execução' }).click();
+  await expect(page.getByText('Uma execução nova substitui')).toBeVisible();
+
   let releaseStart = (): void => {};
   const held = new Promise<void>((resolve) => { releaseStart = resolve; });
   await page.route('**/api/identity/runs/*/start', async (route) => { await held; await route.continue(); });
   await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await expect(page.getByText('Uma execução nova substitui')).toHaveCount(0);
 
   // The stop is offered only while there is something to stop, and while the
   // run is working it is the only way out: neither control that would replace
@@ -83,9 +95,11 @@ test('the captain can stop a run before its gate, and it stays stopped', async (
   await expect(page.getByRole('button', { name: 'Execução cancelada' })).toBeDisabled();
   await expect(page.locator('.direction-card')).toHaveCount(0);
   await expect(cancel).toHaveCount(0);
-  // Nothing is working any more, so both ways to another run come back.
+  // Nothing is working any more, so both ways to another run come back — as
+  // offers, not as the unanswered question the stop interrupted.
   await expect(page.getByLabel('Abrir outra execução')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Nova execução' })).toBeEnabled();
+  await expect(page.getByText('Uma execução nova substitui')).toHaveCount(0);
 });
 
 /**

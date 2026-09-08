@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createFixtureIR } from '@pwb/domain';
 import type { ModelProvider } from '@pwb/providers';
 import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
@@ -362,6 +363,32 @@ describe('identity run', () => {
     expect(snapshot.gate.state).toBe('open');
     release();
     await running;
+  });
+
+  it('reads a run back from a database written before the imagery vocabulary closed', async () => {
+    // The file the owner already has: written at schema version 2, holding a
+    // version whose identity names the raster source as it was named then.
+    const file = join(directory, 'v2.sqlite');
+    const seeding = openDatabase(file);
+    const ir = createFixtureIR();
+    const legacy = { ...ir, identity: { ...ir.identity, imagery: { ...ir.identity.imagery, allowedSources: ['manual', 'higgsfield'] } } };
+    const now = new Date().toISOString();
+    seeding.sqlite.prepare('INSERT INTO projects VALUES (?, ?, ?)').run('fixture-project', 'Fixture', now);
+    seeding.sqlite.prepare('INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)').run('v-legacy', 'fixture-project', null, 'hash-legacy', JSON.stringify(legacy), now);
+    seeding.sqlite.prepare('INSERT INTO runs VALUES (?, ?, ?)').run('identity-legacy', 'fixture-project', now);
+    seeding.sqlite.pragma('user_version = 2');
+    seeding.sqlite.close();
+
+    const upgraded = openDatabase(file);
+    const repository = new ProjectRepository(upgraded);
+    const run = new IdentityRun({ runId: 'identity-legacy', repository, provider: new FakeIdentityProvider() });
+    expect(await run.restore()).toBe(true);
+    expect(run.snapshot().status).toBe('queued');
+    // The run the owner already paid for is still theirs to run: the row was
+    // rewritten, not dropped.
+    expect((await repository.listVersions('fixture-project')).map((version) => version.id)).toContain('v-legacy');
+    expect((await run.start()).directions).toHaveLength(3);
+    upgraded.sqlite.close();
   });
 
   it('does not invent a run the ledger never held', async () => {
