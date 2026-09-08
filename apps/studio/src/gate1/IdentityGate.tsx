@@ -258,7 +258,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
 
       {snapshot.previewVersionId && <iframe title="Preview da identidade aprovada" className="preview-frame" sandbox="" src={`${props.previewOrigin}/preview/${encodeURIComponent(snapshot.previewVersionId)}/`} />}
 
-      {snapshot.failures.length > 0 && <ul className="blocker-list" aria-label="Falhas da execução">{snapshot.failures.map((failure) => <li key={failure.taskId}>{failure.taskId}: {failure.reason}</li>)}</ul>}
+      {snapshot.failures.length > 0 && <ul className="blocker-list" aria-label="Falhas da execução">{snapshot.failures.map((failure, position) => <li key={`${failure.taskId}#${position}`}>{failure.taskId}: {failure.reason}</li>)}</ul>}
       {snapshot.error && <p className="error-banner" role="alert">{snapshot.error}</p>}
     </>}
 

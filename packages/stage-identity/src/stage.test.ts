@@ -1026,6 +1026,35 @@ describe('image art director', () => {
     expect(stage.approvedImagery.map((asset) => asset.status)).toEqual(['ready']);
   });
 
+  it('shoots nothing more once the captain cancels, even for a batch that had not reached the lane', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    let entered = (): void => {};
+    const shooting = new Promise<void>((resolve) => { entered = resolve; });
+    const transport = {
+      callTool: async (_name: string, args: Record<string, unknown>, signal?: AbortSignal) => {
+        calls.push(args);
+        entered();
+        return new Promise<{ uri?: string }>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('the call was cancelled')), { once: true });
+        });
+      },
+    };
+    const { stage } = harness({ raster: { configured: true, transport } });
+    await stage.run();
+    await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    await shooting;
+    expect(calls).toHaveLength(1);
+
+    // A re-approval parks behind the batch on the lane, so this second batch is
+    // cancelled before it ever reaches the scheduler.
+    await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    await stage.approve({ directionId: 'modular-technical', rationale: 'Token revisado e aprovado.', approverRole: 'captain' });
+    await stage.cancelImagery();
+
+    expect(calls).toHaveLength(1);
+    expect(stage.approvedImagery.map((asset) => asset.status)).toEqual(['failed']);
+  });
+
   it('refuses to submit for a direction whose contract admits no generated source', async () => {
     const calls: Array<Record<string, unknown>> = [];
     const provider = new HiggsfieldMcpProvider({ configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'x', termsNote: 'y' }; } } });
