@@ -5,7 +5,7 @@ import { auditHtmlDocument, auditRouteCoverage, scanBundleSecrets } from './audi
 import { isFallbackFailure, needsColorFallback, srgbFallbackValue, supportsConditionFor } from './css-color.js';
 import { planCsp } from './csp.js';
 import { planFonts, type FontDecision, type FontSource } from './fonts.js';
-import { extractInlineStyles, replaceOnce, styleRules, type ExtractedStyle } from './html-scan.js';
+import { extractInlineStyles, replaceOnce, scanTags, styleRules, unescapeHtml, type ExtractedStyle } from './html-scan.js';
 import { buildLicenseInventory, isUsableLicense, type LicenseInventory } from './licenses.js';
 import { headTags, robotsTxt, routeMetadata, sitemapXml, type RouteMetadata } from './metadata.js';
 
@@ -126,6 +126,27 @@ function applyColorFallbacks(css: string, ir: DesignIR): { css: string; vetoes: 
   return { css: rewritten + css.slice(cursor), vetoes };
 }
 
+/**
+ * The assets whose bytes the bundle ships, read back out of the documents the
+ * compiler wrote. Only a `data:` asset a document references travels inside the
+ * bundle: a document that points at a remote URI ships nothing, and an asset no
+ * page references is never written at all.
+ */
+function bundledAssetIds(documents: string[], ir: DesignIR): Set<string> {
+  const referenced = new Set<string>();
+  for (const document of documents) {
+    let tags;
+    try { tags = scanTags(document); }
+    catch { continue; }
+    for (const tag of tags) {
+      if (tag.closing) continue;
+      const source = tag.attributes.find((attribute) => attribute.name === 'src');
+      if (source) referenced.add(unescapeHtml(source.value));
+    }
+  }
+  return new Set(ir.assets.items.filter((asset) => asset.uri.startsWith('data:') && referenced.has(asset.uri)).map((asset) => asset.id));
+}
+
 const STYLESHEET_PLACEHOLDER = '__PWB_STYLESHEET_HREF__';
 
 /**
@@ -192,7 +213,8 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   files.push({ path: stylesheetPath, contents: stylesheet });
   files.push(...fontPlan.files);
 
-  const licenses = buildLicenseInventory(ir, fontPlan.decisions, { rendererVersion: rendered.rendererVersion, compilerVersion: COMPILER_VERSION });
+  const documents = files.flatMap((file) => (file.path.endsWith('.html') && typeof file.contents === 'string' ? [file.contents] : []));
+  const licenses = buildLicenseInventory(ir, fontPlan.decisions, { rendererVersion: rendered.rendererVersion, compilerVersion: COMPILER_VERSION }, bundledAssetIds(documents, ir));
   for (const missing of licenses.missing) vetoes.push({ id: 'ASSET_WITHOUT_LICENSE', detector: 'compiler', where: missing.id, detail: missing.detail });
 
   files.push({ path: 'sitemap.xml', contents: sitemapXml(metadata) });

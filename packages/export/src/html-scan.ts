@@ -50,7 +50,8 @@ export function scanTags(html: string): ScannedTag[] {
 export interface ExtractedStyle { pageId: string; nodeId: string; declarations: string; }
 export interface StyleExtraction { html: string; styles: ExtractedStyle[]; }
 
-function unescapeHtml(value: string): string {
+/** The text a browser decodes from renderer output; a value is still itself after the entities go. */
+export function unescapeHtml(value: string): string {
   return value.replaceAll('&quot;', '"').replaceAll('&#39;', "'").replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
 }
 

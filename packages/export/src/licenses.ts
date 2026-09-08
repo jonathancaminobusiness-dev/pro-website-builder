@@ -2,9 +2,10 @@ import type { DesignIR } from '@pwb/domain';
 import type { FontDecision } from './fonts.js';
 
 /**
- * One row of the release licence inventory. Every byte the bundle ships has a
- * row: rasters and vectors from the IR, self-hosted font files, and the
- * toolchain that produced the HTML and CSS.
+ * One row of the release licence inventory: rasters and vectors from the IR,
+ * font faces, and the toolchain that produced the HTML and CSS. `bundled` says
+ * whether the bundle carries that row's bytes, so a row is a disclosure and
+ * never a claim the published artifact cannot keep.
  */
 export interface LicenseEntry {
   id: string;
@@ -42,14 +43,14 @@ export function isUsableLicense(license: string): boolean {
   return !blank(license) && !UNRESOLVED_LICENSES.has(license.trim().toLowerCase());
 }
 
-export function buildLicenseInventory(ir: DesignIR, fonts: FontDecision[], toolchain: { rendererVersion: string; compilerVersion: string }): LicenseInventory {
+export function buildLicenseInventory(ir: DesignIR, fonts: FontDecision[], toolchain: { rendererVersion: string; compilerVersion: string }, bundledAssets: ReadonlySet<string>): LicenseInventory {
   const entries: LicenseEntry[] = [];
   const missing: LicenseInventory['missing'] = [];
   const warnings: LicenseInventory['warnings'] = [];
 
   for (const asset of [...ir.assets.items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
     const { provenance } = asset;
-    const bundled = asset.status === 'ready';
+    const bundled = bundledAssets.has(asset.id);
     entries.push({
       id: asset.id,
       kind: asset.kind,
@@ -64,8 +65,8 @@ export function buildLicenseInventory(ir: DesignIR, fonts: FontDecision[], toolc
     });
     if (isUsableLicense(provenance.license)) continue;
     const detail = `Asset ${asset.id} carries the licence "${provenance.license}", which does not clear it for release.`;
-    // Only what the bundle ships can be published without terms; an unbundled
-    // placeholder is named for the captain rather than treated as a veto.
+    // Only what the bundle ships can be published without terms; an asset the
+    // release never carries is named for the captain rather than vetoed.
     (bundled ? missing : warnings).push({ id: asset.id, detail });
   }
 

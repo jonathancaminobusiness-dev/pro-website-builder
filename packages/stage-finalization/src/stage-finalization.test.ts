@@ -31,6 +31,13 @@ function compiledFixture(mutate?: (ir: DesignIR) => void) {
   return { ir, compiled: compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS) };
 }
 
+/** The fixture showing the mark it declares, so an unlicensed asset is bytes the bundle ships. */
+function withInlinedMark(ir: DesignIR): void {
+  const home = ir.pages.routes[0]!;
+  home.nodes.find((node) => node.id === 'home-root')!.slots.children!.push('home-mark');
+  home.nodes.push({ id: 'home-mark', kind: 'media', semantic: 'figure', props: { text: 'Marca da oficina' }, slots: {}, assetId: 'fixture-mark', responsive: [] });
+}
+
 const FIXTURE_FACE = {
   family: 'Fixture Sans', weight: '400', style: 'normal' as const, format: 'woff2' as const,
   bytes: new Uint8Array([119, 79, 70, 50, 4, 3, 2, 1]),
@@ -304,7 +311,7 @@ describe('Gate 3', () => {
   });
 
   it('blocks on a veto the compiler found', () => {
-    const { ir } = compiledFixture();
+    const { ir } = compiledFixture(withInlinedMark);
     ir.assets.items[0]!.provenance.license = '';
     const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
     const report = evaluateReleaseGate(gateInput({
@@ -357,7 +364,7 @@ describe('Gate 3', () => {
   });
 
   it('escalates an unbundled asset without terms instead of blocking on it', () => {
-    const { ir } = compiledFixture();
+    const { ir } = compiledFixture(withInlinedMark);
     ir.assets.items[0]!.status = 'placeholder';
     ir.assets.items[0]!.provenance.license = 'pending provider terms';
     const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
@@ -372,7 +379,7 @@ describe('Gate 3', () => {
   });
 
   it('still blocks when the bundle ships an asset without terms', () => {
-    const { ir } = compiledFixture();
+    const { ir } = compiledFixture(withInlinedMark);
     ir.assets.items[0]!.provenance.license = 'pending provider terms';
     const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
     const report = evaluateReleaseGate(gateInput({
@@ -393,7 +400,7 @@ describe('Gate 3', () => {
     const shouting: ReleaseCritique[] = RELEASE_CRITICS.map((critic) => ({ taskId: critic.taskId, dimension: critic.dimension, verdict: 'revise', rubricScore: 0, summary: 'tudo errado', findings: [{ id: 'x', severity: 'error', route: '/', evidenceRef: 'e', cause: 'c', suggestion: { kind: 'token', path: '/pages', note: 'n' } }] }));
     expect(evaluateReleaseGate(gateInput({ critiques: shouting })).vetoes).toEqual([]);
 
-    const { ir } = compiledFixture();
+    const { ir } = compiledFixture(withInlinedMark);
     ir.assets.items[0]!.provenance.license = '';
     const compiled = compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS);
     const lying = { headline: 'tudo certo', highlights: [], openQuestions: [], vetoCount: 0, gateAuthority: 'none' as const };

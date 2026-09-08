@@ -1,5 +1,5 @@
 import { semanticSchema, type ReleaseVeto } from '@pwb/domain';
-import { scanTags } from './html-scan.js';
+import { scanTags, unescapeHtml } from './html-scan.js';
 
 export interface AuditableFile { path: string; contents: string | Uint8Array }
 
@@ -47,17 +47,13 @@ function textOf(file: AuditableFile): string | undefined {
   return undefined;
 }
 
-/** The renderer escapes quotes, and a secret is still a secret after the browser decodes them. */
-function decodeEntities(text: string): string {
-  return text.replaceAll('&quot;', '"').replaceAll('&#39;', "'").replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
-}
-
 export function scanBundleSecrets(files: AuditableFile[]): ReleaseVeto[] {
   const vetoes: ReleaseVeto[] = [];
   for (const file of files) {
     const text = textOf(file);
     if (text === undefined) continue;
-    const decoded = decodeEntities(text);
+    // The renderer escapes quotes, and a secret is still a secret after the browser decodes them.
+    const decoded = unescapeHtml(text);
     for (const [name, pattern] of SECRET_PATTERNS) {
       if (pattern.test(text) || pattern.test(decoded)) vetoes.push({ id: 'SECRET_IN_BUNDLE', detector: 'compiler', where: file.path, detail: `The bundle file ${file.path} contains a ${name}.` });
     }

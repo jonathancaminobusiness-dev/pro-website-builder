@@ -14,19 +14,28 @@ function compileFixture(mutate?: (ir: DesignIR) => void): CompiledSite {
   return compileRelease(renderDesign(ir), ir, OPTIONS);
 }
 
-const DATA_IMAGE = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=';
+/** The fixture home page showing the mark it declares, so the bundle carries the asset's bytes. */
+function withInlinedMark(ir: DesignIR): void {
+  const home = ir.pages.routes[0]!;
+  home.nodes.find((node) => node.id === 'home-root')!.slots.children!.push('home-mark');
+  home.nodes.push({ id: 'home-mark', kind: 'media', semantic: 'figure', props: { text: 'Marca da oficina' }, slots: {}, assetId: 'fixture-mark', responsive: [] });
+}
 
 /** The fixture home page extended with the three semantics its own document never exercises. */
 function withInteractiveHome(ir: DesignIR): void {
-  ir.assets.items[0]!.uri = DATA_IMAGE;
   const home = ir.pages.routes[0]!;
-  home.nodes.find((node) => node.id === 'home-root')!.slots.children!.push('home-root-link', 'home-proof-link', 'home-cta', 'home-mark');
+  home.nodes.find((node) => node.id === 'home-root')!.slots.children!.push('home-root-link', 'home-proof-link', 'home-cta');
   home.nodes.push(
     { id: 'home-root-link', kind: 'component', semantic: 'link', props: { text: 'Início', href: '/' }, slots: {}, responsive: [] },
     { id: 'home-proof-link', kind: 'component', semantic: 'link', props: { text: 'Ver a prova', href: '/proof' }, slots: {}, responsive: [] },
     { id: 'home-cta', kind: 'component', semantic: 'button', props: { text: 'Falar com a oficina' }, slots: {}, responsive: [] },
-    { id: 'home-mark', kind: 'media', semantic: 'figure', props: { text: 'Marca da oficina' }, slots: {}, assetId: 'fixture-mark', responsive: [] },
   );
+  withInlinedMark(ir);
+}
+
+/** One licence inventory row of the compiled bundle, read out of the published `licenses.json`. */
+function licenseRow(compiled: CompiledSite, id: string): { bundled: boolean } | undefined {
+  return (JSON.parse(fileText(compiled, 'licenses.json')) as Array<{ id: string; bundled: boolean }>).find((entry) => entry.id === id);
 }
 
 function fileText(compiled: CompiledSite, path: string): string {
@@ -126,7 +135,7 @@ describe('deterministic release compiler', () => {
     const home = fileText(compiled, 'index.html');
     expect(home).toContain('<a href="/proof"');
     expect(home).toContain('<button type="button"');
-    expect(home).toContain(`<img src="${DATA_IMAGE}"`);
+    expect(home).toContain(`<img src="${ir.assets.items[0]!.uri}"`);
   });
 
   it('resolves a link to the site root as well as to a nested route, base path or not', () => {
@@ -146,7 +155,7 @@ describe('deterministic release compiler', () => {
 
 describe('release vetoes', () => {
   it('refuses to export an asset without a usable licence', async () => {
-    const compiled = compileFixture((ir) => { ir.assets.items[0]!.provenance.license = '  '; });
+    const compiled = compileFixture((ir) => { withInlinedMark(ir); ir.assets.items[0]!.provenance.license = '  '; });
     expect(compiled.vetoes.map((veto) => veto.id)).toContain('ASSET_WITHOUT_LICENSE');
     const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
     try {
@@ -156,7 +165,7 @@ describe('release vetoes', () => {
   });
 
   it('treats an unresolved licence placeholder as no licence at all', () => {
-    const compiled = compileFixture((ir) => { ir.assets.items[0]!.provenance.license = 'pending provider terms'; });
+    const compiled = compileFixture((ir) => { withInlinedMark(ir); ir.assets.items[0]!.provenance.license = 'pending provider terms'; });
     expect(compiled.vetoes.map((veto) => veto.id)).toContain('ASSET_WITHOUT_LICENSE');
   });
 
@@ -392,11 +401,37 @@ describe('colour and font fallbacks in the compiled stylesheet', () => {
     expect(fileText(compiled, 'licenses.json')).toContain('Proprietary Grotesk');
   });
 
-  it('lists every asset, font and the toolchain in the licence inventory', () => {
+});
+
+describe('the licence inventory names only the bytes the bundle ships', () => {
+  it('lists every asset, font and the toolchain', () => {
     const compiled = compileFixture();
     const inventory = JSON.parse(fileText(compiled, 'licenses.json')) as Array<{ id: string }>;
     expect(inventory.map((entry) => entry.id)).toContain('fixture-mark');
     expect(inventory.map((entry) => entry.id)).toContain('toolchain:pro-website-builder');
+  });
+
+  it('marks an asset the document inlines as bundled and carries its bytes in the route', () => {
+    const compiled = compileFixture(withInlinedMark);
+    expect(licenseRow(compiled, 'fixture-mark')?.bundled).toBe(true);
+    expect(fileText(compiled, 'index.html')).toContain(createFixtureIR().assets.items[0]!.uri);
+  });
+
+  it('does not claim an asset no page references, and escalates its terms instead of vetoing', () => {
+    const compiled = compileFixture((ir) => { ir.assets.items[0]!.provenance.license = 'pending provider terms'; });
+    expect(licenseRow(compiled, 'fixture-mark')?.bundled).toBe(false);
+    expect(compiled.vetoes.map((veto) => veto.id)).not.toContain('ASSET_WITHOUT_LICENSE');
+    expect(compiled.licenses.warnings.map((warning) => warning.id)).toContain('fixture-mark');
+  });
+
+  it('does not claim an asset the page shows no image for, remote or not', () => {
+    const remote = 'https://higgsfield.example/mark.png';
+    const compiled = compileFixture((ir) => {
+      withInlinedMark(ir);
+      ir.assets.items[0] = { ...ir.assets.items[0]!, uri: remote, status: 'placeholder' };
+    });
+    expect(licenseRow(compiled, 'fixture-mark')?.bundled).toBe(false);
+    expect(fileText(compiled, 'index.html')).not.toContain('<img');
   });
 });
 
