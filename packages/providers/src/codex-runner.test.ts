@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -59,17 +59,26 @@ describe('Codex provider', () => {
   });
 
   it('passes closed schemas to direct Codex responses', async () => {
-    const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false };
-    let args: string[] = [];
-    const runner = new CodexJsonRunner({
-      execute: async (_executable, receivedArgs) => {
-        args = receivedArgs;
-        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'ok' }) } })}\n`, stderr: '' };
-      },
-    });
+    const directory = await mkdtemp(join(tmpdir(), 'pwb-codex-schema-'));
+    try {
+      const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false };
+      let args: string[] = [];
+      const runner = new CodexJsonRunner({
+        cwd: directory,
+        execute: async (_executable, receivedArgs) => {
+          args = receivedArgs;
+          const schemaPath = receivedArgs[receivedArgs.indexOf('--output-schema') + 1]!;
+          expect(schemaPath).not.toBe(JSON.stringify(schema));
+          await expect(readFile(schemaPath, 'utf8').then((text) => JSON.parse(text))).resolves.toEqual(schema);
+          return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'ok' }) } })}\n`, stderr: '' };
+        },
+      });
 
-    await expect(runner.run({ prompt: 'fixture', schema, deadlineMs: 1000 })).resolves.toEqual({ answer: 'ok' });
-    expect(args).toEqual(expect.arrayContaining(['--output-schema', JSON.stringify(schema)]));
+      await expect(runner.run({ prompt: 'fixture', schema, deadlineMs: 1000 })).resolves.toEqual({ answer: 'ok' });
+      expect(args).toEqual(expect.arrayContaining(['--output-schema', expect.any(String)]));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('reports an actionable error when the Codex CLI is unavailable', async () => {
