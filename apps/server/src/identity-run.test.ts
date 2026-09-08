@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
+import { lintDesign } from '@pwb/linter';
 import type { ModelProvider } from '@pwb/providers';
 import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
@@ -94,6 +95,32 @@ describe('identity run', () => {
       await expect(run.approve({ directionId, approverRole: 'captain', rationale: 'Gosto dessa.' })).rejects.toThrow(/editorial-material and modular-technical differ/);
     }
     expect(snapshot.directions.find((direction) => direction.directionId === 'typographic-low-chroma')!.blockedPairs).toEqual([]);
+  });
+
+  it('keeps a page-graph finding off the Gate 1 card the decision cannot clear', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-director-editorial-material' || !result.proposal) return result;
+        const base = fakeIdentityFor('editorial-material');
+        const identity = { ...base, content: { ...base.content, forbiddenTerms: [...base.content.forbiddenTerms, 'brilho'] } };
+        return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: identity }] } };
+      },
+    };
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({ runId: 'identity-copy110', repository, provider });
+    await run.initialize();
+    const opened = await run.start();
+    const candidate = opened.directions.find((direction) => direction.directionId === 'editorial-material')!;
+    expect(candidate.lintErrors.map((finding) => finding.id)).not.toContain('COPY-110');
+
+    // The document really does carry the finding; it names /pages, which this stage cannot write.
+    const approved = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'A voz proibida é do protótipo, não da identidade.' });
+    const stored = (await repository.listVersions('fixture-project')).find((version) => version.id === approved.previewVersionId)!;
+    expect(lintDesign(stored.ir).findings.some((finding) => finding.id === 'COPY-110')).toBe(true);
+    const chosen = approved.directions.find((direction) => direction.directionId === 'editorial-material')!;
+    expect(chosen.lintErrors.map((finding) => finding.id)).not.toContain('COPY-110');
   });
 
   it('records the captain decision and serves the approved version to the preview', async () => {

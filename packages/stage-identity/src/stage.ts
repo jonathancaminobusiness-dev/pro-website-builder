@@ -114,7 +114,7 @@ export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[];
  * `stageWritablePaths.identity` keeps out of this stage's reach, so its finding can never be a Gate 1
  * blocker and never travels on a candidate; only findings under a path this stage may write do.
  */
-function identityLint(ir: DesignIR): LintReport {
+export function identityLint(ir: DesignIR): LintReport {
   const findings = lintDesign(ir).findings.filter((finding) => IDENTITY_ALLOWED_PATHS.some((path) => finding.path === path || finding.path.startsWith(`${path}/`)));
   return { findings, errorCount: findings.filter((finding) => finding.severity === 'error').length, warningCount: findings.filter((finding) => finding.severity === 'warning').length };
 }

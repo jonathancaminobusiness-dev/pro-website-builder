@@ -71,7 +71,7 @@ export function cssTokenIssues(values: Record<string, string | number | boolean>
 }
 
 const tokenValueShapes: Partial<Record<z.infer<typeof tokenTypeSchema>, { accepts: (value: TokenValue) => boolean; expects: string }>> = {
-  color: { accepts: (value) => typeof value === 'string' && (/^#[0-9a-fA-F]{3,8}$/.test(value) || /^(rgb|rgba|hsl|hsla|oklch|lab|color)\(/.test(value)), expects: 'a hex colour or a CSS colour function' },
+  color: { accepts: (value) => typeof value === 'string' && (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value) || /^(rgb|rgba|hsl|hsla|oklch|lab|color)\(/.test(value)), expects: 'a hex colour or a CSS colour function' },
   dimension: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 2rem' },
   borderRadius: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 0.25rem' },
   fontSize: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 1.25rem' },

@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { createFixtureIR, flattenTokens, type Approval, type TokenValue } from '@pwb/domain';
-import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
-import { approvalOf, identityHash, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
+import { approvalOf, identityHash, identityLint, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 
 const duplicateCodes = new Set(['SQLITE_CONSTRAINT_PRIMARYKEY', 'SQLITE_CONSTRAINT_UNIQUE']);
@@ -365,7 +364,7 @@ export class IdentityRun {
 
   private viewOf(candidate: IdentityCandidate, current?: VersionRecord): IdentityDirectionView {
     const identity = current?.ir.identity ?? candidate.identity;
-    const lint = current ? lintDesign(current.ir) : candidate.lint;
+    const lint = current ? identityLint(current.ir) : candidate.lint;
     const swatches = [...flattenTokens(identity.tokens)]
       .filter(([path]) => path.startsWith('color.'))
       .map(([path, token]) => ({ path, value: String(token.$value) }));
