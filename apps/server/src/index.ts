@@ -55,7 +55,13 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   const releaseRoot = options.releaseRoot ?? process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
   const evidenceDir = options.evidenceDir ?? process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
   await mkdir(releaseRoot, { recursive: true });
-  const release = { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake' };
+  // Gate 3 compares the faces the captain was actually served against the ones
+  // the bundle ships, so the preview is read when a release is prepared.
+  const release = {
+    releaseRoot, evidenceDir, fontsDir, siteUrl, siteName,
+    modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
+    previewFaces: () => preview.servedFaces(),
+  };
   const api = createApiServer({
     runs,
     prototypes: registry,

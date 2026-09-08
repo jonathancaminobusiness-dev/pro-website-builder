@@ -31,6 +31,17 @@ function compiledFixture(mutate?: (ir: DesignIR) => void) {
   return { ir, compiled: compileRelease(renderDesign(ir), ir, COMPILER_OPTIONS) };
 }
 
+const FIXTURE_FACE = {
+  family: 'Fixture Sans', weight: '400', style: 'normal' as const, format: 'woff2' as const,
+  bytes: new Uint8Array([119, 79, 70, 50, 4, 3, 2, 1]),
+  license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07',
+};
+
+function compiledWithFace() {
+  const ir = createFixtureIR();
+  return { ir, compiled: compileRelease(renderDesign(ir), ir, { ...COMPILER_OPTIONS, fonts: [FIXTURE_FACE] }) };
+}
+
 function artifact(overrides: Partial<EvidenceArtifact> & Pick<EvidenceArtifact, 'id' | 'runner' | 'engine'>): EvidenceArtifact {
   return {
     route: '/', state: 'default', status: 'passed', path: `${overrides.id}.json`, hash: 'hash', metrics: {}, notes: [],
@@ -144,6 +155,20 @@ describe('preview and release parity', () => {
     const home = compiled.files.find((file) => file.path === 'index.html')!;
     home.contents = (home.contents as string).replace('Toda escolha tem motivo.', 'Outra coisa.');
     expect(checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir)).matched).toBe(false);
+  });
+
+  it('reports identical routes when the preview served the faces the release ships', () => {
+    const { ir, compiled } = compiledWithFace();
+    expect(checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir), compiled.fonts).matched).toBe(true);
+  });
+
+  it('catches a release that ships a face the preview never served', () => {
+    const { ir, compiled } = compiledWithFace();
+    // The face the captain was served before the file behind it was replaced.
+    const served = compiled.fonts.map((decision) => ({ ...decision, path: 'assets/fonts/fixture-sans-400-normal.000000000000.woff2', hash: '0'.repeat(64) }));
+    const report = checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir), served);
+    expect(report.matched).toBe(false);
+    for (const route of report.routes) expect(route.differences.join(' ')).toMatch(/A face Fixture Sans 400 normal tem arquivos diferentes/);
   });
 });
 

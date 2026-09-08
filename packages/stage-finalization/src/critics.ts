@@ -32,8 +32,8 @@ export const RELEASE_CRITICS: CriticDefinition[] = [
   {
     dimension: 'semantics-seo',
     taskId: 'release-critic-semantics-seo',
-    reads: ['compiler', 'lighthouse'],
-    rubric: 'Score the semantic structure and the per-route metadata: element choice, heading hierarchy, title and description usefulness, canonical URLs, Open Graph completeness and sitemap agreement. Structured data counts only when it is complete and true.',
+    reads: ['lighthouse'],
+    rubric: 'Score the semantic structure and the per-route metadata: element choice, heading hierarchy, title and description usefulness, canonical URLs, Open Graph completeness and sitemap agreement. Read the compiled bundle in /release for what the release states; structured data counts only when it is complete and true.',
     deadlineMs: THREE_MINUTES,
   },
   {
@@ -46,15 +46,15 @@ export const RELEASE_CRITICS: CriticDefinition[] = [
   {
     dimension: 'asset-performance',
     taskId: 'release-critic-asset-performance',
-    reads: ['lighthouse', 'compiler'],
-    rubric: 'Score asset weight and delivery: bundle size per route, stylesheet size, font strategy and display, image dimensions and priority. Judge against the Core Web Vitals thresholds, and say plainly that a laboratory run is not field data.',
+    reads: ['lighthouse'],
+    rubric: 'Score asset weight and delivery: bundle size per route, stylesheet size, font strategy and display, image dimensions and priority. Read the compiled bundle in /release for the bytes each route ships; judge against the Core Web Vitals thresholds, and say plainly that a laboratory run is not field data.',
     deadlineMs: THREE_MINUTES,
   },
   {
     dimension: 'provenance-security',
     taskId: 'release-critic-provenance-security',
-    reads: ['compiler', 'vitest'],
-    rubric: 'Score provenance, licensing and the delivered security posture: every asset and face traced to a source and terms, the policy matching what the bundle contains, and no credential anywhere in the output.',
+    reads: ['vitest'],
+    rubric: 'Score provenance, licensing and the delivered security posture: every asset and face traced to a source and terms, the policy matching what the bundle contains, and no credential anywhere in the output. The compiled bundle in /release carries the licence inventory, the policy and the faces the release ships.',
     deadlineMs: THREE_MINUTES,
   },
 ];

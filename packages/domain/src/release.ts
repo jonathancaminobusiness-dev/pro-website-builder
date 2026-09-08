@@ -75,7 +75,7 @@ export const releaseCritiqueSchema = z.object({
  */
 export const evidenceArtifactSchema = z.object({
   id: z.string().min(1),
-  runner: z.enum(['vitest', 'playwright', 'axe', 'lighthouse', 'compiler']),
+  runner: z.enum(['vitest', 'playwright', 'axe', 'lighthouse']),
   engine: z.enum(['node', 'chromium', 'firefox', 'webkit']),
   /** Digest of the compiled bundle the runner measured. */
   releaseDigest: z.string().min(1),

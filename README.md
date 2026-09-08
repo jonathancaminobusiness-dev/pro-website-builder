@@ -141,7 +141,6 @@ reviewed, and stops at the captain.
 
 ```bash
 corepack pnpm run:release          # compile, critique, evaluate Gate 3, publish only a clean report
-corepack pnpm run:release --serve  # keep the release and the matching preview online
 corepack pnpm run:evidence         # Vitest, Playwright on three engines, axe and Lighthouse
 corepack pnpm test:e2e:release     # only the browser evidence
 corepack pnpm run:lighthouse       # only the Lighthouse artifacts
@@ -227,10 +226,13 @@ manifest that exists but cannot be read is an error, never silently no faces.
 Every compile site reads the same directory — the studio's Gate 3, `run:release`,
 `run:evidence`, `run:lighthouse` and the release harness — so the evidence
 runners measure the bundle the gate credits. The preview serves those same faces
-from its own origin under `font-src 'self'`, reading the manifest when it serves
-a document rather than once at start, so a face added while the studio runs
-reaches the captain's iframe and an unreadable manifest fails that request rather
-than the studio. `tests/release/parity.spec.ts` then asks both sides what they
+from its own origin under `font-src 'self'`, reading them again whenever the
+manifest or any file it declares changes rather than once at start, so a face
+added or re-exported while the studio runs reaches the captain's iframe and an
+unreadable manifest fails that request rather than the studio. Gate 3 then
+compares the faces the preview actually served against the ones the bundle ships,
+so a face replaced after the captain looked at it is a divergence and not an
+identical route, and `tests/release/parity.spec.ts` asks both sides what they
 actually loaded rather than comparing two fallbacks.
 
 **Release vetoes.** Eight objective stop conditions, catalogued in

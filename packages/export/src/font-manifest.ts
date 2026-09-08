@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { fontManifestSchema } from '@pwb/domain';
 import type { FontSource } from './fonts.js';
@@ -44,4 +45,32 @@ export async function loadFontSources(fontsDir: string | undefined): Promise<Fon
     });
   }
   return sources;
+}
+
+/**
+ * An identity for the faces a directory offers, cheap enough to compute on every
+ * request that serves them: the manifest and every face file it declares, by
+ * modification time and size.
+ *
+ * A face re-exported in place leaves the manifest untouched, so an identity
+ * taken from the manifest alone would keep a reader on bytes the release no
+ * longer ships. `absent` means the project declares no face; `unreadable` means
+ * the faces could not be identified, and the caller has to load the sources to
+ * learn why rather than trust anything it kept.
+ */
+export async function fontManifestKey(fontsDir: string | undefined): Promise<string> {
+  if (fontsDir === undefined) return 'absent';
+  const path = join(fontsDir, FONT_MANIFEST_FILE);
+  let manifestFile: Stats;
+  try { manifestFile = await stat(path); }
+  catch (error) { return error && typeof error === 'object' && (error as { code?: unknown }).code === 'ENOENT' ? 'absent' : 'unreadable'; }
+  try {
+    const manifest = fontManifestSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+    const parts = [`${FONT_MANIFEST_FILE}:${manifestFile.mtimeMs}:${manifestFile.size}`];
+    for (const face of manifest.faces) {
+      const info = await stat(resolve(fontsDir, face.file));
+      parts.push(`${face.file}:${info.mtimeMs}:${info.size}`);
+    }
+    return parts.join('|');
+  } catch { return 'unreadable'; }
 }

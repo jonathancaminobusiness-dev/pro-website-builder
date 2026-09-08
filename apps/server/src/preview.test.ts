@@ -19,6 +19,7 @@ async function rawRequestStatus(port: number, requestLine: string): Promise<stri
 }
 
 const FACE_BYTES = Buffer.from([119, 79, 70, 50, 4, 3, 2, 1]);
+const REPLACED_BYTES = Buffer.from([119, 79, 70, 50, 9, 9, 9, 9, 9]);
 const MANIFEST = JSON.stringify({
   faces: [{
     family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2',
@@ -61,9 +62,20 @@ describe('preview origin', () => {
       expect(face.headers.get('content-security-policy')).toContain("font-src 'self'");
       expect((await fetch(`${preview.origin}/assets/fonts/absent.woff2`)).status).toBe(404);
 
-      // The face URL is content-addressed, so replacing the file behind it must
-      // not turn the document the captain is already looking at into a 404.
-      await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), Buffer.from([119, 79, 70, 50, 9, 9, 9, 9]));
+      // Re-exporting a face in place leaves the manifest untouched, and the
+      // release would compile the new bytes: the next document has to declare
+      // them, or the captain approves a typeface the site never ships.
+      await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), REPLACED_BYTES);
+      const updated = await (await fetch(`${preview.origin}/preview/v0/`)).text();
+      const next = /src:url\("([^"]+)"\)/.exec(updated)?.[1];
+      expect(next).not.toBe(href);
+      const replaced = await fetch(`${preview.origin}${next!}`);
+      expect(replaced.status).toBe(200);
+      expect(Buffer.from(await replaced.arrayBuffer())).toEqual(REPLACED_BYTES);
+      expect(preview.servedFaces()?.map((decision) => decision.path)).toEqual([next!.replace(/^\//, '')]);
+
+      // The face URL is content-addressed, so the document the captain is
+      // already looking at keeps answering with the bytes it declared.
       const again = await fetch(`${preview.origin}${href!}`);
       expect(again.status).toBe(200);
       expect(Buffer.from(await again.arrayBuffer())).toEqual(FACE_BYTES);

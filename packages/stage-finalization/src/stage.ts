@@ -1,5 +1,5 @@
 import { hashJson, stageRoles, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding, type ReleaseGateReport, type ReleaseSummary } from '@pwb/domain';
-import { compileRelease, type CompiledSite, type ReleaseCompilerOptions } from '@pwb/export';
+import { compileRelease, type CompiledSite, type FontDecision, type ReleaseCompilerOptions } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { Scheduler } from '@pwb/orchestrator';
 import { renderDesign } from '@pwb/renderer';
@@ -32,6 +32,11 @@ export interface FinalizationStageInput {
    */
   approved?: VersionRecord;
   evidence: EvidenceArtifact[];
+  /**
+   * The faces the preview origin served the captain. Absent when no preview
+   * served this document, and then the parity check says nothing about faces.
+   */
+  previewFaces?: FontDecision[];
   applier: Applier;
   signal?: AbortSignal;
   onEvent?: (type: string, payload: Record<string, unknown>) => void | Promise<void>;
@@ -133,7 +138,7 @@ export class FinalizationStage {
       critiques = await this.critique(input, version, compiled);
     }
 
-    const parity = checkPreviewReleaseParity(renderDesign(version.ir), compiled, new Map(version.ir.pages.routes.map((page) => [page.route, page.id])));
+    const parity = checkPreviewReleaseParity(renderDesign(version.ir), compiled, new Map(version.ir.pages.routes.map((page) => [page.route, page.id])), input.previewFaces);
     const draft = evaluateReleaseGate({
       compiled,
       evidence: input.evidence,

@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
-import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest } from '@pwb/export';
+import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type FontDecision, type ReleaseManifest } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner } from '@pwb/providers';
 import {
@@ -17,6 +17,13 @@ export interface ReleaseRunOptions {
   modelProvider?: string;
   /** Where the project keeps the faces it may self-host; no manifest means none. */
   fontsDir?: string;
+  /**
+   * The faces the preview origin served the captain, read when the release is
+   * prepared. Gate 3 compares them against the compiled bundle, so a face
+   * replaced after the captain looked at it is a divergence and not an
+   * identical route. A run with no preview leaves this out.
+   */
+  previewFaces?: () => FontDecision[] | undefined;
 }
 
 /**
@@ -95,11 +102,13 @@ export class ReleaseRun {
     // stamp their artifacts with the release they actually measured.
     await writeReleaseDocument(this.options.evidenceDir, context.current.ir);
     const evidence = await readEvidence(this.options.evidenceDir);
+    const previewFaces = this.options.previewFaces?.();
     const result = await stage.run({
       runId: this.runId,
       version: context.current,
       approved: context.approved,
       evidence,
+      ...(previewFaces ? { previewFaces } : {}),
       applier: context.applier,
       onEvent: (type, payload) => context.record(type, payload),
       ...(signal ? { signal } : {}),

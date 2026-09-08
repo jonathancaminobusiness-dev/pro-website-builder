@@ -1,5 +1,5 @@
 import type { ParityReport } from '@pwb/domain';
-import { scanTags, type CompiledSite } from '@pwb/export';
+import { scanTags, type CompiledSite, type FontDecision } from '@pwb/export';
 import type { RenderedDocument } from '@pwb/renderer';
 
 interface DocumentView {
@@ -74,6 +74,34 @@ function releaseView(html: string, stylesheet: string, pageId: string): Document
   return { ...documentSkeleton(html), styles };
 }
 
+function faceName(decision: FontDecision): string {
+  return `${decision.family} ${decision.weight} ${decision.style}`;
+}
+
+/**
+ * The faces the captain reviewed against the faces the release ships.
+ *
+ * A face file is content-addressed, so re-exporting one changes the path the
+ * two sides name and this comparison says which face moved. It belongs to every
+ * route because every route loads the same faces, and the stylesheet parsing
+ * above never sees an `@font-face` rule: without this, a release rendered in a
+ * typeface the captain never looked at still reports every route as identical.
+ */
+function compareFonts(preview: FontDecision[], release: FontDecision[]): string[] {
+  const differences: string[] = [];
+  const shipped = new Map(release.map((decision) => [faceName(decision), decision]));
+  for (const decision of preview) {
+    const other = shipped.get(faceName(decision));
+    if (other === undefined) { differences.push(`A face ${faceName(decision)} está no preview e não no release.`); continue; }
+    if (other.path !== decision.path) differences.push(`A face ${faceName(decision)} tem arquivos diferentes: preview ${decision.path ?? 'nenhum'}, release ${other.path ?? 'nenhum'}.`);
+  }
+  const reviewed = new Set(preview.map(faceName));
+  for (const decision of release) {
+    if (!reviewed.has(faceName(decision))) differences.push(`A face ${faceName(decision)} está no release e não no preview.`);
+  }
+  return differences;
+}
+
 function compare(route: string, preview: DocumentView, release: DocumentView): string[] {
   const differences: string[] = [];
   if (preview.title !== release.title) differences.push(`O título difere: preview ${JSON.stringify(preview.title)}, release ${JSON.stringify(release.title)}.`);
@@ -96,20 +124,27 @@ function compare(route: string, preview: DocumentView, release: DocumentView): s
  * Proves that the release renders the same document the captain reviewed in the
  * preview. Both views come from the same DesignIR through the same renderer;
  * only the delivery differs, and this check is what says so.
+ *
+ * `previewFaces` are the faces the preview origin actually served. They are
+ * absent only when no preview served this document — a command line run — and
+ * then the faces are the one thing this check cannot speak for.
  */
-export function checkPreviewReleaseParity(rendered: RenderedDocument, compiled: CompiledSite, pageIdByRoute: Map<string, string>): ParityReport {
+export function checkPreviewReleaseParity(rendered: RenderedDocument, compiled: CompiledSite, pageIdByRoute: Map<string, string>, previewFaces?: FontDecision[]): ParityReport {
   const stylesheet = compiled.files.find((file) => file.path === compiled.stylesheetPath);
   const css = typeof stylesheet?.contents === 'string' ? stylesheet.contents : '';
+  const faces = previewFaces === undefined ? [] : compareFonts(previewFaces, compiled.fonts);
   const routes = rendered.routes.map((route) => {
-    const compiledRoute = compiled.routes.find((candidate) => candidate.route === route.route);
-    const file = compiledRoute ? compiled.files.find((candidate) => candidate.path === compiledRoute.path) : undefined;
-    if (!compiledRoute || !file || typeof file.contents !== 'string') {
-      return { route: route.route, matched: false, differences: [`A rota ${route.route} existe no preview e não no release.`] };
-    }
-    const pageId = pageIdByRoute.get(route.route);
-    if (pageId === undefined) return { route: route.route, matched: false, differences: [`A rota ${route.route} não tem página correspondente no documento.`] };
-    const differences = compare(route.route, previewView(route.html), releaseView(file.contents, css, pageId));
+    const differences = [...routeDifferences(route, compiled, css, pageIdByRoute), ...faces];
     return { route: route.route, matched: differences.length === 0, differences };
   });
   return { matched: routes.every((route) => route.matched), routes };
+}
+
+function routeDifferences(route: RenderedDocument['routes'][number], compiled: CompiledSite, css: string, pageIdByRoute: Map<string, string>): string[] {
+  const compiledRoute = compiled.routes.find((candidate) => candidate.route === route.route);
+  const file = compiledRoute ? compiled.files.find((candidate) => candidate.path === compiledRoute.path) : undefined;
+  if (!compiledRoute || !file || typeof file.contents !== 'string') return [`A rota ${route.route} existe no preview e não no release.`];
+  const pageId = pageIdByRoute.get(route.route);
+  if (pageId === undefined) return [`A rota ${route.route} não tem página correspondente no documento.`];
+  return compare(route.route, previewView(route.html), releaseView(file.contents, css, pageId));
 }
