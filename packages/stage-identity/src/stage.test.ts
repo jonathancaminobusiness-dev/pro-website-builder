@@ -24,7 +24,7 @@ function seedStore(): { store: VersionStore; baseVersionId: string } {
 
 interface StageHarness { stage: IdentityStage; store: VersionStore; baseVersionId: string; events: Array<{ type: string; payload: Record<string, unknown> }>; }
 
-function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; raster?: ConstructorParameters<typeof HiggsfieldMcpProvider>[0] } = {}): StageHarness {
+function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; raster?: ConstructorParameters<typeof HiggsfieldMcpProvider>[0]; onEvent?: (type: string, payload: Record<string, unknown>) => void } = {}): StageHarness {
   const { store, baseVersionId } = seedStore();
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const stage = new IdentityStage({
@@ -35,7 +35,7 @@ function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; ras
     store,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     raster: new HiggsfieldMcpProvider(options.raster ?? { configured: false }),
-    onEvent: (type, payload) => { events.push({ type, payload }); },
+    onEvent: (type, payload) => { events.push({ type, payload }); options.onEvent?.(type, payload); },
     now: () => '2026-09-07T12:00:00.000Z',
   });
   return { stage, store, baseVersionId, events };
@@ -1053,6 +1053,30 @@ describe('image art director', () => {
 
     expect(calls).toHaveLength(1);
     expect(stage.approvedImagery.map((asset) => asset.status)).toEqual(['failed']);
+  });
+
+  it('records a lane that cannot even write its own events, instead of leaving a rejection loose', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { stage } = harness({
+      raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'ok' }; } } },
+      // The ledger stops accepting writes the moment the lane starts, which is
+      // what a shutdown between the decision and the shot looks like.
+      onEvent: (type, payload) => {
+        if (type === 'identity.task.queued' && String(payload.taskId).startsWith('identity-imagery-')) throw new Error('the ledger is closed');
+      },
+    });
+    await stage.run();
+    const approval = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    expect(approval.assets.map((asset) => asset.status)).toEqual(['generating']);
+
+    await stage.imagerySettled();
+    // The decision stands, nothing was shot, and the image says what became of it.
+    expect(calls).toEqual([]);
+    expect(stage.gateState().state).toBe('closed');
+    const settled = stage.approvedImagery;
+    expect(settled.map((asset) => asset.status)).toEqual(['failed']);
+    expect(settled[0]?.provenance.termsNote).toMatch(/the ledger is closed/);
+    expect(stage.snapshot().failures.some((failure) => failure.taskId === 'identity-imagery-modular-technical')).toBe(true);
   });
 
   it('refuses to submit for a direction whose contract admits no generated source', async () => {

@@ -87,14 +87,22 @@ export default function App() {
   }, [identityGet]);
 
   // Imagery is shot on the raster lane after the gate closes, so the decided
-  // screen follows it until every asset has settled.
+  // screen follows it until every asset has settled. The tick re-arms the loop
+  // on either outcome: a poll that failed once — the server restarted mid-shoot,
+  // the machine slept — must cost one reading, not every reading after it.
+  const [pollTick, setPollTick] = useState(0);
   const generating = identity?.assets.some((asset) => asset.status === 'generating') ?? false;
   useEffect(() => {
     if (!identity || !generating) return;
     const runId = identity.runId;
-    const timer = setTimeout(() => { void identityGet(runId).then(setIdentity, () => undefined); }, 1500);
+    const timer = setTimeout(() => {
+      void identityGet(runId).then(
+        (next) => { setIdentity(next); setPollTick((tick) => tick + 1); },
+        () => { setPollTick((tick) => tick + 1); },
+      );
+    }, 1500);
     return () => { clearTimeout(timer); };
-  }, [generating, identity, identityGet]);
+  }, [generating, identity, identityGet, pollTick]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
   const startIdentityRun = () => identity && identityAct(() => identityPost(`/api/identity/runs/${identity.runId}/start`));

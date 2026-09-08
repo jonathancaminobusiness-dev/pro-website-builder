@@ -844,7 +844,18 @@ export class IdentityStage {
         cancelled: outcome.cancelled,
         assets: this.approvedAssets.map((asset) => ({ id: asset.id, status: asset.status, license: asset.provenance.license, hash: asset.provenance.hash })),
       });
-    })();
+    })().catch(async (error: unknown) => {
+      // The chain runs detached, so it carries its own handler from the moment
+      // it exists: a lane that cannot even record its queued tasks lands on the
+      // asset like any other failure instead of taking the process down.
+      const reason = error instanceof Error ? error.message : 'The raster lane did not complete.';
+      this.imageryAborts.delete(controller);
+      this.failures.push({ taskId: `identity-imagery-${plan.directionId}`, reason });
+      for (const asset of this.approvedAssets.filter((entry) => entry.status === 'generating')) {
+        this.replaceAsset({ ...asset, status: 'failed', provenance: { ...asset.provenance, termsNote: `${asset.provenance.termsNote} Higgsfield MCP returned no image: ${reason}` } });
+      }
+      try { await this.record('identity.imagery.failed', { directionId: plan.directionId, reason }); } catch { /* the ledger is what could not be written */ }
+    });
   }
 
   private replaceAsset(asset: IdentityAsset): void {
