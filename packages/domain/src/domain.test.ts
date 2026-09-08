@@ -73,6 +73,12 @@ describe('domain contracts', () => {
     const violations: Record<keyof typeof documentRules, () => string[]> = {
       mediaFigure: () => refused((ir) => { (ir.pages.routes[0]!.nodes[2]! as { semantic: string }).semantic = 'figure'; }),
       phrasingLeaf: () => refused((ir) => { ir.pages.routes[0]!.nodes[1]!.slots = { children: ['home-proof'] }; }),
+      interactiveControl: () => refused((ir) => {
+        const control = ir.pages.routes[0]!.nodes[1]! as { kind: string; semantic: string; props: Record<string, unknown> };
+        control.kind = 'component';
+        control.semantic = 'link';
+        control.props.href = '/precos';
+      }),
       pageGraph: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.slots = { children: ['home-title'] }; }),
       uniquePages: () => refused((ir) => { ir.pages.routes[1]!.route = '/contact'; }),
       tokenRoles: () => refused((ir) => { ir.identity.tokenRoles.surface = 'color.superficie'; }),
@@ -80,11 +86,34 @@ describe('domain contracts', () => {
       tokenReferences: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.props.color = '{color.accent-2}'; }),
       visualPropTokens: () => refused((ir) => { ir.pages.routes[0]!.nodes[1]!.props.color = '#d86445'; }),
       mediaAsset: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.assetId = 'missing-asset'; }),
+      responsiveWidths: () => refused((ir) => { ir.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{space.xl}', props: { padding: '{space.md}' } }, { minWidth: '{space.xl}', props: { padding: '{space.lg}' } }]; }),
     };
     for (const [rule, collect] of Object.entries(violations) as Array<[keyof typeof documentRules, () => string[]]>) {
       const messages = collect();
       expect(messages.some((message) => message.startsWith(documentRules[rule]))).toBe(true);
     }
+  });
+
+  it('refuses one node id declared by two routes, because the stylesheet addresses it by id alone', () => {
+    const shared = createFixtureIR();
+    shared.pages.routes[1]!.nodes[1]!.id = 'home-title';
+    shared.pages.routes[1]!.nodes[0]!.slots = { children: ['home-title'] };
+    expect(() => designIRSchema.parse(shared)).toThrow(/Node home-title is declared by more than one page/);
+    expect(designIRSchema.parse(createFixtureIR()).pages.routes[1]!.nodes[1]!.id).toBe('proof-title');
+  });
+
+  it('holds a responsive rule to the same token contract as the props beside it', () => {
+    const raw = createFixtureIR();
+    raw.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{breakpoint.compact}', props: { gap: '1rem' } }];
+    expect(() => designIRSchema.parse(raw)).toThrow(/sets responsive \{breakpoint\.compact\} gap to 1rem, which is not a token reference/);
+
+    const undefinedToken = createFixtureIR();
+    undefinedToken.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{breakpoint.compact}', props: { gap: '{space.absent}' } }];
+    expect(() => designIRSchema.parse(undefinedToken)).toThrow(/which the identity does not define/);
+
+    const tokenised = createFixtureIR();
+    tokenised.pages.routes[0]!.nodes[0]!.responsive = [{ minWidth: '{breakpoint.compact}', props: { gap: '{space.lg}' } }];
+    expect(designIRSchema.parse(tokenised).pages.routes[0]!.nodes[0]!.responsive[0]!.props.gap).toBe('{space.lg}');
   });
 
   it('refuses a document whose token aliases or prop references do not resolve, and keeps legal aliases', () => {
@@ -200,5 +229,18 @@ describe('domain contracts', () => {
     const identity = createFixtureIdentity();
     expect(identitySpecSchema.parse(identity).tokenRoles.surface).toBe('color.paper');
     expect(() => identitySpecSchema.parse({ ...identity, tokenRoles: { ...identity.tokenRoles, surface: 'color.missing' } })).toThrow(/color\.missing/);
+  });
+
+  it('requires the grid grammar breakpoints to rise above the narrowest viewport', () => {
+    const identity = createFixtureIdentity();
+    const grammar = (breakpointTokens: string[]): unknown => ({ ...identity, gridGrammar: { ...identity.gridGrammar, breakpointTokens } });
+
+    const widths = identitySpecSchema.parse(identity).gridGrammar.breakpointTokens;
+    expect(widths).toHaveLength(2);
+    // The content max width is 6rem here: a container query opening there matches every viewport.
+    expect(() => identitySpecSchema.parse(grammar([identity.gridGrammar.maxWidthToken, '{breakpoint.expanded}']))).toThrow(/not above 320px/);
+    expect(() => identitySpecSchema.parse(grammar(['{breakpoint.expanded}', '{breakpoint.compact}']))).toThrow(/not above 960px/);
+    expect(() => identitySpecSchema.parse(grammar(['{breakpoint.compact}', '{type.body}']))).toThrow(/does not resolve to a dimension/);
+    expect(() => identitySpecSchema.parse(grammar(['{breakpoint.compact}']))).toThrow();
   });
 });

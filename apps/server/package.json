@@ -10,7 +10,10 @@
     "@pwb/linter": "workspace:*",
     "@pwb/orchestrator": "workspace:*",
     "@pwb/providers": "workspace:*",
+    "@pwb/qa-deterministic": "workspace:*",
+    "@pwb/render-hub": "workspace:*",
     "@pwb/renderer": "workspace:*",
+    "@pwb/stage-prototype": "workspace:*",
     "better-sqlite3": "^12.0.0",
     "drizzle-orm": "^0.44.0"
   },

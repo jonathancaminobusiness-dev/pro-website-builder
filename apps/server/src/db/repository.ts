@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT N
 CREATE TABLE IF NOT EXISTS tasks (id TEXT NOT NULL, run_id TEXT NOT NULL, attempt INTEGER NOT NULL, stage TEXT NOT NULL, role TEXT NOT NULL, state TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (run_id, id, attempt));
 CREATE TABLE IF NOT EXISTS patches (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, project_id TEXT NOT NULL, stage TEXT NOT NULL, approver_role TEXT NOT NULL, version_id TEXT NOT NULL, version_hash TEXT NOT NULL, decision TEXT NOT NULL, rationale TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);`;
+CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS prototype_runs (id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL, step TEXT NOT NULL, detail TEXT NOT NULL, error TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL);`;
 
 const SCHEMA_VERSION = 2;
 
@@ -30,6 +31,8 @@ interface ProjectInput { id: string; name: string; }
 interface VersionInput { id: string; projectId: string; parentId?: string; hash: string; ir: DesignIR; }
 interface ApprovalInput { id: string; runId: string; projectId: string; stage: 'identity' | 'prototype' | 'finalization'; approverRole: 'captain'; versionId: string; versionHash: string; decision: 'approved' | 'rejected'; rationale: string; }
 interface EventInput { id: string; runId: string; type: string; payload: Record<string, unknown>; }
+/** A Gate 2 run as it survives a restart: its progress in columns, its review in the payload. */
+export interface PrototypeRunRow { id: string; status: string; step: string; detail: string; error?: string; startedAt: string; updatedAt: string; payload: Record<string, unknown>; }
 interface RunInput { id: string; projectId: string; }
 
 export class ProjectRepository {
@@ -44,6 +47,20 @@ export class ProjectRepository {
   async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(designIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }
   async createApproval(input: ApprovalInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.approvals).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
   async appendEvent(input: EventInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.events).values({ id: input.id, runId: input.runId, type: input.type, payload: JSON.stringify(input.payload), createdAt: new Date().toISOString() }).run(); }); }
+  async savePrototypeRun(input: PrototypeRunRow): Promise<void> {
+    await this.write(() => {
+      const row = { id: input.id, status: input.status, step: input.step, detail: input.detail, error: input.error ?? null, startedAt: input.startedAt, updatedAt: input.updatedAt, payload: JSON.stringify(input.payload) };
+      this.db.orm.insert(schema.prototypeRuns).values(row).onConflictDoUpdate({ target: schema.prototypeRuns.id, set: row }).run();
+    });
+  }
+
+  listPrototypeRuns(): PrototypeRunRow[] {
+    return this.db.sqlite.prepare('SELECT id, status, step, detail, error, started_at, updated_at, payload FROM prototype_runs ORDER BY started_at').all().map((row) => {
+      const item = row as { id: string; status: string; step: string; detail: string; error: string | null; started_at: string; updated_at: string; payload: string };
+      return { id: item.id, status: item.status, step: item.step, detail: item.detail, ...(item.error === null ? {} : { error: item.error }), startedAt: item.started_at, updatedAt: item.updated_at, payload: JSON.parse(item.payload) as Record<string, unknown> };
+    });
+  }
+
   async getRun(runId: string): Promise<{ id: string; projectId: string } | undefined> {
     const row = this.db.sqlite.prepare('SELECT id, project_id AS projectId FROM runs WHERE id = ?').get(runId) as { id: string; projectId: string } | undefined;
     return row;

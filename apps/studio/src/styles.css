@@ -45,3 +45,5 @@ button:disabled { cursor: wait; opacity: .5; }
 .error-banner { grid-column: 1 / -1; border: 1px solid #dca58e; border-radius: 12px; padding: 12px 16px; color: #8c3d2a; background: #f8dfd3; }
 footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72rem; }
 @media (max-width: 780px) { .topbar { margin-bottom: 30px; } .workspace { grid-template-columns: 1fr; } .review-panel { grid-column: auto; } footer { align-items: flex-start; flex-direction: column; } }
+.gate2-link { color: #a84f37; font-size: .74rem; font-weight: 700; text-decoration: none; border-bottom: 1px solid #dca58e; }
+.gate2-link:hover { border-bottom-color: #d86445; }

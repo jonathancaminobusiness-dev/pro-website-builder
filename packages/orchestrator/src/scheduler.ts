@@ -14,6 +14,10 @@ export class DeadlineExceededError extends Error {
   constructor(public readonly taskId: string, public readonly deadlineMs: number) { super(`Task ${taskId} exceeded its ${deadlineMs}ms deadline.`); this.name = 'DeadlineExceededError'; }
 }
 
+/** The plan's concurrency: three simultaneous Claude sessions, one browser at a time. */
+export const DEFAULT_MAX_ACTIVE_CLAUDE = 3;
+const DEFAULT_MAX_ACTIVE_RASTER = 1;
+
 /**
  * Rejects as soon as the run is cancelled. Used to bound the settle callback, which is otherwise
  * unbounded: a gate that never resolves would hold scheduler ownership forever and block restart.
@@ -32,7 +36,7 @@ function aborted(signal: AbortSignal): Promise<never> {
 export class Scheduler {
   readonly maxActiveClaude: number;
   readonly maxActiveRaster: number;
-  constructor(options: SchedulerOptions = {}) { this.maxActiveClaude = options.maxActiveClaude ?? 3; this.maxActiveRaster = options.maxActiveRaster ?? 1; }
+  constructor(options: SchedulerOptions = {}) { this.maxActiveClaude = options.maxActiveClaude ?? DEFAULT_MAX_ACTIVE_CLAUDE; this.maxActiveRaster = options.maxActiveRaster ?? DEFAULT_MAX_ACTIVE_RASTER; }
 
   async run<T>(tasks: AgentTask[], worker: (task: AgentTask, signal: AbortSignal) => Promise<T>, options: RunOptions<T> = {}): Promise<ScheduleResult<T>> {
     const controller = new AbortController();

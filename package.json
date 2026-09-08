@@ -8,6 +8,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "run:fixture": "tsx scripts/run-fixture.ts",
+    "run:prototype": "tsx scripts/run-prototype.ts",
     "typecheck": "tsc -b",
     "lint": "corepack pnpm typecheck"
   },

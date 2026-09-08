@@ -1,4 +1,5 @@
 import { cssTokenIssues, documentRules, flattenTokens, phrasingSemantics, resolveTokens, slotChildIds, visualPropKeys, type DesignIR } from '@pwb/domain';
+import { prototypeRuleRegistry } from './prototype-rules.js';
 
 export type FindingSeverity = 'error' | 'warning' | 'info';
 export interface LintIssue { path: string; message: string; suggestedPatch?: unknown; }
@@ -75,6 +76,7 @@ export const ruleRegistry: LintRule[] = [
   { id: 'TOK-004', stage: 'identity', severity: 'error', detect: emittableTokens },
   { id: 'DEF-010', stage: 'prototype', severity: 'error', detect: forbiddenDefaults },
   { id: 'DOC-020', stage: 'prototype', severity: 'error', detect: phrasingLeaves },
+  ...prototypeRuleRegistry,
 ];
 
 export function lintDesign(ir: DesignIR): LintReport {

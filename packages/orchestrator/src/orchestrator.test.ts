@@ -40,7 +40,7 @@ describe('orchestrator', () => {
     const plan = new RunPlanner(store).plan('run-paths', root.id, 'brief');
     expect(plan.tasks.map((item) => [item.stage, item.allowedPaths])).toEqual([
       ['identity', ['/identity', '/reviewRecord']],
-      ['prototype', ['/pages', '/assets', '/reviewRecord']],
+      ['prototype', ['/pages', '/assets', '/stateFixtures', '/reviewRecord']],
       ['finalization', ['/pages', '/assets', '/reviewRecord']],
     ]);
     for (const task of plan.tasks) expect(Object.keys(task.documentSlice).sort()).toEqual(['/assets', '/identity', '/pages', '/reviewRecord']);

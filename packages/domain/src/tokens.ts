@@ -43,6 +43,18 @@ export function cssCustomPropertyName(path: string): string {
   return `--${path.replaceAll('.', '-')}`;
 }
 
+/**
+ * The selector that addresses one node's rules and the attribute the renderer emits are the same text
+ * escaped for two different languages: the attribute is HTML-escaped, and here the id is escaped as a
+ * CSS string, so an id holding a quote or a backslash still denotes the node it names.
+ */
+export function cssNodeSelector(nodeId: string): string {
+  const escaped = nodeId
+    .replaceAll(/["\\]/g, (char) => `\\${char}`)
+    .replaceAll(/[\u0000-\u001f\u007f]/g, (char) => `\\${char.codePointAt(0)!.toString(16)} `);
+  return `[data-node-id="${escaped}"]`;
+}
+
 export function cssTokenIssues(values: Record<string, string | number | boolean>): Array<{ path: string; message: string }> {
   const issues: Array<{ path: string; message: string }> = [];
   const owners = new Map<string, string>();

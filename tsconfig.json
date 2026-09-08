@@ -3,11 +3,13 @@
   "references": [
     { "path": "packages/domain" },
     { "path": "packages/renderer" },
+    { "path": "packages/qa-deterministic" },
     { "path": "packages/linter" },
     { "path": "packages/export" },
     { "path": "packages/providers" },
     { "path": "packages/orchestrator" },
     { "path": "packages/render-hub" },
+    { "path": "packages/stage-prototype" },
     { "path": "apps/server" },
     { "path": "apps/studio" }
   ]

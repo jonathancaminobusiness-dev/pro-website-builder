@@ -53,9 +53,18 @@ importers:
       '@pwb/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@pwb/qa-deterministic':
+        specifier: workspace:*
+        version: link:../../packages/qa-deterministic
+      '@pwb/render-hub':
+        specifier: workspace:*
+        version: link:../../packages/render-hub
       '@pwb/renderer':
         specifier: workspace:*
         version: link:../../packages/renderer
+      '@pwb/stage-prototype':
+        specifier: workspace:*
+        version: link:../../packages/stage-prototype
       better-sqlite3:
         specifier: ^12.0.0
         version: 12.11.1
@@ -109,6 +118,9 @@ importers:
       '@pwb/domain':
         specifier: workspace:*
         version: link:../domain
+      '@pwb/qa-deterministic':
+        specifier: workspace:*
+        version: link:../qa-deterministic
 
   packages/orchestrator:
     dependencies:
@@ -129,14 +141,29 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
 
+  packages/qa-deterministic:
+    dependencies:
+      '@pwb/domain':
+        specifier: workspace:*
+        version: link:../domain
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+
   packages/render-hub:
     dependencies:
       '@pwb/domain':
         specifier: workspace:*
         version: link:../domain
+      '@pwb/qa-deterministic':
+        specifier: workspace:*
+        version: link:../qa-deterministic
       '@pwb/renderer':
         specifier: workspace:*
         version: link:../renderer
+      axe-core:
+        specifier: ^4.13.0
+        version: 4.13.0
       playwright:
         specifier: ^1.55.0
         version: 1.62.1
@@ -146,6 +173,36 @@ importers:
       '@pwb/domain':
         specifier: workspace:*
         version: link:../domain
+
+  packages/stage-prototype:
+    dependencies:
+      '@pwb/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@pwb/linter':
+        specifier: workspace:*
+        version: link:../linter
+      '@pwb/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
+      '@pwb/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@pwb/qa-deterministic':
+        specifier: workspace:*
+        version: link:../qa-deterministic
+      '@pwb/render-hub':
+        specifier: workspace:*
+        version: link:../render-hub
+      '@pwb/renderer':
+        specifier: workspace:*
+        version: link:../renderer
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+      zod-to-json-schema:
+        specifier: ^3.24.5
+        version: 3.25.2(zod@3.25.76)
 
 packages:
 
@@ -630,6 +687,10 @@ packages:
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
+
+  axe-core@4.13.0:
+    resolution: {integrity: sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==}
+    engines: {node: '>=4'}
 
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
@@ -1574,6 +1635,8 @@ snapshots:
       tinyrainbow: 2.0.0
 
   assertion-error@2.0.1: {}
+
+  axe-core@4.13.0: {}
 
   base64-js@1.5.1: {}
 

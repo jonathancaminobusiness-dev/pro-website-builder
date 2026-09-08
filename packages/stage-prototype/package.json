@@ -1,0 +1,19 @@
+{
+  "name": "@pwb/stage-prototype",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./dist/index.js" },
+  "types": "./dist/index.d.ts",
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@pwb/domain": "workspace:*",
+    "@pwb/linter": "workspace:*",
+    "@pwb/orchestrator": "workspace:*",
+    "@pwb/providers": "workspace:*",
+    "@pwb/qa-deterministic": "workspace:*",
+    "@pwb/render-hub": "workspace:*",
+    "@pwb/renderer": "workspace:*",
+    "zod": "^3.25.0",
+    "zod-to-json-schema": "^3.24.5"
+  }
+}

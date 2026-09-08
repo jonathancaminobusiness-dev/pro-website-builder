@@ -1,0 +1,85 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { ZodError } from 'zod';
+
+const execFileAsync = promisify(execFile);
+
+/** Every worker of this stage is denied the filesystem and the network; a critic keeps Read for its screenshots. */
+export const WORKER_DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
+export const CRITIC_DENIED_TOOLS = 'Bash Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
+
+export type ClaudeExecutor = (executable: string, args: string[], options: { signal?: AbortSignal; timeoutMs: number }) => Promise<string>;
+
+export interface ClaudeSessionOptions {
+  executable?: string;
+  timeoutMs?: number;
+  maxTurns?: number;
+  deniedTools?: string;
+  /** Injected by tests; production spawns the owner's local Claude Code binary with no shell. */
+  execute?: ClaudeExecutor;
+}
+
+export class ClaudeSessionError extends Error {
+  constructor(public readonly errorCode: string, message: string) {
+    super(message);
+    this.name = 'ClaudeSessionError';
+  }
+}
+
+export interface ClaudeAsk<T> {
+  sessionId: string;
+  prompt: string;
+  schema: unknown;
+  parse: (value: unknown) => T;
+  deadlineMs: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * One structured turn against the owner's local Claude Code binary: a fresh session, a closed JSON
+ * schema, a deadline, an abort signal and a denied tool list. It never reads, stores, prints, forwards
+ * or asks for a credential, and no paid API is involved.
+ */
+export class ClaudeSession {
+  private readonly executable: string;
+  private readonly timeoutMs: number;
+  private readonly maxTurns: number;
+  private readonly deniedTools: string;
+  private readonly execute: ClaudeExecutor;
+
+  constructor(options: ClaudeSessionOptions = {}) {
+    this.executable = options.executable ?? 'claude';
+    this.timeoutMs = options.timeoutMs ?? 5 * 60_000;
+    this.maxTurns = options.maxTurns ?? 4;
+    this.deniedTools = options.deniedTools ?? WORKER_DENIED_TOOLS;
+    this.execute = options.execute ?? (async (executable, args, run) => {
+      const { stdout } = await execFileAsync(executable, args, {
+        shell: false, timeout: run.timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...(run.signal ? { signal: run.signal } : {}),
+      });
+      return stdout;
+    });
+  }
+
+  async ask<T>(input: ClaudeAsk<T>): Promise<T> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const prompt = attempt === 0 ? input.prompt : `${input.prompt}\n\nYour previous answer did not match the supplied schema. Return only JSON matching it.`;
+      try {
+        const stdout = await this.execute(this.executable, [
+          '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(input.schema),
+          '--session-id', input.sessionId, '--no-session-persistence', '--max-turns', String(this.maxTurns),
+          '--disallowed-tools', this.deniedTools,
+        ], { ...(input.signal ? { signal: input.signal } : {}), timeoutMs: Math.min(this.timeoutMs, input.deadlineMs) });
+        const raw: unknown = JSON.parse(stdout);
+        const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
+        return input.parse(structured);
+      } catch (error) {
+        const details = error as { name?: unknown; code?: unknown };
+        if (details.name === 'AbortError' || details.code === 'ABORT_ERR') throw error;
+        const schemaProblem = error instanceof SyntaxError || error instanceof ZodError;
+        if (schemaProblem && attempt === 0) continue;
+        throw new ClaudeSessionError(schemaProblem ? 'SCHEMA_INVALID' : String(details.code ?? 'PROCESS_FAILED'), schemaProblem ? 'Claude returned an answer that does not match the supplied schema.' : `The Claude Code process failed with ${String(details.code ?? 'an unknown error')}.`);
+      }
+    }
+    throw new ClaudeSessionError('RUNNER_EXHAUSTED', 'The Claude Code session did not produce an answer.');
+  }
+}
