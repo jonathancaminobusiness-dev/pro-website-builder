@@ -165,6 +165,13 @@ describe('deterministic renderer', () => {
     (colliding.identity.tokens as { color: { ink: Record<string, unknown> } }).color.ink = { strong: { $value: '#ffffff', $type: 'color' } };
     colliding.identity.tokenRoles.text = 'color.ink-strong';
     expect(() => renderDesign(colliding)).toThrow(/compile to the CSS custom property/i);
+
+    // An unclosed function would consume the declaration's `;` and every rule after it.
+    const truncated = createFixtureIR();
+    (truncated.identity.tokens as { shadow?: Record<string, unknown> }).shadow = { card: { $value: '0 1px 2px rgba(0,0,0,.2', $type: 'shadow' } };
+    expect(() => renderDesign(truncated)).toThrow(/unbalanced/i);
+    (truncated.identity.tokens as { shadow: { card: { $value: string } } }).shadow.card.$value = '0 1px 2px rgba(0,0,0,.2)';
+    expect(renderDesign(truncated).css).toContain('--shadow-card: 0 1px 2px rgba(0,0,0,.2);');
   });
 
   it('renders a ready asset a media node references so generated images reach preview and export', () => {

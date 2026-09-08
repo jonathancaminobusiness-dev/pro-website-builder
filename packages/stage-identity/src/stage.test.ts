@@ -1243,15 +1243,19 @@ describe('gate 1', () => {
     expect(after.$type).toBe('dimension');
   });
 
-  it('refuses a hex the browser cannot read, such as an odd-length one', async () => {
+  it('refuses a colour the browser cannot read, whether an odd-length hex or an unclosed function', async () => {
     const { stage, store } = harness();
     await stage.run();
     const approval = await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
-    await expect(stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a0', rationale: 'Sinal mais quente.' })).rejects.toThrow(/color token expects/);
-    expect(flattenTokens(store.get(stage.approvedVersionId!)!.ir.identity.tokens).get('color.accent')).toEqual(flattenTokens(store.get(approval.versionId)!.ir.identity.tokens).get('color.accent'));
+    for (const value of ['#ff7a0', 'rgb(255 0 0', 'oklch(0.7 0.2']) {
+      await expect(stage.changeToken({ tokenPath: 'color.accent', value, rationale: 'Sinal mais quente.' })).rejects.toThrow(/color token expects/);
+      expect(flattenTokens(store.get(stage.approvedVersionId!)!.ir.identity.tokens).get('color.accent')).toEqual(flattenTokens(store.get(approval.versionId)!.ir.identity.tokens).get('color.accent'));
+    }
 
-    const changed = await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
-    expect(flattenTokens(store.get(changed.versionId)!.ir.identity.tokens).get('color.accent')?.$value).toBe('#ff7a00');
+    for (const value of ['#ff7a00', 'rgb(255 122 0)', 'oklch(0.72 0.18 45)']) {
+      const changed = await stage.changeToken({ tokenPath: 'color.accent', value, rationale: 'Sinal mais quente.' });
+      expect(flattenTokens(store.get(changed.versionId)!.ir.identity.tokens).get('color.accent')?.$value).toBe(value);
+    }
   });
 
   it('commits nothing for a refused change, so the same token stays changeable', async () => {

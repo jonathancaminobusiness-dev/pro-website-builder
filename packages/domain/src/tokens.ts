@@ -56,6 +56,19 @@ export function cssNodeSelector(nodeId: string): string {
   return `[data-node-id="${escaped}"]`;
 }
 
+/**
+ * An unclosed `(` makes the CSS tokenizer consume component values until it finds a
+ * match, so it swallows the declaration's `;` and every rule that follows it.
+ */
+function balancedParentheses(value: string): boolean {
+  let depth = 0;
+  for (const char of value) {
+    if (char === '(') depth += 1;
+    else if (char === ')') { depth -= 1; if (depth < 0) return false; }
+  }
+  return depth === 0;
+}
+
 export function cssTokenIssues(values: Record<string, string | number | boolean>): Array<{ path: string; message: string }> {
   const issues: Array<{ path: string; message: string }> = [];
   const owners = new Map<string, string>();
@@ -66,12 +79,13 @@ export function cssTokenIssues(values: Record<string, string | number | boolean>
     if (owner === undefined) owners.set(name, path);
     else issues.push({ path, message: `${documentRules.cssTokens} Tokens ${owner} and ${path} both compile to the CSS custom property ${name}.` });
     if (typeof value === 'string' && (/[<>;{}]/.test(value) || value.includes('/*') || value.includes('*/'))) issues.push({ path, message: `${documentRules.cssTokens} Token ${path} holds characters that cannot be emitted into CSS.` });
+    if (typeof value === 'string' && !balancedParentheses(value)) issues.push({ path, message: `${documentRules.cssTokens} Token ${path} leaves a parenthesis unbalanced, so it cannot be emitted into CSS.` });
   }
   return issues;
 }
 
 const tokenValueShapes: Partial<Record<z.infer<typeof tokenTypeSchema>, { accepts: (value: TokenValue) => boolean; expects: string }>> = {
-  color: { accepts: (value) => typeof value === 'string' && (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value) || /^(rgb|rgba|hsl|hsla|oklch|lab|color)\(/.test(value)), expects: 'a hex colour or a CSS colour function' },
+  color: { accepts: (value) => typeof value === 'string' && (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value) || /^(rgb|rgba|hsl|hsla|oklch|lab|color)\([^()]+\)$/.test(value)), expects: 'a hex colour of 3, 4, 6 or 8 digits, or a closed CSS colour function such as oklch(0.7 0.12 145)' },
   dimension: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 2rem' },
   borderRadius: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 0.25rem' },
   fontSize: { accepts: (value) => typeof value === 'string' && /^-?\d*\.?\d+(px|rem|em|ch|vw|vh|%)$/.test(value), expects: 'a length with a unit, such as 1.25rem' },
