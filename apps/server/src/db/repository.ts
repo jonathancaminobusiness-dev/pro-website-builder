@@ -29,7 +29,7 @@ export function openDatabase(filename: string): LocalDatabase {
 
 interface ProjectInput { id: string; name: string; }
 interface VersionInput { id: string; projectId: string; parentId?: string; hash: string; ir: DesignIR; }
-interface ApprovalInput { id: string; runId: string; projectId: string; stage: 'identity' | 'prototype' | 'finalization'; approverRole: 'captain'; versionId: string; versionHash: string; decision: 'approved' | 'rejected'; rationale: string; }
+interface ApprovalInput { id: string; runId: string; projectId: string; stage: 'identity' | 'prototype' | 'finalization'; approverRole: 'captain' | 'fixture'; versionId: string; versionHash: string; decision: 'approved' | 'rejected'; rationale: string; }
 interface EventInput { id: string; runId: string; type: string; payload: Record<string, unknown>; }
 /** A Gate 2 run as it survives a restart: its progress in columns, its review in the payload. */
 export interface PrototypeRunRow { id: string; status: string; step: string; detail: string; error?: string; startedAt: string; updatedAt: string; payload: Record<string, unknown>; }

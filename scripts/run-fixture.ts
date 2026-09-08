@@ -11,14 +11,16 @@ interface RenderMatrixSummary { cases: number; passed: number; cached: number; f
 
 const root = process.cwd();
 const databasePath = process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'cli-fixture.sqlite');
-const exportRoot = process.env.PWB_EXPORT_ROOT ?? join(root, 'exports');
+const releaseRoot = process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
+const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
+const fontsDir = process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
 const renderCacheDir = process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
 
 async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSummary> {
   const versionId = snapshot.currentVersion.id;
   const reviewed = renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` });
   // Port 0 keeps this CLI off the developer ports, so it runs beside the dev server and other checkouts.
-  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, 0);
+  const preview = createPreviewServer((requested) => requested === versionId ? reviewed : undefined, 0, fontsDir);
   await preview.start();
   try {
     // `createRenderMatrix` owns the matrix; this CLI only chooses how wide a sweep to pay for and
@@ -42,15 +44,36 @@ async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSumm
 
 async function main(): Promise<void> {
   await mkdir(join(databasePath, '..'), { recursive: true });
-  await mkdir(exportRoot, { recursive: true });
+  await mkdir(releaseRoot, { recursive: true });
   const database = openDatabase(databasePath);
   try {
-    const run = new FixtureRun({ repository: new ProjectRepository(database), exportRoot, provider: createModelProvider(process.env.PWB_MODEL_PROVIDER) });
+    const run = new FixtureRun({
+      repository: new ProjectRepository(database),
+      provider: createModelProvider(process.env.PWB_MODEL_PROVIDER),
+      release: { releaseRoot, evidenceDir, fontsDir, ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
+    });
     await run.initialize('cli-fixture');
-    const snapshot = await run.runAll();
+    let snapshot = await run.runAll();
+    const report = run.releaseSnapshot()?.report;
+    // A script never signs for the captain. It prints what Gate 3 found and
+    // publishes only a release that left nothing for a human to accept.
+    const open = report ? report.escalations : ['A etapa de finalização não chegou ao Gate 3.'];
+    const publishable = report !== undefined && !report.blocked && open.length === 0;
+    if (publishable) {
+      await run.publishRelease(run.releaseSnapshot()!.digest, 'Publicado por scripts/run-fixture.ts, sem decisão humana: o Gate 3 não deixou nada a aceitar.', 'fixture');
+      snapshot = run.snapshot();
+    }
     const render = process.argv.includes('--render') ? await renderMatrix(snapshot) : undefined;
-    console.log(JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id, exportDirectory: snapshot.exportManifest?.directory, routes: snapshot.exportManifest?.routes, ...(render ? { render } : {}) }, null, 2));
-    if (snapshot.status !== 'succeeded' || (render && render.failed.length > 0)) process.exitCode = 1;
+    console.log(JSON.stringify({
+      runId: snapshot.runId,
+      status: snapshot.status,
+      versionId: snapshot.currentVersion.id,
+      gate: report ? { digest: report.bundleDigest, blocked: report.blocked, vetoes: report.vetoes, escalations: report.escalations, rubric: report.rubric } : undefined,
+      releaseDirectory: snapshot.exportManifest ? join(releaseRoot, snapshot.exportManifest.digest) : undefined,
+      routes: snapshot.exportManifest?.routes.map((route) => route.route),
+      ...(render ? { render } : {}),
+    }, null, 2));
+    if (!publishable || (render && render.failed.length > 0)) process.exitCode = 1;
   } finally { database.sqlite.close(); }
 }
 

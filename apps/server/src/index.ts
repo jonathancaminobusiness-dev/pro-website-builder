@@ -11,25 +11,26 @@ import { createPreviewServer } from './preview.js';
 import { createModelProvider } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
 
-export async function startServer(options: { dbPath?: string; exportRoot?: string; renderCacheDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
+export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
   const root = process.cwd();
   const dbPath = options.dbPath ?? process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'pro-website-builder.sqlite');
-  const exportRoot = options.exportRoot ?? process.env.PWB_EXPORT_ROOT ?? join(root, 'exports');
   const renderCacheDir = options.renderCacheDir ?? process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
   await mkdir(join(dbPath, '..'), { recursive: true });
-  await mkdir(exportRoot, { recursive: true });
   await mkdir(renderCacheDir, { recursive: true });
   const provider = createModelProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
   const runs = new Map<string, FixtureRun>();
   const claimed = new Set<string>();
+  const fontsDir = options.fontsDir ?? process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
     for (const run of runs.values()) { const snapshot = run.snapshot(); if (snapshot.currentVersion.id === versionId) return renderDesign(snapshot.currentVersion.ir, { routePrefix: `/preview/${versionId}` }); }
     return prototypes?.preview(versionId);
-  }, previewPort);
+    // The preview reads the faces itself and memoises them against the manifest,
+    // so a face added or replaced while the studio runs still reaches the captain.
+  }, previewPort, fontsDir);
   // The preview listens before the gate is wired, because a caller that asks for port 0 — as the
   // convention for parallel checkouts requires — only learns the origin the browser must visit here.
   await preview.start();
@@ -47,6 +48,18 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
   prototypes = registry;
   // A review the captain already paid minutes of browser time for survives a restart.
   await registry.restore();
+  const siteUrl = process.env.PWB_SITE_URL ?? 'https://site.invalid';
+  const siteName = process.env.PWB_SITE_NAME ?? 'pro-website-builder';
+  const releaseRoot = options.releaseRoot ?? process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
+  const evidenceDir = options.evidenceDir ?? process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
+  await mkdir(releaseRoot, { recursive: true });
+  // Gate 3 compares the faces the captain was actually served against the ones
+  // the bundle ships, so the preview is read when a release is prepared.
+  const release = {
+    releaseRoot, evidenceDir, fontsDir, siteUrl, siteName,
+    modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
+    previewFaces: () => preview.servedFaces(),
+  };
   const api = createApiServer({
     runs,
     prototypes: registry,
@@ -54,7 +67,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
       try {
-        const run = new FixtureRun({ repository, exportRoot, provider });
+        const run = new FixtureRun({ repository, provider, release });
         await run.initialize(id);
         runs.set(id, run);
         return run;
@@ -63,7 +76,7 @@ export async function startServer(options: { dbPath?: string; exportRoot?: strin
     loadRun: async (id) => {
       const existing = runs.get(id);
       if (existing) return existing;
-      const run = new FixtureRun({ repository, exportRoot, provider });
+      const run = new FixtureRun({ repository, provider, release });
       if (!await run.restore(id)) return undefined;
       runs.set(id, run);
       return run;

@@ -1,6 +1,6 @@
 # Phase 0 Foundation Design
 
-> **Scope.** This design describes Fase 0 as delivered. Later phases extend it — Fase 2 added `packages/qa-deterministic` and `packages/stage-prototype`, the critics and the prototype linter rules — so `README.md` owns the current package inventory and the delivered contracts.
+> **Historical record.** This is the Fase 0 design as written on 2026-09-05, and it describes only that foundation. Later phases moved past several of its statements — Fase 2 added `packages/qa-deterministic` and `packages/stage-prototype`, the critics and the prototype linter rules; Fase 3 added the release critics, the independent evidence runners and Lighthouse, and its release compiler now derives a Content-Security-Policy from what the bundle contains. `README.md` and the schemas in `packages/domain` own the delivered contracts; read them instead of this file.
 
 ## Context and goal
 

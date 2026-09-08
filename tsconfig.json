@@ -10,6 +10,7 @@
     { "path": "packages/orchestrator" },
     { "path": "packages/render-hub" },
     { "path": "packages/stage-prototype" },
+    { "path": "packages/stage-finalization" },
     { "path": "apps/server" },
     { "path": "apps/studio" }
   ]

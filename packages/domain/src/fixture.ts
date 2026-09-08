@@ -6,7 +6,7 @@ export function createFixtureIdentity(): IdentitySpec {
     color: {
       ink: { $value: '#18252d', $type: 'color' as const },
       paper: { $value: '#f4efe6', $type: 'color' as const },
-      accent: { $value: '#d86445', $type: 'color' as const },
+      accent: { $value: '#e07a5f', $type: 'color' as const },
       muted: { $value: '#607078', $type: 'color' as const },
     },
     space: {
@@ -44,6 +44,13 @@ export function createFixtureIdentity(): IdentitySpec {
   };
 }
 
+/**
+ * The fixture's own mark, as the bytes a page would inline. A ready asset names
+ * the image a document can carry, so it is a real `data:` URI: a licence row
+ * that says the bundle ships it has to be able to point at what it ships.
+ */
+const FIXTURE_MARK_URI = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTQgMjAgMTIgNCAyMCAyMFoiLz48L3N2Zz4=';
+
 export function createFixtureIR(): DesignIR {
   const identity = createFixtureIdentity();
   const node = (id: string, kind: 'stack' | 'grid' | 'cluster' | 'media' | 'type' | 'surface' | 'ornament' | 'component', semantic: 'h1' | 'h2' | 'h3' | 'p' | 'section' | 'figure' | 'div', props: Record<string, string>, slots: Record<string, string[]> = {}) => ({ id, kind, semantic, props, slots, responsive: [] });
@@ -55,7 +62,7 @@ export function createFixtureIR(): DesignIR {
       { id: 'page-proof', route: '/proof', title: 'Oficina — prova', rootNodeId: 'proof-root', nodes: [node('proof-root', 'stack', 'div', { gap: '{space.md}', color: '{color.ink}', background: '{color.paper}' }, { children: ['proof-title'] }), node('proof-title', 'type', 'h1', { text: 'Prova antes do brilho.', color: '{color.ink}', font: '{type.display}' })] },
       { id: 'page-contact', route: '/contact', title: 'Oficina — contato', rootNodeId: 'contact-root', nodes: [node('contact-root', 'stack', 'div', { gap: '{space.md}', color: '{color.ink}', background: '{color.paper}' }, { children: ['contact-title'] }), node('contact-title', 'type', 'h1', { text: 'Vamos conversar.', color: '{color.ink}', font: '{type.display}' })] },
     ] },
-    assets: { items: [{ id: 'fixture-mark', kind: 'vector', uri: 'inline:mark', alt: 'Marca da oficina', provenance: { source: 'fixture', author: 'pro-website-builder', license: 'internal fixture', date: '2026-09-05', hash: 'fixture-mark' }, status: 'ready' }] },
+    assets: { items: [{ id: 'fixture-mark', kind: 'vector', uri: FIXTURE_MARK_URI, alt: 'Marca da oficina', provenance: { source: 'fixture', author: 'pro-website-builder', license: 'internal fixture', date: '2026-09-05', hash: 'fixture-mark' }, status: 'ready' }] },
     stateFixtures: { default: { description: 'Full motion', values: { motion: 'full' } }, reduced: { description: 'Reduced motion', values: { motion: 'reduced' } } },
     reviewRecord: { findings: [], approvals: [] },
   };

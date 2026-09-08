@@ -5,6 +5,7 @@
   "references": [
     { "path": "../../packages/domain" }, { "path": "../../packages/export" }, { "path": "../../packages/linter" },
     { "path": "../../packages/orchestrator" }, { "path": "../../packages/providers" }, { "path": "../../packages/qa-deterministic" },
-    { "path": "../../packages/render-hub" }, { "path": "../../packages/renderer" }, { "path": "../../packages/stage-prototype" }
+    { "path": "../../packages/render-hub" }, { "path": "../../packages/renderer" },
+    { "path": "../../packages/stage-prototype" }, { "path": "../../packages/stage-finalization" }
   ]
 }

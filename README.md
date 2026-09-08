@@ -22,7 +22,8 @@ Each stage stops at a captain-only gate in v1. Agents return schema-validated JS
 - `packages/render-hub` uses Playwright Chromium to capture the full evidence matrix: 320/360/390/768/1024/1440 CSS px, every state fixture, light and dark when the identity declares one, reduced motion, screenshots, DOM and accessibility snapshots, per-node geometry, contrast and keyboard-focus samples, axe in each open state, console and network errors, and a content-addressed cache.
 - `packages/qa-deterministic` owns the Tier 0/1 gate. It is pure: evidence in, findings out. Tier 0 vetoes a revision before any model runs; Tier 1 observes without blocking.
 - `packages/stage-prototype` owns the prototype stage: the serial information architect, the parallel section composers, the four critics, the `PatchPlanner`, the refiner and the loop controller.
-- `packages/export` writes content-addressed static routes and a license/provenance manifest.
+- `packages/export` is the deterministic release compiler: per-route metadata with Open Graph and canonical URLs, a sitemap and robots file, a Content-Security-Policy derived from what the bundle contains, inline styles lifted into a content-addressed stylesheet, self-hosted fonts when the licence permits, sRGB companions for wide-gamut colour tokens, a licence inventory, and an immutable content-addressed bundle. It collects deterministic release vetoes instead of throwing, and `writeReleaseBundle` refuses to touch disk while any veto stands.
+- `packages/stage-finalization` owns the third stage: five release critics as separate read-only sessions, a patch-refiner capped at two cycles, a release-summarizer with no gate authority, the veto catalogue, preview/release parity, and the Gate 3 report.
 
 The renderer refuses raw visual values. Colors, dimensions, font settings, radii, shadows, and motion must resolve through tokens, with no exception path in Fase 0. A page node's `semantic` is the tag it renders as, drawn from a closed vocabulary, so the schema refuses a landmark the renderer would silently drop; `body` carries the query container and `main` is the element the breakpoint restyles. Preview is served on port `4311`, separate from the Studio/API origin, and the Studio iframe uses `sandbox` without `allow-same-origin`.
 
@@ -47,7 +48,7 @@ Run the deterministic fixture without starting the UI:
 corepack pnpm run:fixture
 ```
 
-The command writes a local SQLite database under `.treehouse/` and a content-addressed export under `exports/`. The database carries a schema version in `PRAGMA user_version`; opening a file written by an older version drops the `tasks`, `runs` and legacy `assets` tables and recreates the two it still uses, because this pre-release tool keeps no history worth backfilling. `projects`, `versions`, `patches`, `approvals` and `events` are left untouched, so rows from an upgraded file can name a run the `runs` table no longer has. Set `PWB_DB_PATH` and `PWB_EXPORT_ROOT` to use explicit locations, `PWB_MODEL_PROVIDER` to choose the model provider, and `PWB_STAGE_DEADLINE_MS` to give every stage the same deadline instead of the per-stage defaults. Add `--render` to also drive the approved document through the Playwright `RenderHub`: `createRenderMatrix` enumerates every route at the three representative widths — 390, 768 and 1440 CSS pixels — in every `stateFixtures` state and declared colour scheme, `--full-matrix` widens that to all six `RENDER_VIEWPORTS`, and each case is captured as a screenshot plus DOM and accessibility snapshot behind the hash cache under `PWB_RENDER_CACHE`. Observed on 2026-09-07, with the default `fake` provider and scratch paths so the recorded `claude-code` run above stayed intact — `PWB_DB_PATH=.treehouse/render-matrix.sqlite PWB_EXPORT_ROOT=.treehouse/render-matrix-exports PWB_RENDER_CACHE=.treehouse/render-matrix-cache corepack pnpm run:fixture --render` — the run printed `"render": {"cases": 18, "passed": 18, "cached": 0, "failed": []}` for the fixture's three routes, and repeating the same command against the warm cache printed `"cached": 18`. That run also pinned `PWB_PREVIEW_PORT=4319`, which the CLI no longer reads: it binds an ephemeral preview port so parallel checkouts never contend. When `--render` is passed, any failed render case makes the command exit `1` after printing the JSON, so a caller sees a failed matrix without comparing `passed` against `cases` itself.
+The command walks the three stages, closes the first two gates and stops at Gate 3 with the release prepared, printing the report. It publishes a content-addressed release under `releases/` only when the gate left nothing for a human to accept — no veto and no escalation — and records that publication under the `fixture` role, never as the captain; with anything open it prints the report and exits non-zero. It also writes a local SQLite database under `.treehouse/`. The database carries a schema version in `PRAGMA user_version`; opening a file written by an older version drops the `tasks`, `runs` and legacy `assets` tables and recreates the two it still uses, because this pre-release tool keeps no history worth backfilling. `projects`, `versions`, `patches`, `approvals` and `events` are left untouched, so rows from an upgraded file can name a run the `runs` table no longer has. Set `PWB_DB_PATH`, `PWB_RELEASE_ROOT` and `PWB_EVIDENCE_DIR` to use explicit locations, `PWB_MODEL_PROVIDER` to choose the model provider, and `PWB_STAGE_DEADLINE_MS` to give every stage the same deadline instead of the per-stage defaults. Add `--render` to also drive the approved document through the Playwright `RenderHub`: `createRenderMatrix` enumerates every route at the three representative widths — 390, 768 and 1440 CSS pixels — in every `stateFixtures` state and declared colour scheme, `--full-matrix` widens that to all six `RENDER_VIEWPORTS`, and each case is captured as a screenshot plus DOM and accessibility snapshot behind the hash cache under `PWB_RENDER_CACHE`. Observed on 2026-09-07, with the default `fake` provider and scratch paths so the recorded `claude-code` run above stayed intact — `PWB_DB_PATH=.treehouse/render-matrix.sqlite PWB_EXPORT_ROOT=.treehouse/render-matrix-exports PWB_RENDER_CACHE=.treehouse/render-matrix-cache corepack pnpm run:fixture --render` — the run printed `"render": {"cases": 18, "passed": 18, "cached": 0, "failed": []}` for the fixture's three routes, and repeating the same command against the warm cache printed `"cached": 18`. That run also pinned `PWB_EXPORT_ROOT` and `PWB_PREVIEW_PORT=4319`, neither of which the CLI still reads: the release root is the only output, and the preview binds an ephemeral port so parallel checkouts never contend. When `--render` is passed, any failed render case makes the command exit `1` after printing the JSON, so a caller sees a failed matrix without comparing `passed` against `cases` itself.
 
 Start the local API and preview, then the Studio in another terminal:
 
@@ -78,7 +79,7 @@ Two 2026-09-06 runs failed at the identity stage. Before the task carried its `d
 
 A 2026-09-07 run against the closed `semantic` vocabulary failed at the prototype stage: the composer proposed `semantic: 'section'` on a `grid` node and on a `component` node, and a per-kind rule that pinned every non-`type` kind to `div` rejected it. The renderer emits whatever `semantic` declares, so that rule refused a document it would have rendered exactly as written; only `figure` is tied to a kind, because that is the one branch the renderer hard-codes. The rule was narrowed to that, and the command was run again. A later change pinned each stage's `stage` and `role` as constants in the schema and made a phrasing node (`h1`, `h2`, `h3`, `p`) a leaf, and the command was run once more against that contract.
 
-The last complete 2026-09-07 run of that command was against that contract, before the structural rules below were added to the prompt. Claude produced a proposal for each of the three stages, all three passed the patch gate and the applier's dry run on attempt 1, and the captain gate approved each one: the event log holds `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization`, with no `task.failed`, and ends at `run.finished` carrying the export digest. The database holds 3 patches, 3 tasks, 3 approvals and 4 versions (root plus one per stage), each task at attempt 1, and each patch declares the stage and role of the task that produced it (`identity/director`, `prototype/composer`, `finalization/compiler`). The command exited 0 and wrote `index.html`, `proof/index.html`, `contact/index.html` and `manifest.json` under `exports/<digest>/`. That run's identity stage replaced `/reviewRecord`, the prototype stage replaced `/pages` as a whole subtree, and the finalization stage appended a node at `/pages/routes/0/nodes/-`.
+The last complete 2026-09-07 run of that command was against that contract, before the structural rules below were added to the prompt. It predates the finalization stage: at that commit `run:fixture` still wrote a static export of its own. Claude produced a proposal for each of the three stages, all three passed the patch gate and the applier's dry run on attempt 1, and the captain gate approved each one: the event log holds `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization`, with no `task.failed`, and ends at `run.finished` carrying the export digest. The database holds 3 patches, 3 tasks, 3 approvals and 4 versions (root plus one per stage), each task at attempt 1, and each patch declares the stage and role of the task that produced it (`identity/director`, `prototype/composer`, `finalization/compiler`). The command exited 0 and wrote `index.html`, `proof/index.html`, `contact/index.html` and `manifest.json` under `exports/<digest>/`. That run's identity stage replaced `/reviewRecord`, the prototype stage replaced `/pages` as a whole subtree, and the finalization stage appended a node at `/pages/routes/0/nodes/-`.
 
 `zod-to-json-schema` cannot express a `superRefine`, so the structural rules in `documentRules` — the media/figure pairing, the phrasing leaf rule, page-graph reachability and node id uniqueness, page id/route uniqueness, the token role and CSS-emittable token rules, the rule that every token alias and every visual prop reference names a token path the identity defines, and the asset rules (only a media node declares `assetId`, it names an asset the document lists, and a ready asset carries alt text and a `data:` URI) — reach the worker as prompt text built from that same object the gate quotes in its rejection messages. The one visual-prop rule a JSON Schema can carry is machine-enforced instead: a node prop is typed as a token reference (`"type": "string"` with `"pattern": "^\\{[^}]+\\}$"`), so the constraint now travels to the binary in the schema itself rather than only as prose, and the gate refuses a raw literal such as `700` or `#d86445` quoting that same rule. What the binary does with a `pattern` while decoding has not been observed here and is not claimed; the run recorded below says what was seen. Three runs of the command on 2026-09-07 after that line was added were aborted by the then 5-minute per-stage deadline rather than reaching a gate: the first after the identity stage was approved and while the prototype stage was running, the other two during the identity stage, each leaving `task.started` as the last event and no patch committed. The cause was local, not the contract: `claude -p 'Reply with the single word: ok' --output-format json --max-turns 1` reported `duration_ms: 3390` for the API call and took 1m47s of wall clock, so roughly 100s of per-invocation process overhead was consuming the budget. The stage deadlines were then sized to hold two full runner invocations (15/15/20 minutes against a 7-minute runner timeout).
 
@@ -93,6 +94,8 @@ PWB_MODEL_PROVIDER=claude-code corepack pnpm run:fixture
 It completed the whole journey and exited 0, printing `"status": "succeeded"` with the route list `/`, `/proof`, `/contact`; wall clock was 11m43s (18:48:24Z to 19:00:07Z), split 1m58s for identity, 6m54s for prototype and 2m50s for finalization, all inside the 15/15/20-minute stage deadlines. Every stage passed on attempt 1: the database holds 3 tasks each at attempt 1, 3 patches, 3 approvals and 4 versions, and the 22-event log runs `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization` with no `task.failed`, ending at `run.finished`. Each patch declared its own task's stage and role — `identity/director` touching `/reviewRecord`, `prototype/composer` and `finalization/compiler` touching `/pages`, `/assets` and `/reviewRecord`. The export under `exports/1cc32d2d.../` carries `index.html`, `proof/index.html`, `contact/index.html` and `manifest.json`.
 
 That run is what the `pattern` claim rests on, and no more: the binary's strict schema validator accepted the per-stage schema carrying it (all sixteen visual props emitted as `"type": "string"` with `"pattern": "^\{[^}]+\}$"`), and the approved document holds 174 visual props, every one of them a token reference, so the gate had no raw literal to refuse. Whether the API constrained decoding by that `pattern` or the worker simply followed the contract was not distinguished; no run has been observed in which the two disagree.
+
+Those runs are records of the commits they were made at, and `exports/<digest>/` is where that version of the command wrote. Neither directory nor exit code is what the command produces now: there is one publish path, it writes the content-addressed bundle under `PWB_RELEASE_ROOT` (default `releases/`), and `run:fixture` stops at Gate 3 and exits non-zero whenever the report carries a veto or an open escalation — which it does until the evidence runners have measured that exact bundle.
 
 Higgsfield is an optional asynchronous raster boundary, delivered as `HiggsfieldMcpProvider` in `packages/providers`: when its MCP is not configured, `submit` returns a `not_configured` job whose provenance records `pending provider terms` and a placeholder note, and it never requests or persists credentials. Phase 0 does not submit a raster job from the three-stage journey — `RunPlanner` emits three `claude`-lane tasks and nothing writes an asset from a `RasterJob` — so a fixture run's asset ledger is the same whether or not Higgsfield is configured. Wiring the raster lane into the run is later-phase work.
 
@@ -131,9 +134,223 @@ The review only offers what the run measured: `result.viewports` is the set of w
 ## Real local Claude Code in the prototype stage
 
 `PWB_MODEL_PROVIDER=claude-code` swaps all three prototype workers at once: `ClaudeInformationArchitect`, `ClaudeSectionComposer` and `ClaudeCritiqueRunner` replace their deterministic counterparts, for both `corepack pnpm run:prototype` and `corepack pnpm --filter @pwb/server dev`. Each is a separate session with a fresh id, `--no-session-persistence`, a closed JSON schema, a deadline, an abort signal and a denied tool list. A critic keeps `Read` so it can open the screenshots it was handed; every other worker is denied the filesystem and the network entirely. No credential is read, requested, logged or stored, and no paid API is involved. CI never runs this path: it uses the deterministic providers, which produce the same typed contracts.
+## Finalization stage and Gate 3
+
+The third stage compiles the approved document into an immutable release, has it
+reviewed, and stops at the captain.
+
+```bash
+corepack pnpm run:release          # compile, critique, evaluate Gate 3, publish only a clean report
+corepack pnpm run:evidence         # Vitest, Playwright on three engines, axe and Lighthouse
+corepack pnpm test:e2e:release     # only the browser evidence
+corepack pnpm run:lighthouse       # only the Lighthouse artifacts
+```
+
+Everything binds an ephemeral port the operating system chooses, so an evidence
+run never contends with the studio on `5173`, the preview on `4311`, or another
+worktree. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site name the
+canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT`,
+`PWB_EVIDENCE_DIR` and `PWB_FONTS_DIR` move the bundle, the artifacts and the
+fonts. Preparing a release writes
+the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and every
+runner reads it back from there. With no run to read, the fixture stands in.
+
+**One document, one publish, gates in order.** Gate 3 refuses to prepare or
+publish until the captain has approved identity and prototype on that run and the
+finalization stage has produced the version they are looking at — rejecting that
+proposal closes Gate 3 again until the stage runs anew, and rewinds to what the
+prototype gate approved whether or not Gate 3 refined it. That version, plus the
+review record the refiner writes onto it, is the run's release. A prepared
+release belongs to that one proposal: rejecting it, or running the stage again,
+discards it, and publishing a bundle prepared for another proposal is refused
+rather than writing bytes the captain never approved.
+
+Publishing the bundle *is* the finalization approval: there is no second action
+that could close the gate, so nothing can write a release with a veto standing or
+with the gate's open points unaccepted. The approve route refuses `finalization`
+and the studio's finalization row points at the Gate 3 panel. One code path owns
+the vetoes, the written acceptance, the `release.published` event, the release
+record and the single bundle root, and it claims the gate before its first
+await, so two publishes that race cannot both close it. A closed gate does not
+reopen either: once the bundle is published the run has finished, so preparing
+again is refused rather than moving a finished run's document.
+
+Only the captain may accept an open escalation in writing. A scripted run —
+`run:fixture` and `run:release` alike — goes through that same publish path
+under the `fixture` role and only when the report is clean; with a veto or an
+open point it prints the report and exits non-zero without writing, so the
+release record never carries an acceptance no human wrote.
+
+The finalization stage writes through the same boundary as every other stage:
+its proposals declare the stage and the role the foundation pins to it, the
+PatchGate validates them against the finalization patch schema, and only the
+Applier writes a version. A critic proposes nothing at all, and the refiner
+writes `/reviewRecord` and nothing else, because the bytes the release publishes
+have to be the bytes the captain approved. A refinement becomes a real version of
+the run: it is saved through the run's applier and repository, so the manifest
+names a version that can be retrieved and a second Gate 3 run builds on the
+first instead of redoing it. A patch that rewrites what the review record already
+says is recognised on the dry run, so it neither mints a version nor spends its
+idempotency key; it escalates instead. A model session that fails — the refiner,
+the summarizer — escalates and the report still reaches the captain with every
+veto and every artifact already computed.
+
+**Self-hosted fonts.** The compiler never downloads a face. The owner puts the
+files in the project's fonts directory (`PWB_FONTS_DIR`, default `fonts/`) with a
+`manifest.json` beside them that names each one and the terms it came with:
+
+```json
+{
+  "faces": [{
+    "family": "Iosevka Etoile", "weight": "400", "style": "normal",
+    "format": "woff2", "file": "iosevka-etoile-400.woff2",
+    "license": "ofl-1.1", "licenseUrl": "https://openfontlicense.org",
+    "source": "https://typeof.net/Iosevka/", "author": "Renzhi Li", "date": "2026-09-07"
+  }]
+}
+```
+
+One face is one file, in `woff2`, which every engine the release is measured on
+reads. A face is self-hosted only when its licence clearly permits redistributing
+the file with the site (`OFL-1.1`, `Apache-2.0`, `MIT`, `CC0-1.0`, `UFL-1.0`,
+`CC-BY-4.0`); anything else stays unhosted and the stack falls back, so an
+ambiguous licence degrades the typography instead of shipping a file the owner
+may not redistribute. Either way the face gets a row in `licenses.json`, but the
+bundle is a public artifact, so only a face the release actually ships publishes
+the author, source, date, licence URL and hash the manifest declared; a face that
+stays out is named with its licence and the reason it stays out, and what the
+owner wrote about it — an invoice, a private note — never leaves the project's
+own manifest. No manifest means no self-hosted face, which is the default; a
+manifest that exists but cannot be read is an error, never silently no faces.
+
+Every compile site reads the same directory — the studio's Gate 3, `run:release`,
+`run:evidence`, `run:lighthouse` and the release harness — so the evidence
+runners measure the bundle the gate credits. The preview serves those same faces
+from its own origin under `font-src 'self'`, reading them again whenever the
+manifest or any file it declares changes rather than once at start, so a face
+added or re-exported while the studio runs reaches the captain's iframe and an
+unreadable manifest fails that request rather than the studio. Gate 3 then
+compares the faces the preview actually served against the ones the bundle ships,
+so a face replaced after the captain looked at it is a divergence and not an
+identical route, and `tests/release/parity.spec.ts` asks both sides what they
+actually loaded rather than comparing two fallbacks.
+
+So that this last check measures a face instead of an empty `document.fonts`,
+installing seeds `fonts/` with one real face — Fraunces 400 normal, under the
+OFL, taken from the `@fontsource/fraunces` dev dependency rather than from a
+binary in this repository or a download at compile time
+(`scripts/seed-fixture-fonts.ts`, run by `prepare`; `corepack pnpm prepare`
+seeds it again). It is the family the fixture identity already names in its
+display stack, so text on every route loads it. The seeding happens once, at
+install, because every compile site reads that directory: seeding it later would
+move the digest between the gate and the runners meant to measure the gate's
+bundle. A `manifest.json` already there is left untouched — the faces an owner
+put in their own project are theirs — and a checkout installed with
+`--ignore-scripts` simply has no face, which is the default this repository
+shipped before. With the seeded face the parity artifacts record `faces: 1` on
+each engine, against `routes: 3` and `differences: 0`.
+
+**Release vetoes.** Eight objective stop conditions, catalogued in
+`packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
+XSS or `javascript:` URL, unsanitized HTML, a bundled asset without a licence, a
+build failure, a broken primary link, a critical AA regression, and a release
+that diverges from the approved one. Whether an asset is bundled is read back
+out of the documents the compiler wrote, never from its lifecycle status: only a
+`data:` asset a compiled page references travels inside the bundle. Only what
+the bundle ships can be published without terms, so an asset the release never
+carries — one no page references, or one pointing at a remote URI — escalates to
+the captain instead of blocking, and its `licenses.json` row names its licence
+and the reason it stays out and nothing the owner declared about it, exactly as
+for a face the release does not redistribute. A veto is never scored or averaged: one veto
+blocks Gate 3, and the single publish path refuses to write. Only the compiler,
+the evidence runners and the gate may raise one — a critic cannot raise or clear a veto, its
+tasks carry no writable path, and its findings have no veto severity.
+
+**Independent evidence.** Four runners that do not know what the gate wants to
+hear write typed artifacts into `artifacts/release/`, and the gate reads those
+files. `evidenceVetoes` derives every veto the evidence can raise from what the
+runners measured — axe's raw violation counts, a failed Vitest or Playwright run
+— and never from a field a runner chose to set, because an artifact has no such
+field to set; and
+`sealSummary` overwrites the summarizer's veto count with the authoritative one,
+so no summary can hide a veto. What the gate did — each refinement cycle, a
+critic or a model session that failed, the verdict itself — is written to the
+run's event log as it happens, so a blocked Gate 3 leaves a durable trace. A runner that did not run leaves no artifact, and
+the gate reports the gap as an escalation instead of treating silence as a pass.
+
+Every artifact names the release it measured — the bundle digest and the
+document hash — and only the artifacts that measured this bundle are credited,
+by the gate and by the five critics alike, so a stale measurement can neither
+block a release nor score a rubric. Anything else is set aside and reported as coverage the gate does not
+have, so a run never inherits an earlier run's evidence in silence. An artifact
+that measured the same bytes from a different document is credited and the
+difference is named, because that is what the refiner recording a finding does.
+
+All three engines always run. On the macOS 27.0 host this was developed on,
+Playwright's Firefox 153 build does not start — it times out after
+`sandbox_extension_issue_file_to_process ... Operation not permitted`, an
+operating-system sandbox restriction rather than a missing dependency — so that
+run leaves no Firefox artifact, and the gate escalates "Nenhuma execução
+Playwright em firefox". Firefox is measured where it does start: the
+`release-evidence` job in `.github/workflows/ci.yml` installs the three engines
+on `ubuntu-latest`, runs `corepack pnpm run:evidence` and uploads
+`artifacts/release`, so the captain reads the engine's own artifacts instead of
+a local run pretending it ran. Publishing over an open escalation takes a written
+reason from the captain, recorded in the run's log as `release.published` and in
+the release record beside the bundle. The manifest inside the bundle is a pure
+function of the compiled bytes and the toolchain — it names no document, no
+version, no publication and no path on the machine that compiled it — so writing
+the same bytes again is an idempotent success that appends a second entry to
+`<digest>.publications.json`, where the approved version, the released version,
+the document hash and the acceptance live. That record is the only durable home
+for them, so a damaged one refuses the next append instead of being replaced.
+
+Lighthouse is a laboratory run. It measures one machine and one network, does
+not observe a visitor, and does not measure INP without interaction; the
+artifacts say so rather than implying field data. axe finds part of what WCAG
+requires and returns `incomplete` where a human must look, which the artifacts
+also record.
+
+**Reproducibility and parity.** The bundle directory is the digest of every file
+it contains, the manifest carries no timestamp, and the same document and
+toolchain produce byte-identical bundles. Parity is proven twice: Vitest fixtures
+read the compiled stylesheet back with a parser that shares no code with the
+compiler that wrote it, and `tests/release/parity.spec.ts` compares computed
+styles, text and the faces each side actually loaded, between the preview and the
+release in every engine. Both release runners write their typed artifacts from
+their teardown, so a run the per-test timeout aborts still leaves one — naming
+the routes and widths it never measured — and a divergence a browser sees
+reaches Gate 3 as a failed measurement, a `BUILD_FAILED` veto, instead of only
+turning a test red. Each of those artifacts keeps the same id whether the run
+passed or failed, so a clean re-run replaces the verdict of the aborted one
+rather than leaving it standing. An engine that never launches still leaves no artifact at
+all, so it stays the missing engine the captain accepts in writing.
+
+**Gate 3.** The studio panel shows the digest, the standing vetoes, the rubric
+each critic gave on the 0–4 scale with a minimum of 3, parity per route, which
+runners produced evidence, and what escalates. Publishing sends the digest the
+captain is looking at, so a release that moved since the report cannot be
+published by mistake, and an open escalation takes a written acceptance the run's
+log and the release record keep. Only the captain publishes.
+
+### Real critic sessions
+
+CI and the fixture use the deterministic providers. `PWB_MODEL_PROVIDER=claude-code`
+switches the five critics, the patch-refiner and the release-summarizer to the
+owner's local Claude Code binary through `ClaudeJsonRunner`, which uses the same
+boundary as `ClaudeRunner`: `execFile` with no shell, a fresh session that is
+never persisted, tools denied, a deadline and an abort signal. It never reads,
+stores, prints, forwards or asks for a credential, and no paid API is involved.
+
+```bash
+corepack pnpm run:evidence
+PWB_MODEL_PROVIDER=claude-code corepack pnpm run:release
+```
+
+The same variable switches the studio's Gate 3 routes when the server starts.
 
 ## Quality and security checks
 
-The test suite covers schema validation, page-graph integrity, alias cycles/orphans, byte-stable rendering, token-only linting, identity token roles, CSS-emittable tokens, forbidden defaults, CAS/overlap rejection, semaphore limits and deadlines, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, export licenses, the full fixture journey, cancellation/restart, and scans of database/log/export data for secret-like values. The prototype stage adds the section-window contracts, the closed critic vocabulary, the guarded compilation of every allowlisted repair, each of the loop's stop conditions observed through the stage itself, and the seven prototype linter rules. `corepack pnpm test:e2e` additionally drives the Studio through all three gates and through the Gate 2 review, and exercises `RenderHub` against a live browser, both for a single cached case and for the whole route x viewport x state matrix served by the isolated preview server. Several checkouts of this repo share one machine, so set `PWB_E2E_PORT_BASE` to give a run its own API, preview and Studio ports instead of reusing whatever already listens on the developer ones: `PWB_E2E_PORT_BASE=4520 corepack pnpm test:e2e`. With that block the harness serves the Studio from Vite's dev server; on the default ports it serves the built bundle instead, so run `corepack pnpm build` first.
+The test suite covers schema validation, page-graph integrity, alias cycles/orphans, byte-stable rendering, token-only linting, identity token roles, CSS-emittable tokens, forbidden defaults, CAS/overlap rejection, semaphore limits and deadlines, immutable versioning, SQLite WAL, captain-only approvals, isolated preview headers, the licence inventory the release compiler writes, the full fixture journey, cancellation/restart, and scans of database, log and compiled-bundle data for secret-like values. The prototype stage adds the section-window contracts, the closed critic vocabulary, the guarded compilation of every allowlisted repair, each of the loop's stop conditions observed through the stage itself, and the seven prototype linter rules. `corepack pnpm test:e2e` additionally drives the Studio through all three gates and through the Gate 2 review, and exercises `RenderHub` against a live browser, both for a single cached case and for the whole route x viewport x state matrix served by the isolated preview server. Several checkouts of this repo share one machine, so set `PWB_E2E_PORT_BASE` to give a run its own API, preview and Studio ports instead of reusing whatever already listens on the developer ones: `PWB_E2E_PORT_BASE=4520 corepack pnpm test:e2e`. With that block the harness serves the Studio from Vite's dev server; on the default ports it serves the built bundle instead, so run `corepack pnpm build` first.
 
-Fase 0 intentionally does not include parallel identity directions, Postgres, SaaS authentication, Yjs/CRDT collaboration, Astro output, or Lighthouse. Fase 2 adds the prototype stage, its critics and the prototype half of the linter catalogue; the identity and release halves stay with their own phases.
+Fase 0 intentionally does not include parallel identity directions, Postgres, SaaS authentication, Yjs/CRDT collaboration, or Astro output. Fase 2 adds the prototype stage, its critics and the prototype half of the linter catalogue; Fase 3 adds the release compiler, the release critics, the evidence runners and Lighthouse; parallel identity directions stay with the identity phase.

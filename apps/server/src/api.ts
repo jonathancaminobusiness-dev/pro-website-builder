@@ -9,7 +9,13 @@ export class RunConflictError extends Error {
   constructor(runId: string) { super(`Run ${runId} already exists.`); this.name = 'RunConflictError'; }
 }
 
-interface ApiOptions { runs: Map<string, FixtureRun>; createRun: (id: string) => Promise<FixtureRun>; loadRun?: (id: string) => Promise<FixtureRun | undefined>; prototypes?: PrototypeRunRegistry; }
+interface ApiOptions {
+  runs: Map<string, FixtureRun>;
+  createRun: (id: string) => Promise<FixtureRun>;
+  loadRun?: (id: string) => Promise<FixtureRun | undefined>;
+  prototypes?: PrototypeRunRegistry;
+}
+
 const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' };
 const allowedOrigins = new Set<string>([STUDIO_ORIGIN]);
 function allowedOrigin(origin: string | undefined): string { return origin && allowedOrigins.has(origin) ? origin : STUDIO_ORIGIN; }
@@ -41,6 +47,35 @@ export function createApiServer(options: ApiOptions): Server {
         const handled = await handlePrototypeRequest(options.prototypes, request, pathname, body);
         if (handled) { send(response, handled.status, handled.payload); return; }
       }
+
+      // Gate 3: prepare a release, read the report, and publish the exact bundle
+      // the captain looked at. Publishing is what approves the finalization gate.
+      const release = /^\/api\/runs\/([^/]+)\/release(?:\/(publish))?$/.exec(pathname);
+      if (release) {
+        const runId = decodeURIComponent(release[1]!);
+        const run = options.runs.get(runId) ?? (options.loadRun ? await options.loadRun(runId) : undefined);
+        if (!run) { send(response, 404, { error: 'Run not found.' }); return; }
+        if (!run.releaseEnabled()) { send(response, 404, { error: 'A finalização não está habilitada neste servidor.' }); return; }
+        if (request.method === 'GET' && !release[2]) {
+          const snapshot = run.releaseSnapshot();
+          if (!snapshot) { send(response, 404, { error: 'O release ainda não foi preparado nesta execução.' }); return; }
+          send(response, 200, snapshot);
+          return;
+        }
+        if (request.method !== 'POST') { send(response, 405, { error: 'Method not allowed.' }); return; }
+        // Gate 3 never opens before gates 1 and 2 closed, and the bundle is
+        // compiled from the version the finalization stage produced.
+        const blocker = run.releaseBlocker();
+        if (blocker) { send(response, 409, { error: blocker }); return; }
+        if (!release[2]) { send(response, 200, await run.prepareRelease()); return; }
+        const input = await body(request);
+        if (input.approverRole !== 'captain') { send(response, 403, { error: 'Only the captain can approve v1 gates.' }); return; }
+        if (typeof input.digest !== 'string') { send(response, 400, { error: 'O digest do bundle aprovado é obrigatório.' }); return; }
+        const manifest = await run.publishRelease(input.digest, typeof input.rationale === 'string' ? input.rationale : undefined);
+        send(response, 200, { manifest, snapshot: run.releaseSnapshot(), run: run.snapshot() });
+        return;
+      }
+
       const match = /^\/api\/runs\/([^/]+)(?:\/(stage|approve|reject|cancel|restart))?$/.exec(pathname);
       if (match) {
         const runId = decodeURIComponent(match[1]!);
@@ -57,6 +92,7 @@ export function createApiServer(options: ApiOptions): Server {
           if (input.approverRole !== 'captain') { send(response, 403, { error: 'Only the captain can approve v1 gates.' }); return; }
           const stage = input.stage ?? run.snapshot().currentStage;
           if (stage !== 'identity' && stage !== 'prototype' && stage !== 'finalization') { send(response, 400, { error: 'A valid stage is required.' }); return; }
+          if (stage === 'finalization') { send(response, 409, { error: 'O gate de finalização é o Gate 3: publicar o bundle aprova a etapa.' }); return; }
           send(response, 200, await run.approve(stage, 'captain', typeof input.rationale === 'string' ? input.rationale : undefined));
           return;
         }

@@ -10,14 +10,22 @@
     "run:fixture": "tsx scripts/run-fixture.ts",
     "run:prototype": "tsx scripts/run-prototype.ts",
     "typecheck": "tsc -b",
-    "lint": "corepack pnpm typecheck"
+    "lint": "corepack pnpm typecheck",
+    "run:release": "tsx scripts/run-release.ts",
+    "run:lighthouse": "tsx scripts/run-lighthouse.ts",
+    "test:e2e:release": "playwright test --config playwright.release.config.ts",
+    "run:evidence": "tsx scripts/run-evidence.ts",
+    "prepare": "tsx scripts/seed-fixture-fonts.ts"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@fontsource/fraunces": "5.3.0",
     "@playwright/test": "^1.55.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "lighthouse": "^13.4.1",
     "tsx": "^4.19.0",
     "typescript": "^5.9.0",
     "vite": "^7.0.0",
