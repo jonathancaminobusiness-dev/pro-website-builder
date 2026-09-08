@@ -55,6 +55,7 @@ export interface IdentityGateProps {
   busy: boolean;
   error: string;
   onCreate: () => void;
+  onOpen: (runId: string) => void;
   onStart: () => void;
   onApprove: (directionId: string, rationale: string, overrideRationale?: string) => void;
   onReject: (directionId: string, rationale: string) => void;
@@ -66,6 +67,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const { snapshot } = props;
   const [rationale, setRationale] = useState('');
   const [override, setOverride] = useState('');
+  const [openRunId, setOpenRunId] = useState('');
   const [tokenPath, setTokenPath] = useState('color.accent');
   const [tokenValue, setTokenValue] = useState('#ff7a00');
 
@@ -103,6 +105,11 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       <span>◎</span>
       <p>Nenhuma execução de identidade aberta. Criar a execução não gasta nenhuma chamada de modelo.</p>
       <button className="primary" onClick={props.onCreate} disabled={props.busy}>Criar execução de identidade</button>
+      <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
+        <label htmlFor="gate1-open-run">Abrir execução existente</label>
+        <input id="gate1-open-run" value={openRunId} placeholder="identity-…" onChange={(event) => setOpenRunId(event.target.value)} />
+        <button className="secondary" type="submit" disabled={props.busy || openRunId.trim() === ''}>Abrir</button>
+      </form>
     </div>}
 
     {snapshot && <>

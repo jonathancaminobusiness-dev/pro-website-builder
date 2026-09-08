@@ -9,7 +9,7 @@ import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
 import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
-import { createIdentityProvider, createModelProvider } from './provider.js';
+import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
 
 export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
@@ -20,6 +20,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   await mkdir(renderCacheDir, { recursive: true });
   const provider = createModelProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
   const identityProvider = createIdentityProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
+  const raster = createRasterProvider();
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
   const runs = new Map<string, FixtureRun>();
@@ -87,11 +88,11 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     },
     identity: {
       runs: identityRuns,
-      createRun: async (id) => { const run = new IdentityRun({ runId: id, repository, provider: identityProvider, renderCacheDir }); await run.initialize(); identityRuns.set(id, run); return run; },
+      createRun: async (id) => { const run = new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir }); await run.initialize(); identityRuns.set(id, run); return run; },
       loadRun: async (id) => {
         const existing = identityRuns.get(id);
         if (existing) return existing;
-        const run = new IdentityRun({ runId: id, repository, provider: identityProvider, renderCacheDir });
+        const run = new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir });
         if (!await run.restore()) return undefined;
         identityRuns.set(id, run);
         return run;

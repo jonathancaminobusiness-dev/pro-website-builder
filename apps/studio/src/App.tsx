@@ -22,6 +22,22 @@ const stages = [{ id: 'identity', label: '01 Identidade' }, { id: 'prototype', l
 const views = [{ id: 'pipeline', label: 'Pipeline' }, { id: 'gate1', label: 'Gate 1 · identidade' }] as const;
 type ViewId = (typeof views)[number]['id'];
 
+/**
+ * The one identity run this browser last worked on. A Gate 1 the captain left
+ * open outlives both the tab and the server process, so the screen reopens it
+ * from the ledger instead of starting an expensive fan-out again.
+ */
+const IDENTITY_RUN_KEY = 'pwb.gate1.runId';
+function rememberedIdentityRun(): string {
+  try { return window.localStorage.getItem(IDENTITY_RUN_KEY) ?? ''; } catch { return ''; }
+}
+function rememberIdentityRun(runId: string): void {
+  try { window.localStorage.setItem(IDENTITY_RUN_KEY, runId); } catch { /* a browser that refuses storage still decides the gate in this session */ }
+}
+function forgetIdentityRun(): void {
+  try { window.localStorage.removeItem(IDENTITY_RUN_KEY); } catch { /* nothing to forget */ }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_ORIGIN}${path}`, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
   const payload = await response.json() as T & { error?: string };
@@ -57,8 +73,18 @@ export default function App() {
 
   const identityAct = useCallback(async (action: () => Promise<IdentityGateSnapshot>): Promise<void> => {
     setBusy(true); setIdentityError('');
-    try { setIdentity(await action()); } catch (cause) { setIdentityError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); } finally { setBusy(false); }
+    try { const next = await action(); rememberIdentityRun(next.runId); setIdentity(next); } catch (cause) { setIdentityError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); } finally { setBusy(false); }
   }, []);
+  const identityGet = useCallback((runId: string) => request<IdentityGateSnapshot>(`/api/identity/runs/${encodeURIComponent(runId)}`), []);
+  const openIdentityRun = useCallback((runId: string) => { void identityAct(() => identityGet(runId)); }, [identityAct, identityGet]);
+
+  useEffect(() => {
+    const remembered = rememberedIdentityRun();
+    if (!remembered) return;
+    // A run the server no longer knows is not an error the captain has to read:
+    // the screen forgets it and offers to create or open another one.
+    void identityGet(remembered).then(setIdentity, forgetIdentityRun);
+  }, [identityGet]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
   const startIdentityRun = () => identity && identityAct(() => identityPost(`/api/identity/runs/${identity.runId}/start`));
@@ -72,7 +98,7 @@ export default function App() {
 
   return <div className="studio-shell">
     <header className="topbar"><div><span className="eyebrow">FIRSTMATE / STUDIO LOCAL</span><h1>Compilador de identidade</h1></div><nav className="view-tabs" aria-label="Telas do estúdio">{views.map((item) => <button key={item.id} className={view === item.id ? 'selected' : ''} aria-current={view === item.id ? 'page' : undefined} onClick={() => setView(item.id)}>{item.label}</button>)}</nav><span className="local-pill">uso próprio · pt-BR</span><a className="gate2-link" href={GATE2_ROUTE}>Gate 2 · revisão do protótipo →</a></header>
-    {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} onCreate={createIdentityRun} onStart={startIdentityRun} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
+    {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} onCreate={createIdentityRun} onOpen={openIdentityRun} onStart={startIdentityRun} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
       <section className="intro-panel"><p className="eyebrow">A identidade é o contrato</p><h2>Da direção visual ao site final, uma fonte de verdade.</h2><p>O editor mostra propostas tipadas; o renderer determinístico cuida do resultado. Os três gates desta versão são do capitão.</p><button className="primary" onClick={create} disabled={busy}>{busy ? 'Preparando…' : snapshot ? 'Reiniciar briefing' : 'Carregar briefing fixo'}</button></section>
       <section className="stage-panel"><div className="section-heading"><div><p className="eyebrow">Pipeline</p><h2>Três etapas, três decisões</h2></div>{snapshot && <span className={`status status-${snapshot.status}`}>{snapshot.status === 'needs_review' ? 'aguarda gate' : snapshot.status === 'rejected' ? 'rejeitado · reexecutar' : snapshot.status}</span>}</div><div className="stage-list">{stages.map((stage, index) => { const approval = snapshot?.approvals.find((item) => item.stage === stage.id); const active = snapshot?.currentStage === stage.id; return <div className={`stage-row ${active ? 'active' : ''}`} key={stage.id}><span className="stage-number">0{index + 1}</span><div><strong>{stage.label}</strong><small>{approval ? approval.decision === 'approved' ? 'Aprovado pelo capitão' : 'Rejeitado para revisão' : active ? 'Proposta pronta para revisão' : 'Bloqueada pelo gate anterior'}</small></div><span className="stage-dot" />{active && <span className="active-mark">●</span>}</div>; })}</div><div className="actions">{snapshot?.status === 'needs_review' ? <><button className="secondary" onClick={() => review('reject')} disabled={busy}>Rejeitar proposta</button>{snapshot.currentStage === 'finalization' ? <span className="qa-chip">Aprovar é publicar o bundle no Gate 3 abaixo</span> : <button className="primary" onClick={() => review('approve')} disabled={busy}>Aprovar gate</button>}</> : <button className="primary" onClick={runStage} disabled={!snapshot || busy || snapshot.status === 'succeeded'}>{busy ? 'Executando…' : snapshot?.status === 'succeeded' ? 'Release publicado' : snapshot?.status === 'rejected' ? 'Refazer etapa' : 'Executar próxima etapa'}</button>}</div></section>
       <section className="review-panel"><div className="section-heading"><div><p className="eyebrow">Revisão visual</p><h2>Preview isolado</h2></div><span className="qa-chip">linter: {snapshot?.lintErrorCount ?? 0} erros</span></div>{snapshot ? <><div className="route-tabs">{snapshot.rendered.routes.map((item) => <button key={item.route} className={route === item.route ? 'selected' : ''} onClick={() => setRoute(item.route)}>{item.route}</button>)}</div><iframe title="Preview do site" src={previewUrl} sandbox="" className="preview-frame" /></> : <div className="empty-state"><span>△</span><p>Carregue o briefing para abrir o primeiro contrato de identidade.</p></div>}</section>
