@@ -106,29 +106,32 @@ export default function App() {
   // retried, because the server may be restarting mid-shoot, but only so many
   // times: a run that is gone, or a server that never comes back, ends the loop
   // and says so rather than being polled in silence for the rest of the session.
-  const [pollFailures, setPollFailures] = useState(0);
+  const [pollFailures, setPollFailures] = useState({ runId: '', count: 0 });
   const generating = identity?.assets.some((asset) => asset.status === 'generating') ?? false;
+  // The budget belongs to the run it was spent on, so a run that went away
+  // cannot leave a later one looking as if its images never settled.
+  const spent = identity && pollFailures.runId === identity.runId ? pollFailures.count : 0;
   useEffect(() => {
-    if (!identity || !generating || pollFailures >= POLL_MAX_FAILURES) return;
+    if (!identity || !generating || spent >= POLL_MAX_FAILURES) return;
     const runId = identity.runId;
     const timer = setTimeout(() => {
       void identityGet(runId).then(
-        (next) => { setIdentity(next); setPollFailures(0); },
+        (next) => { setIdentity(next); if (spent > 0) setPollFailures({ runId, count: 0 }); },
         (cause: unknown) => {
           if (isMissing(cause)) {
             forgetIdentityRun();
-            setPollFailures(POLL_MAX_FAILURES);
+            setPollFailures({ runId, count: POLL_MAX_FAILURES });
             setIdentityError('Esta execução não está mais no servidor.');
             return;
           }
-          const failures = pollFailures + 1;
-          setPollFailures(failures);
-          if (failures >= POLL_MAX_FAILURES) setIdentityError('Não foi possível acompanhar a geração das imagens. Recarregue para ler o estado atual.');
+          const count = spent + 1;
+          setPollFailures({ runId, count });
+          if (count >= POLL_MAX_FAILURES) setIdentityError('Não foi possível acompanhar a geração das imagens. Recarregue para ler o estado atual.');
         },
       );
     }, 1500);
     return () => { clearTimeout(timer); };
-  }, [generating, identity, identityGet, pollFailures]);
+  }, [generating, identity, identityGet, spent]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
   const startIdentityRun = () => identity && identityAct(() => identityPost(`/api/identity/runs/${identity.runId}/start`));
