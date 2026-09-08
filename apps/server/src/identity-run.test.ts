@@ -677,7 +677,7 @@ describe('identity run', () => {
 describe('identity api', () => {
   // Ephemeral ports: several worktrees of this repo run their suites on one machine.
   async function withServer<T>(work: (origin: string) => Promise<T>): Promise<T> {
-    const server = await startServer({ dbPath: join(directory, 'api.sqlite'), exportRoot: join(directory, 'exports'), apiPort: 0, previewPort: 0 });
+    const server = await startServer({ dbPath: join(directory, 'api.sqlite'), releaseRoot: join(directory, 'releases'), apiPort: 0, previewPort: 0 });
     const { port } = server.api.address() as AddressInfo;
     try { return await work(`http://127.0.0.1:${port}`); } finally { await server.close(); }
   }
@@ -765,14 +765,14 @@ describe('identity api', () => {
 
   it('serves, refuses re-creation of, and decides a run across a server restart', async () => {
     const dbPath = join(directory, 'restart.sqlite');
-    const exportRoot = join(directory, 'restart-exports');
-    const first = await startServer({ dbPath, exportRoot, apiPort: 0, previewPort: 0 });
+    const releaseRoot = join(directory, 'restart-releases');
+    const first = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
     const firstOrigin = `http://127.0.0.1:${(first.api.address() as AddressInfo).port}`;
     await post(firstOrigin, '/api/identity/runs', { runId: 'restarted' });
     await post(firstOrigin, '/api/identity/runs/restarted/start', { approverRole: 'captain' });
     await first.close();
 
-    const second = await startServer({ dbPath, exportRoot, apiPort: 0, previewPort: 0 });
+    const second = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
     const origin = `http://127.0.0.1:${(second.api.address() as AddressInfo).port}`;
     try {
       const fetched = await fetch(`${origin}/api/identity/runs/restarted`, { headers: { origin: STUDIO_ORIGIN } });
@@ -793,14 +793,14 @@ describe('identity api', () => {
 
   it('builds one run when two cold requests decide it at once', async () => {
     const dbPath = join(directory, 'concurrent.sqlite');
-    const exportRoot = join(directory, 'concurrent-exports');
-    const first = await startServer({ dbPath, exportRoot, apiPort: 0, previewPort: 0 });
+    const releaseRoot = join(directory, 'concurrent-releases');
+    const first = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
     const firstOrigin = `http://127.0.0.1:${(first.api.address() as AddressInfo).port}`;
     await post(firstOrigin, '/api/identity/runs', { runId: 'contended' });
     await post(firstOrigin, '/api/identity/runs/contended/start', { approverRole: 'captain' });
     await first.close();
 
-    const second = await startServer({ dbPath, exportRoot, apiPort: 0, previewPort: 0 });
+    const second = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
     const origin = `http://127.0.0.1:${(second.api.address() as AddressInfo).port}`;
     try {
       // Nothing is cached yet, so both requests would each rebuild the run. Two

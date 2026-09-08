@@ -74,6 +74,9 @@ importers:
       '@pwb/stage-finalization':
         specifier: workspace:*
         version: link:../../packages/stage-finalization
+      '@pwb/stage-identity':
+        specifier: workspace:*
+        version: link:../../packages/stage-identity
       '@pwb/stage-prototype':
         specifier: workspace:*
         version: link:../../packages/stage-prototype
@@ -206,6 +209,33 @@ importers:
       '@pwb/renderer':
         specifier: workspace:*
         version: link:../renderer
+
+  packages/stage-identity:
+    dependencies:
+      '@pwb/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@pwb/linter':
+        specifier: workspace:*
+        version: link:../linter
+      '@pwb/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
+      '@pwb/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@pwb/render-hub':
+        specifier: workspace:*
+        version: link:../render-hub
+      '@pwb/renderer':
+        specifier: workspace:*
+        version: link:../renderer
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+      zod-to-json-schema:
+        specifier: ^3.24.5
+        version: 3.25.2(zod@3.25.76)
 
   packages/stage-prototype:
     dependencies:
