@@ -155,9 +155,12 @@ export class IdentityRun {
     const checkpoint = events.filter((event) => event.type === CHECKPOINT_EVENT).at(-1);
     if (!checkpoint) {
       if (cancelled) { this.status = 'cancelled'; this.started = true; return true; }
-      const failed = events.filter((event) => event.type === 'identity.stage.failed').at(-1);
+      // A run can be started again after it failed, so what it ended as is
+      // whichever of the two events came last, not whether a failure is present.
+      const last = events.filter((event) => event.type === 'identity.stage.failed' || event.type === 'identity.stage.started').at(-1);
+      const failed = last?.type === 'identity.stage.failed' ? last : undefined;
       if (failed) this.failure = typeof failed.payload.reason === 'string' ? failed.payload.reason : 'The identity stage failed.';
-      else if (events.some((event) => event.type === 'identity.stage.started')) this.failure = INTERRUPTED;
+      else if (last) this.failure = INTERRUPTED;
       this.status = failed ? 'failed' : this.failure ? 'interrupted' : 'queued';
       return true;
     }

@@ -66,9 +66,13 @@ test('the captain can stop a run before its gate, and it stays stopped', async (
   await page.route('**/api/identity/runs/*/start', async (route) => { await held; await route.continue(); });
   await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
 
-  // The stop is offered only while there is something to stop.
+  // The stop is offered only while there is something to stop, and while the
+  // run is working it is the only way out: neither control that would replace
+  // the run this browser remembers is on offer.
   const cancel = page.getByRole('button', { name: 'Cancelar execução' });
   await expect(cancel).toBeVisible();
+  await expect(page.getByLabel('Abrir outra execução')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Nova execução' })).toBeDisabled();
   await cancel.click();
   await expect(page.getByText('cancelada', { exact: true })).toBeVisible();
 
@@ -79,6 +83,9 @@ test('the captain can stop a run before its gate, and it stays stopped', async (
   await expect(page.getByRole('button', { name: 'Execução cancelada' })).toBeDisabled();
   await expect(page.locator('.direction-card')).toHaveCount(0);
   await expect(cancel).toHaveCount(0);
+  // Nothing is working any more, so both ways to another run come back.
+  await expect(page.getByLabel('Abrir outra execução')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Nova execução' })).toBeEnabled();
 });
 
 /**
@@ -151,6 +158,7 @@ test('a reloaded tab offers the stop while the stage is working, and follows it 
   await expect(start).toBeDisabled();
   // While the stage is working the stop is the only way out of the run.
   await expect(page.getByRole('button', { name: 'Nova execução' })).toBeDisabled();
+  await expect(page.getByLabel('Abrir outra execução')).toHaveCount(0);
 
   // No click follows: the screen learns on its own that the fan-out finished.
   await expect(page.locator('.direction-card')).toHaveCount(3);

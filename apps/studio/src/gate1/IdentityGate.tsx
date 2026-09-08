@@ -87,15 +87,16 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   /**
    * Creating a run costs the one pointer this browser keeps, so it is never a
    * single click while another run is reachable: the id about to be replaced is
-   * named and the captain says yes twice.
+   * named and the captain says yes twice. While the run on screen is working
+   * there is no second yes to give — the stop is the only way out of it.
    */
-  const createConfirm = (replacing: string, offer: string): ReactElement => confirmingCreate
+  const createConfirm = (replacing: string, offer: string): ReactElement => confirmingCreate && !props.inFlight
     ? <div className="token-form open-run" role="group">
         <span>Uma execução nova substitui <code>{replacing}</code> como a que este navegador lembra.</span>
         <button className="secondary" onClick={() => setConfirmingCreate(false)} disabled={props.busy}>Manter esta execução</button>
         <button className="primary" onClick={() => { setConfirmingCreate(false); props.onCreate(); }} disabled={props.busy}>Criar mesmo assim</button>
       </div>
-    : <button className="secondary" onClick={() => setConfirmingCreate(true)} disabled={props.busy || running}>{offer}</button>;
+    : <button className="secondary" onClick={() => setConfirmingCreate(true)} disabled={props.busy || props.inFlight}>{offer}</button>;
 
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),
@@ -149,7 +150,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     {snapshot && <>
       <p className="gate-briefing">{snapshot.briefing}</p>
       <div className="actions gate-actions">
-        {openRunForm('Abrir outra execução')}
+        {!props.inFlight && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
         {props.inFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
         <button className="primary" onClick={props.onStart} disabled={props.busy || running || stopped || snapshot.directions.length > 0}>

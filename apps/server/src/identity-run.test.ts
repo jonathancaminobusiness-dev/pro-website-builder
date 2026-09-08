@@ -499,6 +499,43 @@ describe('identity run', () => {
     expect(approved.gate.state).toBe('closed');
   });
 
+  it('reports a retry the process ended as interrupted, not as the failure before it', async () => {
+    const repository = new ProjectRepository(database);
+    const inner = new FakeIdentityProvider();
+    let failing = true;
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const provider: ModelProvider = {
+      // The first attempt loses every director draft; the second is still
+      // waiting on its directors when the process ends.
+      async propose(task, signal) {
+        const director = task.id.startsWith('identity-director-');
+        if (director && !failing) await held;
+        const result = await inner.propose(task, signal);
+        return director && failing ? { ...result, artifact: undefined } : result;
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-retry-midflight', repository, provider });
+    await run.initialize();
+    expect((await run.start()).status).toBe('failed');
+
+    failing = false;
+    const retrying = run.start();
+    const attempts = async (): Promise<number> => (await repository.listEvents('identity-retry-midflight')).filter((event) => event.type === 'identity.stage.started').length;
+    while (await attempts() < 2) await new Promise((resolve) => { setTimeout(resolve, 5); });
+
+    const restored = new IdentityRun({ runId: 'identity-retry-midflight', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    const snapshot = restored.snapshot();
+    expect(snapshot.status).toBe('interrupted');
+    expect(snapshot.error).toMatch(/restart/i);
+    // The attempt that ended measured no fan-out, so it cannot be blamed on one.
+    expect(snapshot.error).not.toMatch(/usable directions/);
+
+    release();
+    await retrying;
+  });
+
   it('keeps a fan-out that had already finished when the stop arrived', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({ runId: 'identity-late-stop', repository, provider: new FakeIdentityProvider() });
