@@ -18,6 +18,7 @@ export interface JsonRunRequest {
   prompt: string;
   /** JSON Schema the provider may hand to its binary; every provider validates the answer on return. */
   schema: unknown;
+  strictSchema?: boolean;
   deadlineMs: number;
 }
 
