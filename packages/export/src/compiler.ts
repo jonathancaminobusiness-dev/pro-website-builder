@@ -177,7 +177,7 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   vetoes.push(...colors.vetoes);
 
   const metadata = routeMetadata(ir, siteUrl);
-  const csp = planCsp(ir);
+  const csp = planCsp();
 
   // First pass: strip inline styles so the release can ship `style-src 'self'`.
   const extractions = new Map<string, { html: string; styles: ExtractedStyle[] }>();

@@ -34,8 +34,14 @@ function withInteractiveHome(ir: DesignIR): void {
 }
 
 /** One licence inventory row of the compiled bundle, read out of the published `licenses.json`. */
-function licenseRow(compiled: CompiledSite, id: string): { bundled: boolean } | undefined {
-  return (JSON.parse(fileText(compiled, 'licenses.json')) as Array<{ id: string; bundled: boolean }>).find((entry) => entry.id === id);
+function licenseRow(compiled: CompiledSite, id: string): Record<string, unknown> | undefined {
+  return (JSON.parse(fileText(compiled, 'licenses.json')) as Array<Record<string, unknown> & { id: string }>).find((entry) => entry.id === id);
+}
+
+/** One directive of a published Content-Security-Policy, read as the browser parses it. */
+function policyDirective(policy: string, name: string): string | undefined {
+  const directive = policy.split(';').map((part) => part.trim()).find((part) => part === name || part.startsWith(`${name} `));
+  return directive === undefined ? undefined : directive.slice(name.length).trim();
 }
 
 function fileText(compiled: CompiledSite, path: string): string {
@@ -424,6 +430,33 @@ describe('the licence inventory names only the bytes the bundle ships', () => {
     expect(compiled.licenses.warnings.map((warning) => warning.id)).toContain('fixture-mark');
   });
 
+  it('states the provenance the owner declared for an asset the bundle ships', () => {
+    const compiled = compileFixture((ir) => {
+      withInlinedMark(ir);
+      ir.assets.items[0]!.provenance.termsNote = 'Fatura 12345 licenciada para o dono';
+    });
+    expect(licenseRow(compiled, 'fixture-mark')).toMatchObject({
+      bundled: true, source: 'fixture', author: 'pro-website-builder', date: '2026-09-05', termsNote: 'Fatura 12345 licenciada para o dono',
+    });
+  });
+
+  it('names an asset the bundle does not ship without publishing what the owner declared', () => {
+    const compiled = compileFixture((ir) => {
+      ir.assets.items[0]!.provenance = {
+        source: 'https://stock.example/mark', author: 'Estúdio Contratado', license: 'Stock Standard',
+        date: '2026-09-05', hash: 'fixture-mark', termsNote: 'Fatura 12345 licenciada para o dono',
+      };
+    });
+    expect(licenseRow(compiled, 'fixture-mark')).toMatchObject({
+      id: 'fixture-mark', kind: 'vector', license: 'Stock Standard', bundled: false,
+      source: 'not bundled', author: '', date: '', hash: '',
+    });
+    const published = fileText(compiled, 'licenses.json');
+    expect(published).not.toContain('Fatura 12345');
+    expect(published).not.toContain('Estúdio Contratado');
+    expect(published).not.toContain('stock.example');
+  });
+
   it('does not claim an asset the page shows no image for, remote or not', () => {
     const remote = 'https://higgsfield.example/mark.png';
     const compiled = compileFixture((ir) => {
@@ -432,6 +465,18 @@ describe('the licence inventory names only the bytes the bundle ships', () => {
     });
     expect(licenseRow(compiled, 'fixture-mark')?.bundled).toBe(false);
     expect(fileText(compiled, 'index.html')).not.toContain('<img');
+  });
+});
+
+describe('the published policy allows only what the bundle can load', () => {
+  it('states an image policy no declared origin can widen', () => {
+    const compiled = compileFixture((ir) => {
+      ir.assets.items[0] = { ...ir.assets.items[0]!, uri: 'https://provider.example/hero.png', status: 'placeholder' };
+    });
+    const delivered = (JSON.parse(fileText(compiled, 'headers.json')) as Record<string, Record<string, string>>)['/*']!['Content-Security-Policy']!;
+    expect(policyDirective(compiled.csp, 'img-src')).toBe("'self' data:");
+    expect(policyDirective(delivered, 'img-src')).toBe("'self' data:");
+    expect(fileText(compiled, 'index.html')).not.toContain('provider.example');
   });
 });
 
