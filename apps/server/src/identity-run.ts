@@ -184,7 +184,7 @@ export class IdentityRun {
 
   /** The one entry point that spends model turns. Nothing else in this class starts a worker. */
   async start(): Promise<IdentityRunSnapshot> {
-    if (this.status === 'cancelled') throw new StageError('This run was cancelled; create another one to run the identity stage.');
+    this.refuseIfCancelled('create another one to run the identity stage.');
     if (this.started) { await this.inFlight; return this.snapshot(); }
     this.started = true;
     this.status = 'running';
@@ -202,6 +202,15 @@ export class IdentityRun {
     });
     await this.inFlight;
     return this.snapshot();
+  }
+
+  /**
+   * Nothing is decided on a run the captain stopped, and no turn is spent on
+   * one either. Every route that would write to its ledger asks here, so the
+   * rule has one definition rather than a copy per route.
+   */
+  private refuseIfCancelled(what: string): void {
+    if (this.status === 'cancelled') throw new StageError(`This run was cancelled; ${what}`);
   }
 
   async cancel(): Promise<IdentityRunSnapshot> {
@@ -227,7 +236,7 @@ export class IdentityRun {
   }
 
   async approve(input: { directionId: string; approverRole: string; rationale: string; overrideRationale?: string }): Promise<IdentityRunSnapshot> {
-    if (this.status === 'cancelled') throw new StageError('This run was cancelled; Gate 1 cannot be decided on it.');
+    this.refuseIfCancelled('Gate 1 cannot be decided on it.');
     const approval = await this.stage.approve({ ...input, ...(this.abort ? { signal: this.abort.signal } : {}) });
     const record: Approval = approvalOf(approval.record, this.approvals.length);
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
@@ -261,6 +270,7 @@ export class IdentityRun {
 
   async reject(input: { directionId: string; approverRole: string; rationale: string }): Promise<IdentityRunSnapshot> {
     if (input.approverRole !== 'captain') throw new StageError('Only the captain can reject Gate 1 in v1.');
+    this.refuseIfCancelled('Gate 1 cannot be decided on it.');
     const candidate = this.candidate(input.directionId);
     const record: Approval = { id: `${this.options.runId}-identity-rejection-${this.approvals.length}`, stage: 'identity', approverRole: 'captain', versionId: candidate.versionId, versionHash: this.store.get(candidate.versionId)!.hash, decision: 'rejected', rationale: input.rationale, createdAt: new Date().toISOString() };
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));

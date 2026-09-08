@@ -484,6 +484,42 @@ describe('identity run', () => {
     expect(approved.gate.state).toBe('closed');
   });
 
+  it('decides nothing on a run stopped after its directions were already built', async () => {
+    const repository = new ProjectRepository(database);
+    let entered = (): void => {};
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        // The stop lands after the directors answered, so the stage still
+        // resolves with candidates while the run itself was interrupted.
+        if (task.id.startsWith('identity-critic-')) {
+          entered();
+          await new Promise<void>((_resolve, reject) => { signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }); });
+        }
+        return inner.propose(task, signal);
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-stopped-late', repository, provider });
+    await run.initialize();
+    const started = run.start();
+    await reached;
+
+    const stopped = await run.cancel();
+    await started.catch(() => undefined);
+    expect(stopped.status).toBe('cancelled');
+    expect(stopped.gate.state).toBe('open');
+    // The cards are there to read, and neither decision is available on them.
+    expect(stopped.directions.length).toBeGreaterThan(0);
+    const directionId = stopped.directions[0]!.directionId;
+    await expect(run.approve({ directionId, approverRole: 'captain', rationale: 'Mesmo assim.' })).rejects.toThrow(/cancelled/i);
+    await expect(run.reject({ directionId, approverRole: 'captain', rationale: 'Devolvida.' })).rejects.toThrow(/cancelled/i);
+
+    // Nothing was written to the ledger by either refusal.
+    const rows = database.sqlite.prepare('SELECT id FROM approvals WHERE run_id = ?').all('identity-stopped-late') as Array<{ id: string }>;
+    expect(rows).toEqual([]);
+  });
+
   it('reads a stopped run back as stopped after a restart', async () => {
     const repository = new ProjectRepository(database);
     let entered = (): void => {};

@@ -97,6 +97,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // re-approval of the same direction closes it again, so that one card keeps
   // its approve button while returning a card is off everywhere: the decision
   // those controls would answer is already made.
+  const stopped = snapshot?.status === 'cancelled';
   const closed = snapshot?.gate.state === 'closed';
   const reopened = snapshot?.gate.state === 'reopened';
   const decided = closed || reopened;
@@ -238,10 +239,11 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
               ? <ul className="blocker-list" aria-label={`Bloqueios de ${direction.label}`}>{blockers.map((item) => <li key={item}>{item}</li>)}</ul>
               : <p className="gate-check ok">Sem veto determinístico nem achado bloqueante.</p>}
             {direction.abstained && <p className="gate-check blocked">Um crítico respondeu “incerto”: a decisão sobe para o capitão.</p>}
+            {stopped && <p className="gate-check blocked">A execução foi parada antes do gate. Esta direção fica para leitura; nada nela pode ser decidido.</p>}
 
             <div className="actions">
-              <button className="secondary" onClick={() => props.onReject(direction.directionId, rationale || 'Direção devolvida para revisão.')} disabled={props.busy || decided}>Devolver</button>
-              <button className="primary" onClick={() => props.onApprove(direction.directionId, rationale || `Gate 1: ${direction.label}.`, override || undefined)} disabled={props.busy || closed || (reopened && !isChosen)}>
+              <button className="secondary" onClick={() => props.onReject(direction.directionId, rationale || 'Direção devolvida para revisão.')} disabled={props.busy || decided || stopped}>Devolver</button>
+              <button className="primary" onClick={() => props.onApprove(direction.directionId, rationale || `Gate 1: ${direction.label}.`, override || undefined)} disabled={props.busy || closed || stopped || (reopened && !isChosen)}>
                 Aprovar esta direção
               </button>
             </div>
@@ -249,7 +251,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         })}
       </div>
 
-      {snapshot.directions.length > 0 && !closed && <div className="gate-decision">
+      {snapshot.directions.length > 0 && !closed && !stopped && <div className="gate-decision">
         <label htmlFor="gate-rationale">Motivo da decisão (fica registrado com o aprovador <strong>captain</strong>)</label>
         <textarea id="gate-rationale" value={rationale} onChange={(event) => setRationale(event.target.value)} rows={2} placeholder="Por que esta direção responde ao briefing." />
         <label htmlFor="gate-override">Justificativa de override, obrigatória quando um check bloqueia a seleção automática</label>

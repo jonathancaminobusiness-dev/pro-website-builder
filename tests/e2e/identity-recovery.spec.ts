@@ -80,3 +80,39 @@ test('the captain can stop a run before its gate, and it stays stopped', async (
   await expect(page.locator('.direction-card')).toHaveCount(0);
   await expect(cancel).toHaveCount(0);
 });
+
+/**
+ * The state where a stop lands after the directors answered: the run is stopped
+ * yet still holds its three cards. Reaching it depends on where inside the
+ * stage the abort falls, which no browser can time, so the snapshot the server
+ * really produces is read and its status alone is rewritten — everything the
+ * component renders is the server's own answer.
+ */
+test('a stopped run shows its directions for reading and decides none of them', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await expect(page.locator('.direction-card')).toHaveCount(3);
+
+  await page.route('**/api/identity/runs/*', async (route) => {
+    const answer = await route.fetch();
+    const snapshot = await answer.json() as Record<string, unknown>;
+    await route.fulfill({ json: { ...snapshot, status: 'cancelled' } });
+  });
+  await page.reload();
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+
+  await expect(page.getByText('cancelada', { exact: true })).toBeVisible();
+  const cards = page.locator('.direction-card');
+  await expect(cards).toHaveCount(3);
+  for (const index of [0, 1, 2]) {
+    const card = cards.nth(index);
+    await expect(card).toContainText('A execução foi parada antes do gate');
+    await expect(card.getByRole('button', { name: 'Aprovar esta direção' })).toBeDisabled();
+    await expect(card.getByRole('button', { name: 'Devolver' })).toBeDisabled();
+  }
+  // The decision it would be written with is not offered either.
+  await expect(page.getByLabel(/Motivo da decisão/)).toHaveCount(0);
+  await page.unroute('**/api/identity/runs/*');
+});
