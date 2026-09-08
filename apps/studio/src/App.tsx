@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Gate2 from './Gate2.js';
 import Gate3Panel from './Gate3Panel.js';
 import IdentityGate, { type IdentityGateSnapshot } from './gate1/IdentityGate.js';
+import { RequestError, requestJson } from './request.js';
 
 interface Snapshot {
   runId: string;
@@ -39,13 +40,18 @@ function forgetIdentityRun(): void {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_ORIGIN}${path}`, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
-  const payload = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error ?? 'Não foi possível concluir a ação.');
-  return payload;
+  return requestJson<T>(`${API_ORIGIN}${path}`, init);
 }
 
 const GATE2_ROUTE = '#/gate-2';
+
+/** A run the server answers 404 for is gone; anything else is worth trying again. */
+function isGone(cause: unknown): boolean {
+  return cause instanceof RequestError && cause.status === 404;
+}
+
+/** How many readings in a row may fail before the screen stops following the raster lane. */
+const POLL_MAX_FAILURES = 10;
 
 export default function App() {
   const [hash, setHash] = useState(() => window.location.hash);
@@ -81,28 +87,43 @@ export default function App() {
   useEffect(() => {
     const remembered = rememberedIdentityRun();
     if (!remembered) return;
-    // A run the server no longer knows is not an error the captain has to read:
-    // the screen forgets it and offers to create or open another one.
-    void identityGet(remembered).then(setIdentity, forgetIdentityRun);
+    // Only a run the server no longer knows is forgotten. A server that is not
+    // listening yet says nothing about whether the run exists, and the id is
+    // the captain's one pointer back to a decided gate.
+    void identityGet(remembered).then(setIdentity, (cause: unknown) => {
+      if (isGone(cause)) { forgetIdentityRun(); return; }
+      setIdentityError(cause instanceof Error ? cause.message : 'Erro desconhecido.');
+    });
   }, [identityGet]);
 
   // Imagery is shot on the raster lane after the gate closes, so the decided
-  // screen follows it until every asset has settled. The tick re-arms the loop
-  // on either outcome: a poll that failed once — the server restarted mid-shoot,
-  // the machine slept — must cost one reading, not every reading after it.
-  const [pollTick, setPollTick] = useState(0);
+  // screen follows it until every asset has settled. A reading that failed is
+  // retried, because the server may be restarting mid-shoot, but only so many
+  // times: a run that is gone, or a server that never comes back, ends the loop
+  // and says so rather than being polled in silence for the rest of the session.
+  const [pollFailures, setPollFailures] = useState(0);
   const generating = identity?.assets.some((asset) => asset.status === 'generating') ?? false;
   useEffect(() => {
-    if (!identity || !generating) return;
+    if (!identity || !generating || pollFailures >= POLL_MAX_FAILURES) return;
     const runId = identity.runId;
     const timer = setTimeout(() => {
       void identityGet(runId).then(
-        (next) => { setIdentity(next); setPollTick((tick) => tick + 1); },
-        () => { setPollTick((tick) => tick + 1); },
+        (next) => { setIdentity(next); setPollFailures(0); },
+        (cause: unknown) => {
+          if (isGone(cause)) {
+            forgetIdentityRun();
+            setPollFailures(POLL_MAX_FAILURES);
+            setIdentityError('Esta execução não está mais no servidor.');
+            return;
+          }
+          const failures = pollFailures + 1;
+          setPollFailures(failures);
+          if (failures >= POLL_MAX_FAILURES) setIdentityError('Não foi possível acompanhar a geração das imagens. Recarregue para ler o estado atual.');
+        },
       );
     }, 1500);
     return () => { clearTimeout(timer); };
-  }, [generating, identity, identityGet, pollTick]);
+  }, [generating, identity, identityGet, pollFailures]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
   const startIdentityRun = () => identity && identityAct(() => identityPost(`/api/identity/runs/${identity.runId}/start`));
