@@ -4,11 +4,10 @@ import type { FixtureRun } from './fixture-run.js';
 import { handleIdentityRequest, type IdentityApiOptions } from './identity-api.js';
 import type { PrototypeRunRegistry } from './prototype-api.js';
 import { handlePrototypeRequest } from './prototype-routes.js';
+import { RunConflictError } from './run-conflict.js';
 import { STUDIO_ORIGIN } from './security.js';
 
-export class RunConflictError extends Error {
-  constructor(runId: string) { super(`Run ${runId} already exists.`); this.name = 'RunConflictError'; }
-}
+export { RunConflictError };
 
 interface ApiOptions {
   runs: Map<string, FixtureRun>;

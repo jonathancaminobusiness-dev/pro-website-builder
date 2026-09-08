@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tokenValueSchema } from '@pwb/domain';
 import { StageError } from '@pwb/stage-identity';
+import { RunConflictError } from './run-conflict.js';
 import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
 
 export interface IdentityApiOptions {
@@ -48,8 +49,10 @@ export async function handleIdentityRequest(
     // A run that is only on disk exists just as much as one this process holds:
     // creating over it would hand the captain an empty run under a decided id.
     if (options.runs.has(runId) || await resolve(options, runId)) { send(409, { error: `Run ${runId} already exists.` }); return true; }
-    const run = await options.createRun(runId);
-    send(201, run.snapshot());
+    let created: IdentityRun;
+    try { created = await options.createRun(runId); }
+    catch (error) { if (error instanceof RunConflictError) { send(409, { error: error.message }); return true; } throw error; }
+    send(201, created.snapshot());
     return true;
   }
 

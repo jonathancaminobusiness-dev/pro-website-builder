@@ -1,4 +1,4 @@
-import { ClaudeRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type McpServerConfig, type ModelProvider, type RasterProvider } from '@pwb/providers';
+import { ClaudeRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { FakeIdentityProvider } from '@pwb/stage-identity';
 
 export type ModelProviderName = 'fake' | 'claude-code';
@@ -23,28 +23,18 @@ export function createIdentityProvider(name: string = 'fake'): ModelProvider {
 
 /**
  * Where the Higgsfield MCP server is, when the owner wants imagery generated.
- * Generation stays off unless one of these says otherwise, so a fresh checkout
- * and a test run never reach the network and keep the placeholder path:
+ * Generation stays off unless `PWB_HIGGSFIELD_MCP_COMMAND` names a server (with
+ * optional space-separated `PWB_HIGGSFIELD_MCP_ARGS`), so a fresh checkout and
+ * a test run never reach the network and keep the placeholder path.
  *
- * - `PWB_HIGGSFIELD_MCP_COMMAND` (with optional space-separated
- *   `PWB_HIGGSFIELD_MCP_ARGS`) speaks stdio to a local server;
- * - `PWB_HIGGSFIELD_MCP_URL` speaks streamable HTTP to a remote one, with
- *   `PWB_HIGGSFIELD_MCP_TOKEN` as the bearer that endpoint asks for.
- *
- * The product never reads another tool's credential store, and the token it is
- * handed lives in this process only: it is sent as one header, and it is never
- * persisted, logged, echoed in an error or written to an event.
+ * The command is the only shape on offer, because the product never collects,
+ * stores or routes a credential: the server process it starts owns its own
+ * authentication, and a hosted MCP is reached through an owner-run bridge that
+ * performs that authentication itself.
  */
 export function createRasterProvider(env: NodeJS.ProcessEnv = process.env): RasterProvider {
-  const config = rasterMcpConfig(env);
-  return new HiggsfieldMcpProvider(config ? { configured: true, transport: new McpToolTransport(config) } : { configured: false });
-}
-
-function rasterMcpConfig(env: NodeJS.ProcessEnv): McpServerConfig | undefined {
   const command = env.PWB_HIGGSFIELD_MCP_COMMAND?.trim();
-  if (command) return { command, args: (env.PWB_HIGGSFIELD_MCP_ARGS ?? '').split(' ').map((argument) => argument.trim()).filter(Boolean) };
-  const url = env.PWB_HIGGSFIELD_MCP_URL?.trim();
-  if (!url) return undefined;
-  const token = env.PWB_HIGGSFIELD_MCP_TOKEN?.trim();
-  return { url, ...(token ? { token } : {}) };
+  if (!command) return new HiggsfieldMcpProvider({ configured: false });
+  const args = (env.PWB_HIGGSFIELD_MCP_ARGS ?? '').split(' ').map((argument) => argument.trim()).filter(Boolean);
+  return new HiggsfieldMcpProvider({ configured: true, transport: new McpToolTransport({ command, args }) });
 }

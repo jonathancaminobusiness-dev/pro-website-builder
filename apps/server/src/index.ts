@@ -27,6 +27,12 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   const identityRuns = new Map<string, IdentityRun>();
   const claimed = new Set<string>();
   const fontsDir = options.fontsDir ?? process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
+  const identityClaimed = new Set<string>();
+  // One run object per id, even when two cold requests arrive together: a
+  // second instance would decide Gate 1 from a ledger the first has already
+  // moved on from.
+  const identityLoading = new Map<string, Promise<IdentityRun | undefined>>();
+  const newIdentityRun = (id: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir });
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
@@ -88,14 +94,29 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     },
     identity: {
       runs: identityRuns,
-      createRun: async (id) => { const run = new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir }); await run.initialize(); identityRuns.set(id, run); return run; },
+      createRun: async (id) => {
+        if (identityRuns.has(id) || identityClaimed.has(id)) throw new RunConflictError(id);
+        identityClaimed.add(id);
+        try {
+          const run = newIdentityRun(id);
+          await run.initialize();
+          identityRuns.set(id, run);
+          return run;
+        } finally { identityClaimed.delete(id); }
+      },
       loadRun: async (id) => {
         const existing = identityRuns.get(id);
         if (existing) return existing;
-        const run = new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir });
-        if (!await run.restore()) return undefined;
-        identityRuns.set(id, run);
-        return run;
+        const inFlight = identityLoading.get(id);
+        if (inFlight) return inFlight;
+        const loading = (async () => {
+          const run = newIdentityRun(id);
+          if (!await run.restore()) return undefined;
+          identityRuns.set(id, run);
+          return run;
+        })();
+        identityLoading.set(id, loading);
+        try { return await loading; } finally { identityLoading.delete(id); }
       },
     },
   });

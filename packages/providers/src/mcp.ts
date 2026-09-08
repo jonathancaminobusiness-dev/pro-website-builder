@@ -2,19 +2,13 @@ import { spawn } from 'node:child_process';
 import type { HiggsfieldMcpTransport } from './higgsfield.js';
 
 /**
- * Where an MCP server is and how to speak to it. Exactly one transport applies:
- * a streamable HTTP endpoint, or a command spoken to over stdio.
- *
- * `token` is the bearer the hosted endpoint asks for, supplied by the owner for
- * the length of one process. It is sent as the `Authorization` header and
- * nowhere else: it is never persisted, never written to an event, and never
- * repeated in an error, which is also why a refused request is reported by
- * status alone — the endpoint itself may carry a credential in its query. A
- * stdio server owns its own authentication and is given none.
+ * The MCP server to speak to, as a command this process starts and talks to
+ * over stdio. There is no remote endpoint here on purpose: the product never
+ * collects, stores or routes a credential, so a hosted MCP is reached through
+ * an owner-run bridge that performs its own authentication and is spoken to
+ * like any other local server.
  */
-export type McpServerConfig =
-  | { url: string; token?: string; timeoutMs?: number }
-  | { command: string; args?: string[]; timeoutMs?: number };
+export interface McpServerConfig { command: string; args?: string[]; timeoutMs?: number }
 
 const PROTOCOL_VERSION = '2025-06-18';
 const CLIENT_INFO = { name: 'pro-website-builder', version: '0.1.0' };
@@ -79,7 +73,7 @@ function shapeOf(result: McpToolResult): string {
   return [keys, items ? `content: [${items}]` : '', structured ? `structuredContent: {${structured}}` : ''].filter(Boolean).join('; ');
 }
 
-export function readMcpToolResult(result: McpToolResult): { uri: string; cost?: number; license?: string; termsNote?: string } {
+export function readMcpToolResult(result: McpToolResult): { uri: string; license?: string; termsNote?: string } {
   if (result.isError) {
     const detail = (result.content ?? []).map((item) => item.text ?? '').join(' ').trim();
     throw new Error(`The MCP tool answered with an error: ${detail || 'no detail given'}`);
@@ -91,20 +85,9 @@ export function readMcpToolResult(result: McpToolResult): { uri: string; cost?: 
   const termsNote = textOf(structured.termsNote);
   return {
     uri,
-    ...(typeof structured.cost === 'number' ? { cost: structured.cost } : {}),
     ...(license ? { license } : {}),
     ...(termsNote ? { termsNote } : {}),
   };
-}
-
-function answerIn(body: string, contentType: string, id: number): JsonRpcAnswer | undefined {
-  if (!contentType.includes('text/event-stream')) return body.trim() ? JSON.parse(body) as JsonRpcAnswer : undefined;
-  for (const line of body.split(/\r?\n/)) {
-    if (!line.startsWith('data:')) continue;
-    const answer = JSON.parse(line.slice(5).trim()) as JsonRpcAnswer;
-    if (answer.id === id) return answer;
-  }
-  return undefined;
 }
 
 function resultOf(answer: JsonRpcAnswer | undefined, method: string): unknown {
@@ -114,59 +97,26 @@ function resultOf(answer: JsonRpcAnswer | undefined, method: string): unknown {
 }
 
 /**
- * A minimal MCP client: it opens a session, calls one tool and closes again.
- * Every call is its own session, which costs one handshake and keeps no process
- * or socket alive between images; the raster lane runs one job at a time, so
- * there is nothing to pool. The caller's signal ends the call wherever it is —
- * the fetch is aborted, the child process is killed — because a raster task
- * carries a deadline the scheduler enforces.
+ * A minimal MCP client: it starts the server, opens a session, calls one tool
+ * and closes again. Every call is its own session, which costs one handshake
+ * and keeps no process alive between images; the raster lane runs one job at a
+ * time, so there is nothing to pool. The caller's signal ends the call wherever
+ * it is — the child process is killed — because a raster task carries a
+ * deadline the scheduler enforces. The server's stderr is discarded rather than
+ * recorded, because an MCP server may print its own authentication state and
+ * this process never keeps one.
  */
 export class McpToolTransport implements HiggsfieldMcpTransport {
   constructor(private readonly config: McpServerConfig) {}
 
-  async callTool(name: string, arguments_: Record<string, unknown>, signal?: AbortSignal): Promise<{ uri: string; cost?: number; license?: string; termsNote?: string }> {
+  async callTool(name: string, arguments_: Record<string, unknown>, signal?: AbortSignal): Promise<{ uri: string; license?: string; termsNote?: string }> {
     const invoke = async (call: Call): Promise<McpToolResult> => await call('tools/call', { name, arguments: arguments_ }) as McpToolResult;
-    const result = 'url' in this.config ? await this.overHttp(invoke, signal) : await this.overStdio(invoke, signal);
-    return readMcpToolResult(result ?? {});
-  }
-
-  private async overHttp<T>(work: (call: Call) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const config = this.config as { url: string; token?: string; timeoutMs?: number };
-    const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    let session: string | undefined;
-    let counter = 0;
-    const post = async (message: Record<string, unknown>, id?: number): Promise<JsonRpcAnswer | undefined> => {
-      const deadline = AbortSignal.timeout(timeoutMs);
-      const response = await fetch(config.url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          'mcp-protocol-version': PROTOCOL_VERSION,
-          ...(config.token ? { authorization: `Bearer ${config.token}` } : {}),
-          ...(session ? { 'mcp-session-id': session } : {}),
-        },
-        body: JSON.stringify(message),
-        signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
-      });
-      session = response.headers.get('mcp-session-id') ?? session;
-      if (!response.ok) throw new Error(`The MCP server answered ${response.status} ${response.statusText}.`);
-      const body = await response.text();
-      return id === undefined ? undefined : answerIn(body, response.headers.get('content-type') ?? '', id);
-    };
-    const call: Call = async (method, params) => {
-      counter += 1;
-      return resultOf(await post({ jsonrpc: '2.0', id: counter, method, ...(params ? { params } : {}) }, counter), method);
-    };
-    await call('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: CLIENT_INFO });
-    await post({ jsonrpc: '2.0', method: 'notifications/initialized' });
-    return work(call);
+    return readMcpToolResult(await this.overStdio(invoke, signal) ?? {});
   }
 
   private async overStdio<T>(work: (call: Call) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const config = this.config as { command: string; args?: string[]; timeoutMs?: number };
-    const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const child = spawn(config.command, config.args ?? [], { shell: false, stdio: ['pipe', 'pipe', 'ignore'] });
+    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const child = spawn(this.config.command, this.config.args ?? [], { shell: false, stdio: ['pipe', 'pipe', 'ignore'] });
     const waiting = new Map<number, { settle: (answer: JsonRpcAnswer) => void; fail: (error: Error) => void }>();
     const failAll = (error: Error): void => { for (const waiter of [...waiting.values()]) waiter.fail(error); waiting.clear(); };
     const stop = (): void => { failAll(new Error('The MCP call was cancelled.')); child.kill(); };

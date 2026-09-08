@@ -1,6 +1,6 @@
 import type { RasterJob, RasterProvider, RasterRequest } from './raster.js';
 
-export interface HiggsfieldMcpTransport { callTool(name: string, arguments_: Record<string, unknown>, signal?: AbortSignal): Promise<{ uri?: string; cost?: number; license?: string; termsNote?: string }>; }
+export interface HiggsfieldMcpTransport { callTool(name: string, arguments_: Record<string, unknown>, signal?: AbortSignal): Promise<{ uri?: string; license?: string; termsNote?: string }>; }
 
 export type HiggsfieldMcpOptions = { configured: false } | { configured: true; transport: HiggsfieldMcpTransport };
 
@@ -20,7 +20,7 @@ export class HiggsfieldMcpProvider implements RasterProvider {
         ...request,
         status: 'succeeded',
         uri: result.uri,
-        provenance: { ...provenance('succeeded', result.license ?? 'pending provider terms', result.termsNote ?? 'Higgsfield MCP output requires owner review.'), ...(result.cost === undefined ? {} : { cost: result.cost }) },
+        provenance: provenance('succeeded', result.license ?? 'pending provider terms', result.termsNote ?? 'Higgsfield MCP output requires owner review.'),
       };
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'The Higgsfield MCP call did not complete.';

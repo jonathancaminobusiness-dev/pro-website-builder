@@ -579,6 +579,39 @@ describe('identity api', () => {
     } finally { await second.close(); }
   });
 
+  it('builds one run when two cold requests decide it at once', async () => {
+    const dbPath = join(directory, 'concurrent.sqlite');
+    const exportRoot = join(directory, 'concurrent-exports');
+    const first = await startServer({ dbPath, exportRoot, apiPort: 0, previewPort: 0 });
+    const firstOrigin = `http://127.0.0.1:${(first.api.address() as AddressInfo).port}`;
+    await post(firstOrigin, '/api/identity/runs', { runId: 'contended' });
+    await post(firstOrigin, '/api/identity/runs/contended/start', { approverRole: 'captain' });
+    await first.close();
+
+    const second = await startServer({ dbPath, exportRoot, apiPort: 0, previewPort: 0 });
+    const origin = `http://127.0.0.1:${(second.api.address() as AddressInfo).port}`;
+    try {
+      // Nothing is cached yet, so both requests would each rebuild the run. Two
+      // instances would each read a ledger the other has already moved on from,
+      // and the second decision would be swallowed as a duplicate row.
+      const answers = await Promise.all([
+        post(origin, '/api/identity/runs/contended/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'Primeira decisão.' }),
+        post(origin, '/api/identity/runs/contended/approve', { approverRole: 'captain', directionId: 'modular-technical', rationale: 'Segunda decisão.' }),
+      ]);
+      const statuses = answers.map((answer) => answer.status).sort();
+      expect(statuses).toEqual([200, 400]);
+
+      const refused = answers.find((answer) => answer.status === 400)!;
+      expect((await refused.json() as { error: string }).error).toMatch(/already closed|different direction cannot be approved/);
+
+      const fetched = await fetch(`${origin}/api/identity/runs/contended`, { headers: { origin: STUDIO_ORIGIN } });
+      const snapshot = await fetched.json() as { gate: { state: string }; approvals: Array<{ id: string }> };
+      expect(snapshot.gate.state).toBe('closed');
+      // The one decision the server accepted is the one the ledger holds.
+      expect(snapshot.approvals).toHaveLength(1);
+    } finally { await second.close(); }
+  });
+
   it('answers 404 for an unknown identity run', async () => {
     await withServer(async (origin) => {
       const response = await fetch(`${origin}/api/identity/runs/ghost`, { headers: { origin: STUDIO_ORIGIN } });
