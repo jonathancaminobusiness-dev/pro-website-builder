@@ -254,9 +254,14 @@ each engine, against `routes: 3` and `differences: 0`.
 `packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
 XSS or `javascript:` URL, unsanitized HTML, a bundled asset without a licence, a
 build failure, a broken primary link, a critical AA regression, and a release
-that diverges from the approved one. Only what the bundle ships can be published
-without terms, so an asset the release never publishes — a provider placeholder
-— escalates to the captain instead of blocking. A veto is never scored or averaged: one veto
+that diverges from the approved one. Whether an asset is bundled is read back
+out of the documents the compiler wrote, never from its lifecycle status: only a
+`data:` asset a compiled page references travels inside the bundle. Only what
+the bundle ships can be published without terms, so an asset the release never
+carries — one no page references, or one pointing at a remote URI — escalates to
+the captain instead of blocking, and its `licenses.json` row names its licence
+and the reason it stays out and nothing the owner declared about it, exactly as
+for a face the release does not redistribute. A veto is never scored or averaged: one veto
 blocks Gate 3, and the single publish path refuses to write. Only the compiler,
 the evidence runners and the gate may raise one — a critic cannot raise or clear a veto, its
 tasks carry no writable path, and its findings have no veto severity.
