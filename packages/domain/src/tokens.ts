@@ -59,9 +59,11 @@ export function cssNodeSelector(nodeId: string): string {
 /**
  * A token value is emitted verbatim into one declaration of a `:root` block inside a
  * `<style>` element, so it has to be self-contained: it may hold no character that ends
- * the declaration, the rule or the element, and it may leave no string, function or
- * escape open — an open construct consumes the declaration's `;` and whatever follows it
- * until the parser finds the match, which silently drops the next tokens too.
+ * the declaration, the rule or the element, and it may neither leave a string, function or
+ * escape open nor close a construct it never opened — an open construct consumes the
+ * declaration's `;` and whatever follows it until the parser finds the match, and a stray
+ * close hands the rest of the value to whatever encloses the block, which silently drops
+ * the next tokens too.
  */
 function cssValueIssue(value: string): string | undefined {
   if (/[<>;{}]/.test(value) || value.includes('/*') || value.includes('*/')) return 'holds characters that cannot be emitted into CSS';
