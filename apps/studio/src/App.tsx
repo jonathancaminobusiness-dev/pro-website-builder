@@ -45,7 +45,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const GATE2_ROUTE = '#/gate-2';
 
-/** How many readings in a row may fail before the screen stops following the raster lane. */
+/** How many readings in a row may fail before the screen stops following the run — the stage while it works, then the raster lane. */
 const POLL_MAX_FAILURES = 10;
 
 export default function App() {

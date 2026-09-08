@@ -74,7 +74,9 @@ test('the captain can stop a run before its gate, and it stays stopped', async (
 
   let releaseStart = (): void => {};
   const held = new Promise<void>((resolve) => { releaseStart = resolve; });
-  await page.route('**/api/identity/runs/*/start', async (route) => { await held; await route.continue(); });
+  // The stop lands while this request is held, so by the time it is released
+  // the route may already have been handled; that is the state under test.
+  await page.route('**/api/identity/runs/*/start', async (route) => { await held; await route.continue().catch(() => {}); });
   await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
   await expect(page.getByText('Uma execução nova substitui')).toHaveCount(0);
 
