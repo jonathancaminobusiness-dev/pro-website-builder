@@ -59,6 +59,7 @@ export default function App() {
   const [identityError, setIdentityError] = useState('');
   /** The remembered run the screen is holding because the last read of it did not answer. */
   const [unreachableRunId, setUnreachableRunId] = useState('');
+  const [pollFailures, setPollFailures] = useState({ runId: '', count: 0 });
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
 
   useEffect(() => {
@@ -74,10 +75,22 @@ export default function App() {
 
   const create = () => act(async () => (await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) })).snapshot);
 
+  /**
+   * One snapshot the server answered with, and the one place that records what
+   * reading it proved: the run is reachable. The recovery state and the poll's
+   * failure budget both exist because a run could not be read, so any reading
+   * that succeeds clears them, whichever route produced it.
+   */
+  const acceptIdentityRun = useCallback((next: IdentityGateSnapshot): void => {
+    setUnreachableRunId('');
+    setPollFailures({ runId: next.runId, count: 0 });
+    setIdentity(next);
+  }, []);
+
   const identityAct = useCallback(async (action: () => Promise<IdentityGateSnapshot>): Promise<void> => {
     setBusy(true); setIdentityError('');
-    try { const next = await action(); rememberIdentityRun(next.runId); setUnreachableRunId(''); setIdentity(next); } catch (cause) { setIdentityError(failureMessage(cause)); } finally { setBusy(false); }
-  }, []);
+    try { const next = await action(); rememberIdentityRun(next.runId); acceptIdentityRun(next); } catch (cause) { setIdentityError(failureMessage(cause)); } finally { setBusy(false); }
+  }, [acceptIdentityRun]);
   const identityGet = useCallback((runId: string) => request<IdentityGateSnapshot>(`/api/identity/runs/${encodeURIComponent(runId)}`), []);
   const openIdentityRun = useCallback((runId: string) => { void identityAct(() => identityGet(runId)); }, [identityAct, identityGet]);
 
@@ -90,14 +103,14 @@ export default function App() {
     if (!remembered) { setUnreachableRunId(''); return; }
     setBusy(true); setIdentityError('');
     void identityGet(remembered).then(
-      (next) => { setUnreachableRunId(''); setIdentity(next); },
+      acceptIdentityRun,
       (cause: unknown) => {
         if (isMissing(cause)) { forgetIdentityRun(); setUnreachableRunId(''); return; }
         setUnreachableRunId(remembered);
         setIdentityError(failureMessage(cause));
       },
     ).finally(() => setBusy(false));
-  }, [identityGet]);
+  }, [acceptIdentityRun, identityGet]);
 
   useEffect(() => { readRememberedRun(); }, [readRememberedRun]);
 
@@ -106,7 +119,6 @@ export default function App() {
   // retried, because the server may be restarting mid-shoot, but only so many
   // times: a run that is gone, or a server that never comes back, ends the loop
   // and says so rather than being polled in silence for the rest of the session.
-  const [pollFailures, setPollFailures] = useState({ runId: '', count: 0 });
   const generating = identity?.assets.some((asset) => asset.status === 'generating') ?? false;
   // The budget belongs to the run it was spent on, so a run that went away
   // cannot leave a later one looking as if its images never settled.
@@ -116,7 +128,7 @@ export default function App() {
     const runId = identity.runId;
     const timer = setTimeout(() => {
       void identityGet(runId).then(
-        (next) => { setIdentity(next); if (spent > 0) setPollFailures({ runId, count: 0 }); },
+        acceptIdentityRun,
         (cause: unknown) => {
           if (isMissing(cause)) {
             forgetIdentityRun();
@@ -131,7 +143,7 @@ export default function App() {
       );
     }, 1500);
     return () => { clearTimeout(timer); };
-  }, [generating, identity, identityGet, spent]);
+  }, [acceptIdentityRun, generating, identity, identityGet, spent]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
   const startIdentityRun = () => identity && identityAct(() => identityPost(`/api/identity/runs/${identity.runId}/start`));
