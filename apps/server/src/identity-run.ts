@@ -89,7 +89,7 @@ export interface IdentityRunSnapshot {
  */
 export class IdentityRun {
   private readonly store = new VersionStore();
-  private readonly stage: IdentityStage;
+  private stage: IdentityStage;
   private readonly approvals: Approval[] = [];
   private readonly rendered = new Map<string, RenderedDocument>();
   private root!: VersionRecord;
@@ -106,14 +106,24 @@ export class IdentityRun {
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
     this.rendered.set(this.root.id, renderDesign(this.root.ir));
-    this.stage = new IdentityStage({
-      runId: options.runId,
+    this.stage = this.newStage();
+  }
+
+  /**
+   * A stage runs once. Trying again after a failure needs a fresh one, with its
+   * own patch gate per branch, exactly as a restarted process builds: the
+   * version store is shared, so a direction the first attempt did produce is
+   * recognised rather than written twice.
+   */
+  private newStage(): IdentityStage {
+    return new IdentityStage({
+      runId: this.options.runId,
       baseVersionId: this.root.id,
-      briefing: options.briefing ?? IDENTITY_BRIEFING,
-      provider: options.provider,
+      briefing: this.options.briefing ?? IDENTITY_BRIEFING,
+      provider: this.options.provider,
       store: this.store,
-      ...(options.scheduler ? { scheduler: options.scheduler } : {}),
-      raster: options.raster ?? new HiggsfieldMcpProvider({ configured: false }),
+      ...(this.options.scheduler ? { scheduler: this.options.scheduler } : {}),
+      raster: this.options.raster ?? new HiggsfieldMcpProvider({ configured: false }),
       onEvent: (type, payload) => ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type, payload })),
     });
   }
@@ -185,6 +195,9 @@ export class IdentityRun {
   /** The one entry point that spends model turns. Nothing else in this class starts a worker. */
   async start(): Promise<IdentityRunSnapshot> {
     this.refuseIfCancelled('create another one to run the identity stage.');
+    // A failure is not the end of the run: the captain can ask again here, on
+    // the same terms a restarted process already offers.
+    if (this.status === 'failed') { this.started = false; this.result = undefined; this.stage = this.newStage(); }
     if (this.started) { await this.inFlight; return this.snapshot(); }
     this.started = true;
     this.status = 'running';

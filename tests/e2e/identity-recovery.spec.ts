@@ -38,7 +38,7 @@ test('a decided run survives an API outage and is reopened from the screen', asy
   // Creating a new run costs the remembered id, so it takes a second decision.
   await recovery.getByRole('button', { name: 'Criar execução nova' }).click();
   await expect(recovery).toContainText('Uma execução nova substitui');
-  await recovery.getByRole('button', { name: 'Cancelar' }).click();
+  await recovery.getByRole('button', { name: 'Manter esta execução' }).click();
   await expect(recovery).toContainText(runId);
 
   await page.unroute('**/api/identity/**');
@@ -149,9 +149,43 @@ test('a reloaded tab offers the stop while the stage is working, and follows it 
   const start = page.getByRole('button', { name: 'Etapa em execução' });
   await expect(start).toBeVisible();
   await expect(start).toBeDisabled();
+  // While the stage is working the stop is the only way out of the run.
+  await expect(page.getByRole('button', { name: 'Nova execução' })).toBeDisabled();
 
   // No click follows: the screen learns on its own that the fan-out finished.
   await expect(page.locator('.direction-card')).toHaveCount(3);
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toHaveCount(0);
   await page.unroute('**/api/identity/runs/*');
+});
+
+/**
+ * The one pointer this browser keeps is the only way back to a decided run, so
+ * replacing it is never a single click while a run is on screen, and any
+ * earlier run stays reachable by id from the same row.
+ */
+test('a new run needs a second yes, and the run on screen stays reachable', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await expect(page.locator('.direction-card')).toHaveCount(3);
+  const runId = (await page.locator('.run-id code').innerText()).trim();
+
+  // The first click only asks, naming the run it would replace.
+  await page.getByRole('button', { name: 'Nova execução' }).click();
+  await expect(page.locator('.gate-actions')).toContainText(runId);
+  await page.getByRole('button', { name: 'Manter esta execução' }).click();
+  await expect(page.locator('.run-id code')).toHaveText(runId);
+  await expect(page.locator('.direction-card')).toHaveCount(3);
+
+  // Creating one takes the second yes, and the first run is still openable by id.
+  await page.getByRole('button', { name: 'Nova execução' }).click();
+  await page.getByRole('button', { name: 'Criar mesmo assim' }).click();
+  await expect(page.locator('.run-id code')).not.toHaveText(runId);
+  await expect(page.locator('.direction-card')).toHaveCount(0);
+
+  await page.getByLabel('Abrir outra execução').fill(runId);
+  await page.locator('.gate-actions').getByRole('button', { name: 'Abrir' }).click();
+  await expect(page.locator('.run-id code')).toHaveText(runId);
+  await expect(page.locator('.direction-card')).toHaveCount(3);
 });

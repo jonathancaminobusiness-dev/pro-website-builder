@@ -84,6 +84,19 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     <button className="secondary" type="submit" disabled={props.busy || openRunId.trim() === ''}>Abrir</button>
   </form>;
 
+  /**
+   * Creating a run costs the one pointer this browser keeps, so it is never a
+   * single click while another run is reachable: the id about to be replaced is
+   * named and the captain says yes twice.
+   */
+  const createConfirm = (replacing: string, offer: string): ReactElement => confirmingCreate
+    ? <div className="token-form open-run" role="group">
+        <span>Uma execução nova substitui <code>{replacing}</code> como a que este navegador lembra.</span>
+        <button className="secondary" onClick={() => setConfirmingCreate(false)} disabled={props.busy}>Manter esta execução</button>
+        <button className="primary" onClick={() => { setConfirmingCreate(false); props.onCreate(); }} disabled={props.busy}>Criar mesmo assim</button>
+      </div>
+    : <button className="secondary" onClick={() => setConfirmingCreate(true)} disabled={props.busy || running}>{offer}</button>;
+
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),
     ...direction.blocking.map((finding) => `${finding.id} · ${finding.observation}`),
@@ -99,6 +112,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // those controls would answer is already made.
   const stopped = snapshot?.status === 'cancelled';
   const running = snapshot?.status === 'running';
+  const failed = snapshot?.status === 'failed';
   const closed = snapshot?.gate.state === 'closed';
   const reopened = snapshot?.gate.state === 'reopened';
   const decided = closed || reopened;
@@ -129,22 +143,17 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       <p>A execução <code>{props.unreachableRunId}</code> não pôde ser lida agora. Ela continua registrada no servidor; a decisão e as versões dela não se perderam.</p>
       <button className="primary" onClick={props.onRetry} disabled={props.busy}>{props.busy ? 'Lendo…' : 'Tentar novamente'}</button>
       {openRunForm('Abrir outra execução')}
-      {confirmingCreate
-        ? <div className="token-form open-run">
-            <span>Uma execução nova substitui <code>{props.unreachableRunId}</code> como a que este navegador lembra.</span>
-            <button className="secondary" onClick={() => setConfirmingCreate(false)} disabled={props.busy}>Cancelar</button>
-            <button className="primary" onClick={() => { setConfirmingCreate(false); props.onCreate(); }} disabled={props.busy}>Criar mesmo assim</button>
-          </div>
-        : <button className="secondary" onClick={() => setConfirmingCreate(true)} disabled={props.busy}>Criar execução nova</button>}
+      {createConfirm(props.unreachableRunId, 'Criar execução nova')}
     </div>}
 
     {snapshot && <>
       <p className="gate-briefing">{snapshot.briefing}</p>
       <div className="actions gate-actions">
-        <button className="secondary" onClick={props.onCreate} disabled={props.busy}>Nova execução</button>
+        {openRunForm('Abrir outra execução')}
+        {createConfirm(snapshot.runId, 'Nova execução')}
         {props.inFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
         <button className="primary" onClick={props.onStart} disabled={props.busy || running || stopped || snapshot.directions.length > 0}>
-          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.busy ? 'Executando…' : failed ? 'Tentar novamente' : 'Executar etapa de identidade'}
         </button>
       </div>
 

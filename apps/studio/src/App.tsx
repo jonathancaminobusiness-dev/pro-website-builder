@@ -151,12 +151,12 @@ export default function App() {
           }
           const count = spent + 1;
           setPollFailures({ runId, count });
-          if (count >= POLL_MAX_FAILURES) setIdentityError('Não foi possível acompanhar a geração das imagens. Recarregue para ler o estado atual.');
+          if (count >= POLL_MAX_FAILURES) setIdentityError(`Não foi possível acompanhar ${running ? 'a etapa' : 'as imagens'} desta execução. Recarregue para ler o estado atual.`);
         },
       );
     }, 1500);
     return () => { dropped = true; clearTimeout(timer); };
-  }, [acceptIdentityRun, following, identity, identityGet, spent]);
+  }, [acceptIdentityRun, following, identity, identityGet, running, spent]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
   const startIdentityRun = (): void => {

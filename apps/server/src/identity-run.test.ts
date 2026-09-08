@@ -467,6 +467,38 @@ describe('identity run', () => {
     expect(events.some((event) => event.type === 'identity.run.cancelled')).toBe(true);
   });
 
+  it('runs the stage again after a failure, on the same run', async () => {
+    const repository = new ProjectRepository(database);
+    let failing = true;
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        // Every director answers without its draft, so no branch opens and the
+        // fan-out has nothing to build a matrix from.
+        if (failing && task.id.startsWith('identity-director-')) return { ...result, artifact: undefined };
+        return result;
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-retry', repository, provider });
+    await run.initialize();
+
+    const first = await run.start();
+    expect(first.status).toBe('failed');
+    expect(first.directions).toEqual([]);
+    expect(first.error).toMatch(/usable directions/);
+
+    failing = false;
+    const second = await run.start();
+    expect(second.status).toBe('needs_review');
+    expect(second.directions).toHaveLength(3);
+    expect(second.error).toBeUndefined();
+
+    // The retry produced a decidable gate, not a half-built one.
+    const approved = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada na segunda tentativa.' });
+    expect(approved.gate.state).toBe('closed');
+  });
+
   it('keeps a fan-out that had already finished when the stop arrived', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({ runId: 'identity-late-stop', repository, provider: new FakeIdentityProvider() });
