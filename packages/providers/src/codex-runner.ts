@@ -112,7 +112,7 @@ function classifyProcessError(error: unknown): CodexCliError {
   const stderr = details.stderr === undefined ? '' : String(details.stderr);
   const message = stderr || (details.message === undefined ? '' : String(details.message));
   const signal = details.signal === undefined || details.signal === null ? '' : String(details.signal);
-  if (code === 'ENOENT' || /command not found/i.test(message)) {
+  if (code === 'ENOENT' || /command not found|not recognized as an internal or external command/i.test(message)) {
     return new CodexCliError('CODEX_UNAVAILABLE', 'Codex CLI was not found. Install Codex CLI and run `codex login` before selecting PWB_MODEL_PROVIDER=codex.');
   }
   if (code === 'CODEX_AUTH' || CODEX_AUTH_FAILURE.test(message)) {
@@ -185,7 +185,11 @@ export class CodexJsonRunner implements JsonModelRunner {
       const details = error as { code?: unknown; name?: unknown };
       if (details.code === 'ABORT_ERR' || details.name === 'AbortError') throw error;
       if (error instanceof CodexCliError) throw error;
-      throw classifyProcessError(error);
+      const processError = classifyProcessError(error);
+      if (processError.code !== 'CODEX_PROCESS_FAILED') throw processError;
+      const stdout = (error as { stdout?: unknown }).stdout;
+      if (typeof stdout === 'string' && stdout.trim()) return parseCodexOutput(stdout);
+      throw processError;
     }
   }
 }

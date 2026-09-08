@@ -335,7 +335,7 @@ export class IdentityRun {
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),
       critiques: this.result?.critiques ?? [],
       setCritique: this.result?.setCritique ?? { scores: [], rubricGaps: [], unscoredDimensions: [], blocking: [], abstained: false },
-      failures: this.result?.failures ?? [],
+      failures: this.result?.failures ?? this.stage.recordedFailures,
       gate,
       approvals: structuredClone(this.approvals),
       assets: structuredClone(this.assets),

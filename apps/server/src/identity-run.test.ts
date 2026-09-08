@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { lintDesign } from '@pwb/linter';
-import type { ModelProvider } from '@pwb/providers';
+import { CodexRunner, type ModelProvider } from '@pwb/providers';
 import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
@@ -39,6 +39,20 @@ describe('identity run', () => {
     const started = await run.start();
     expect(started.status).toBe('needs_review');
     expect(started.directions).toHaveLength(3);
+  });
+
+  it('exposes actionable Codex startup failures in the identity snapshot', async () => {
+    const provider = new CodexRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
+    const run = new IdentityRun({ runId: 'identity-codex-failure', repository: new ProjectRepository(database), provider });
+    await run.initialize();
+
+    const snapshot = await run.start();
+
+    expect(snapshot.status).toBe('failed');
+    expect(snapshot.error).toMatch(/Install Codex CLI/);
+    expect(snapshot.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'identity-curator', reason: expect.stringMatching(/Install Codex CLI/) }),
+    ]));
   });
 
   it('persists every candidate version and the events behind the fan-out', async () => {
