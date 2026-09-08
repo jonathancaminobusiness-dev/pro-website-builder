@@ -14,17 +14,17 @@ import {
   PrototypeStage, RenderHubEvidenceSource, type CritiqueProvider, type EvidenceSource,
 } from '../packages/stage-prototype/src/index.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
+import { modelProviderName } from '../apps/server/src/provider.js';
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
-const provider = process.env.PWB_MODEL_PROVIDER ?? 'fake';
-const claude = provider === 'claude-code';
-const codex = provider === 'codex';
-const model = claude || codex;
 const useBrowser = process.argv.includes('--render');
 // A finalist is worth the full sweep; a revision under review is measured at the representative widths.
 const fullMatrix = process.argv.includes('--full-matrix');
 
 async function main(): Promise<void> {
+  const provider = modelProviderName(process.env.PWB_MODEL_PROVIDER);
+  const codex = provider === 'codex';
+  const model = provider !== 'fake';
   const store = new VersionStore();
   const applier = new Applier(store, new PatchGate());
   const base = applier.createRoot(createFixtureIR());

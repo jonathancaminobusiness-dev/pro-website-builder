@@ -3,11 +3,17 @@ import { FakeIdentityProvider } from '@pwb/stage-identity';
 
 export type ModelProviderName = 'fake' | 'claude-code' | 'codex';
 
-export function createModelProvider(name: string = 'fake'): ModelProvider {
-  if (name === 'fake') return new FakeModelProvider();
-  if (name === 'claude-code') return new ClaudeRunner();
-  if (name === 'codex') return new CodexRunner();
+/** The one place a provider name is recognised, so no entry point can silently fall back to the fakes. */
+export function modelProviderName(name: string = 'fake'): ModelProviderName {
+  if (name === 'fake' || name === 'claude-code' || name === 'codex') return name;
   throw new Error(`Unknown model provider ${name}; use fake, claude-code, or codex.`);
+}
+
+export function createModelProvider(name: string = 'fake'): ModelProvider {
+  const selected = modelProviderName(name);
+  if (selected === 'claude-code') return new ClaudeRunner();
+  if (selected === 'codex') return new CodexRunner();
+  return new FakeModelProvider();
 }
 
 /**
@@ -17,10 +23,10 @@ export function createModelProvider(name: string = 'fake'): ModelProvider {
  * schema in the prompt it builds.
  */
 export function createIdentityProvider(name: string = 'fake'): ModelProvider {
-  if (name === 'fake') return new FakeIdentityProvider();
-  if (name === 'claude-code') return new ClaudeRunner();
-  if (name === 'codex') return new CodexRunner();
-  throw new Error(`Unknown model provider ${name}; use fake, claude-code, or codex.`);
+  const selected = modelProviderName(name);
+  if (selected === 'claude-code') return new ClaudeRunner();
+  if (selected === 'codex') return new CodexRunner();
+  return new FakeIdentityProvider();
 }
 
 /**

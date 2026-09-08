@@ -117,13 +117,14 @@ function classifyProcessError(error: unknown): CodexCliError {
   const code = details.code === undefined ? '' : String(details.code);
   const stderr = details.stderr === undefined ? '' : String(details.stderr);
   const message = stderr || (details.message === undefined ? '' : String(details.message));
-  if (code === 'ENOENT' || /command not found|not found/i.test(message)) {
+  const signal = details.signal === undefined || details.signal === null ? '' : String(details.signal);
+  if (code === 'ENOENT' || /command not found/i.test(message)) {
     return new CodexCliError('CODEX_UNAVAILABLE', 'Codex CLI was not found. Install Codex CLI and run `codex login` before selecting PWB_MODEL_PROVIDER=codex.');
   }
   if (code === 'CODEX_AUTH' || CODEX_AUTH_FAILURE.test(message)) {
     return new CodexCliError('CODEX_AUTH_REQUIRED', 'Codex CLI is not authenticated. Run `codex login` with your ChatGPT account before selecting PWB_MODEL_PROVIDER=codex.');
   }
-  if (code === 'ETIMEDOUT' || details.killed === true || details.signal !== undefined) {
+  if (code === 'ETIMEDOUT' || details.killed === true || signal) {
     return new CodexCliError('CODEX_TIMEOUT', 'Codex CLI did not finish before the stage deadline.');
   }
   return new CodexCliError('CODEX_PROCESS_FAILED', `Codex CLI failed (${code || 'unknown process error'}).`);

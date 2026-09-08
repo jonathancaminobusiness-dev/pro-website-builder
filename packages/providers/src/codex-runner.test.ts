@@ -65,6 +65,20 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED', message: expect.not.stringContaining('sk-secret-value') });
   });
 
+  it('reports an ordinary non-zero exit as a process failure rather than a timeout', async () => {
+    const runner = new CodexJsonRunner({
+      execute: async () => { throw Object.assign(new Error('Command failed'), { code: 1, signal: null, killed: false, stderr: 'error: unexpected argument' }); },
+    });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
+  });
+
+  it('does not blame a missing CLI for a model the account cannot use', async () => {
+    const runner = new CodexJsonRunner({
+      execute: async () => ({ stdout: `${JSON.stringify({ type: 'turn.failed', error: { message: "model 'gpt-5.6-sol' not found" } })}\n`, stderr: '' }),
+    });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
+  });
+
   it('maps a process timeout and preserves an abort signal', async () => {
     let timeoutMs = 0;
     const timeout = new CodexJsonRunner({ timeoutMs: 10_000, execute: async (_executable, _args, options) => { timeoutMs = options.timeoutMs; throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }); } });
