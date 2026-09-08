@@ -108,6 +108,16 @@ export interface RubricGap { dimension: string; score: number; evidence: string;
 /** What the critics said about the fan-out as a whole, which belongs to no single card. */
 export interface SetCritique { scores: CritiqueScore[]; rubricGaps: RubricGap[]; unscoredDimensions: string[]; blocking: CritiqueFinding[]; abstained: boolean; }
 
+/**
+ * The lint the identity stage answers for. A prototype rule reads the page graph, which
+ * `stageWritablePaths.identity` keeps out of this stage's reach, so its finding can never be a Gate 1
+ * blocker and never travels on a candidate; only findings under a path this stage may write do.
+ */
+function identityLint(ir: DesignIR): LintReport {
+  const findings = lintDesign(ir).findings.filter((finding) => IDENTITY_ALLOWED_PATHS.some((path) => finding.path === path || finding.path.startsWith(`${path}/`)));
+  return { findings, errorCount: findings.filter((finding) => finding.severity === 'error').length, warningCount: findings.filter((finding) => finding.severity === 'warning').length };
+}
+
 /** The lint findings a direction can answer for: a set-scoped finding belongs to the fan-out, not to one document. */
 function ownLintFindings(report: LintReport): LintFinding[] {
   return report.findings.filter((finding) => finding.scope !== 'set');
@@ -424,7 +434,7 @@ export class IdentityStage {
       identityHash: identityHash(version.ir),
       identity: version.ir.identity,
       vector,
-      lint: lintDesign(version.ir),
+      lint: identityLint(version.ir),
       ...((refinedFrom ?? previous?.refinedFromVersionId) ? { refinedFromVersionId: (refinedFrom ?? previous!.refinedFromVersionId)! } : {}),
       blocking: previous?.blocking ?? [],
       scores: previous?.scores ?? [],
@@ -739,7 +749,7 @@ export class IdentityStage {
       throw new StageError(`Gate 1 was reopened for ${before.record.directionId}; a different direction cannot be approved onto that lineage.`);
     }
     const blockers = [
-      ...ownLintErrors(lintDesign(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir)).map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
+      ...ownLintErrors(identityLint(this.branches.version(before.state === 'reopened' ? this.approvedVersionId! : candidate.versionId).ir)).map((finding) => `${finding.id} at ${finding.path}: ${finding.message}`),
       ...this.blockedPairsFor(candidate.directionId),
       ...this.setCritique.rubricGaps.map((gap) => `Rubric ${gap.dimension} scored ${gap.score} for the fan-out as a whole, below the absolute minimum of ${RUBRIC_MINIMUM}: ${gap.evidence}`),
       ...this.setCritique.unscoredDimensions.map((dimension) => `Rubric ${dimension} was never evaluated for the fan-out as a whole: the critic that owns it returned no score of its own.`),

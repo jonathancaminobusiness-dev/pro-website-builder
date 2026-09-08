@@ -13,7 +13,7 @@ function findings(ir: DesignIR, id: string): string[] {
 describe('prototype rule registry', () => {
   it('registers the seven prototype rules through the shared registry', () => {
     expect(prototypeRuleRegistry.map((rule) => rule.id)).toEqual(['STR-020', 'GRID-040', 'TYPE-050', 'COH-070', 'MOTION-080', 'A11Y-090', 'COPY-110']);
-    expect(ruleRegistry.map((rule) => rule.id)).toEqual(['TOK-001', 'TOK-002', 'TOK-003', 'TOK-004', 'DEF-010', 'DOC-020', 'STR-020', 'GRID-040', 'TYPE-050', 'COH-070', 'MOTION-080', 'A11Y-090', 'COPY-110']);
+    expect(ruleRegistry.map((rule) => rule.id)).toEqual(['TOK-001', 'TOK-002', 'TOK-003', 'TOK-004', 'ID-003', 'DIV-030', 'DEF-010', 'DOC-020', 'STR-020', 'GRID-040', 'TYPE-050', 'COH-070', 'MOTION-080', 'A11Y-090', 'COPY-110']);
     expect(prototypeRuleRegistry.filter((rule) => rule.severity === 'error').map((rule) => rule.id)).toEqual(['A11Y-090', 'COPY-110']);
     expect(prototypeRuleRegistry.every((rule) => rule.stage === 'prototype')).toBe(true);
   });

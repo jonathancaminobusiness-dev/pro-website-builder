@@ -285,7 +285,7 @@ describe('identity run', () => {
     if (reopened.gate.state !== 'reopened') throw new Error('the gate should have reopened');
     const keys = reopened.gate.impact.staleRenderKeys;
     expect(keys.length).toBeGreaterThan(0);
-    for (const key of keys) await writeFile(join(cacheDir, `${key}.json`), '{}', 'utf8');
+    for (const key of keys) await writeFile(join(cacheDir, `${key}.evidence.json`), '{}', 'utf8');
     await writeFile(join(cacheDir, 'unrelated.json'), '{}', 'utf8');
 
     await run.changeToken({ tokenPath: 'color.paper', value: '#fefefe', rationale: 'Papel ainda mais claro.' });

@@ -74,8 +74,8 @@ describe('render invalidation', () => {
       const keys = changed.gate.impact.staleRenderKeys;
       expect(keys.length).toBeGreaterThan(0);
       for (const key of keys) {
-        await writeFile(join(cacheDir, `${key}.json`), '{}', 'utf8');
-        await writeFile(join(cacheDir, `${key}.png`), '', 'utf8');
+        await writeFile(join(cacheDir, `${key}.evidence.json`), '{}', 'utf8');
+        await writeFile(join(cacheDir, `${key}.evidence.png`), '', 'utf8');
       }
       await writeFile(join(cacheDir, 'unrelated.json'), '{}', 'utf8');
 

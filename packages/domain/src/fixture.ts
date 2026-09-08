@@ -19,6 +19,8 @@ const fixtureDecisions: DecisionRecord[] = [
   { id: 'dec-space-md', choice: 'tokens.space.md', axis: 'composition', evidenceIds: ['ev-material'], rationale: 'Passo base do ritmo vertical e da calha do grid.' },
   { id: 'dec-space-lg', choice: 'tokens.space.lg', axis: 'composition', evidenceIds: ['ev-audience'], rationale: 'Separação entre blocos de argumento, para leitura em uma sentada.' },
   { id: 'dec-space-xl', choice: 'tokens.space.xl', axis: 'composition', evidenceIds: ['ev-audience'], rationale: 'Medida máxima da coluna de leitura; limita a linha antes da tela.' },
+  { id: 'dec-breakpoint-compact', choice: 'tokens.breakpoint.compact', axis: 'composition', evidenceIds: ['ev-audience'], rationale: 'Primeira largura em que a coluna de leitura deixa de ser única; abaixo dela nada se transforma.' },
+  { id: 'dec-breakpoint-expanded', choice: 'tokens.breakpoint.expanded', axis: 'composition', evidenceIds: ['ev-material'], rationale: 'Largura em que a assimetria 5/7 do grid cabe sem apertar a calha.' },
   { id: 'dec-radius-card', choice: 'tokens.radius.card', axis: 'materiality', evidenceIds: ['ev-material'], rationale: 'Canto de cartão impresso aparado, não raio uniforme de kit.' },
   { id: 'dec-type-display', choice: 'tokens.type.display', axis: 'typography', evidenceIds: ['ev-exclusion'], rationale: 'Serifa de contraste alto para afastar a headline do padrão grotesco de SaaS.' },
   { id: 'dec-type-body', choice: 'tokens.type.body', axis: 'typography', evidenceIds: ['ev-audience'], rationale: 'Sem serifa de leitura longa, subordinada à display e nunca usada em título.' },

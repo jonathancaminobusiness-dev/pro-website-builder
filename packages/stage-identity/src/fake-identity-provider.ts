@@ -214,6 +214,10 @@ function tokensOf(seed: DirectionSeed): TokenGroup {
       lg: { $value: seed.space.lg, $type: 'dimension' },
       xl: { $value: seed.space.xl, $type: 'dimension' },
     },
+    breakpoint: {
+      compact: { $value: '44rem', $type: 'dimension' },
+      expanded: { $value: '60rem', $type: 'dimension' },
+    },
     radius: { card: { $value: seed.radius, $type: 'borderRadius' } },
     type: {
       display: { $value: seed.type.display, $type: 'fontFamily' },
@@ -238,13 +242,20 @@ function decisionsOf(seed: DirectionSeed): DecisionRecord[] {
     if (choice.startsWith('tokens.type.')) return ['ev-exclusion'];
     return ['ev-audience'];
   };
-  return Object.entries(seed.reasons).map(([choice, rationale]) => ({
+  const decisions = Object.entries(seed.reasons).map(([choice, rationale]) => ({
     id: `dec-${seed.id}-${choice.replaceAll('.', '-')}`,
     choice,
     axis: axisFor(choice),
     evidenceIds: evidenceFor(choice),
     rationale,
   }));
+  // Every seat declares the same two container widths, because a breakpoint answers where the reading
+  // column stops fitting, not what a direction argues; `tokensOf` writes them for all three the same way.
+  return [
+    ...decisions,
+    { id: `dec-${seed.id}-tokens-breakpoint-compact`, choice: 'tokens.breakpoint.compact', axis: 'composition' as const, evidenceIds: ['ev-audience'], rationale: 'Primeira largura em que a coluna de leitura deixa de ser única; abaixo dela nada se transforma.' },
+    { id: `dec-${seed.id}-tokens-breakpoint-expanded`, choice: 'tokens.breakpoint.expanded', axis: 'composition' as const, evidenceIds: ['ev-material'], rationale: 'Largura em que o grid abre a segunda coluna sem apertar a calha.' },
+  ];
 }
 
 export function fakeIdentityFor(seedId: IdentityAxisBriefId): IdentitySpec {
@@ -256,7 +267,7 @@ export function fakeIdentityFor(seedId: IdentityAxisBriefId): IdentitySpec {
     direction: { thesis: seed.thesis, tension: seed.tension, materiality: seed.materiality, density: seed.density, divergenceVector: Object.values(identityAxisBrief(seed.id).required).slice(0, 3), rationale: seed.rationale, rejectedAlternatives: [] },
     tokens: tokensOf(seed),
     tokenRoles: { surface: 'color.paper', text: 'color.ink', bodyTypeface: 'type.body', baseSpacing: 'space.md', sectionSpacing: 'space.lg' },
-    gridGrammar: { maxWidthToken: '{space.xl}', columns: seed.grid.columns, gutterToken: '{space.md}', rhythmToken: '{space.md}', responsive: [{ container: 'narrow', rule: seed.grid.responsive }] },
+    gridGrammar: { maxWidthToken: '{space.xl}', columns: seed.grid.columns, gutterToken: '{space.md}', rhythmToken: '{space.md}', breakpointTokens: ['{breakpoint.compact}', '{breakpoint.expanded}'], responsive: [{ container: 'narrow', rule: seed.grid.responsive }] },
     imagery: seed.imagery,
     iconography: seed.iconography,
     content: seed.content,

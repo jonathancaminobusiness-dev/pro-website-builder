@@ -144,9 +144,10 @@ test('a stopped run shows its directions for reading and decides none of them', 
  * A tab that did not issue the start still has to see the work. Landing inside
  * the fan-out is a race against a fake provider that answers in about a second,
  * so the server's own snapshot is read and the two fields it really carries
- * mid-run — `running` with no directions yet — are put back on it, once. The
- * second reading is the server's untouched answer, so the screen leaving the
- * running state proves the poll followed it there.
+ * mid-run — `running` with no directions yet — are put back on it while the
+ * running screen is asserted. Releasing the answer afterwards hands back the
+ * server's untouched one, so the screen leaving the running state proves the
+ * poll followed it there.
  */
 test('a reloaded tab offers the stop while the stage is working, and follows it to the end', async ({ page }) => {
   await page.goto('/');
@@ -160,7 +161,6 @@ test('a reloaded tab offers the stop while the stage is working, and follows it 
     const answer = await route.fetch();
     const snapshot = await answer.json() as Record<string, unknown>;
     if (!midRun) { await route.fulfill({ response: answer, json: snapshot }); return; }
-    midRun = false;
     await route.fulfill({ json: { ...snapshot, status: 'running', directions: [] } });
   });
   await page.reload();
@@ -176,7 +176,9 @@ test('a reloaded tab offers the stop while the stage is working, and follows it 
   await expect(page.getByRole('button', { name: 'Nova execução' })).toBeDisabled();
   await expect(page.getByLabel('Abrir outra execução')).toHaveCount(0);
 
-  // No click follows: the screen learns on its own that the fan-out finished.
+  // No click follows: the next poll reads the server's own answer, and the screen
+  // learns on its own that the fan-out finished.
+  midRun = false;
   await expect(page.locator('.direction-card')).toHaveCount(3);
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toHaveCount(0);
   await page.unroute('**/api/identity/runs/*');
