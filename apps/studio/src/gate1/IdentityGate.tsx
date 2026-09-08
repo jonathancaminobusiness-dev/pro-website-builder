@@ -28,7 +28,7 @@ export interface IdentityDirectionView {
 
 export interface IdentityGateSnapshot {
   runId: string;
-  status: 'queued' | 'running' | 'needs_review' | 'approved' | 'reopened' | 'interrupted' | 'failed';
+  status: 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'reopened' | 'interrupted' | 'failed';
   baseVersionId: string;
   briefing: string;
   brief?: { audience: string; promise: string; proof: string[]; exclusions: string[]; evidence: Array<{ id: string; quote: string; source: string }>; unknowns: string[]; assumptions: Array<{ id: string; statement: string; risk: string }> };
@@ -60,6 +60,9 @@ export interface IdentityGateProps {
   unreachableRunId: string;
   onRetry: () => void;
   onStart: () => void;
+  /** The stage or the raster lane is working right now, which is the only time a run can be stopped. */
+  inFlight: boolean;
+  onCancel: () => void;
   onApprove: (directionId: string, rationale: string, overrideRationale?: string) => void;
   onReject: (directionId: string, rationale: string) => void;
   onChangeToken: (tokenPath: string, value: string) => void;
@@ -137,8 +140,9 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       <p className="gate-briefing">{snapshot.briefing}</p>
       <div className="actions gate-actions">
         <button className="secondary" onClick={props.onCreate} disabled={props.busy}>Nova execução</button>
-        <button className="primary" onClick={props.onStart} disabled={props.busy || snapshot.directions.length > 0}>
-          {snapshot.directions.length > 0 ? 'Etapa executada' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+        {props.inFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
+        <button className="primary" onClick={props.onStart} disabled={props.busy || snapshot.directions.length > 0 || snapshot.status === 'cancelled'}>
+          {snapshot.status === 'cancelled' ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 
@@ -293,6 +297,7 @@ function statusLabel(status: IdentityGateSnapshot['status'] | undefined): string
     case 'running': return 'executando';
     case 'needs_review': return 'aguarda gate';
     case 'approved': return 'aprovado';
+    case 'cancelled': return 'cancelada';
     case 'reopened': return 'reaberto';
     case 'interrupted': return 'interrompido pelo reinício';
     case 'failed': return 'falhou';

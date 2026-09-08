@@ -17,7 +17,7 @@ async function ignoringDuplicate(write: Promise<void>): Promise<void> {
 
 export const IDENTITY_BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A promessa é clareza com personalidade e a prova é o registro de cada decisão. Exclusão declarada: nada que pareça um SaaS genérico de template.';
 
-export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approved' | 'reopened' | 'interrupted' | 'failed';
+export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'reopened' | 'interrupted' | 'failed';
 
 /**
  * The one row a restarted server rebuilds a run from. Versions, approvals and
@@ -179,6 +179,7 @@ export class IdentityRun {
 
   /** The one entry point that spends model turns. Nothing else in this class starts a worker. */
   async start(): Promise<IdentityRunSnapshot> {
+    if (this.status === 'cancelled') throw new StageError('This run was cancelled; create another one to run the identity stage.');
     if (this.started) { await this.inFlight; return this.snapshot(); }
     this.started = true;
     this.status = 'running';
@@ -205,11 +206,19 @@ export class IdentityRun {
     // too; what it did not finish stays recorded as a failed asset.
     await this.stage.cancelImagery();
     await this.settling;
+    // Stopping the work that followed a decision does not undo the decision:
+    // only a run the captain never got to decide becomes a cancelled one, and
+    // a run that survives its cancel gets a fresh scope for what comes next.
+    if (this.stage.gateState().state !== 'open') { this.abort = new AbortController(); return this.snapshot(); }
+    this.status = 'cancelled';
+    this.failure = undefined;
+    await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.run.cancelled', payload: { runId: this.options.runId } }));
     return this.snapshot();
   }
 
   async approve(input: { directionId: string; approverRole: string; rationale: string; overrideRationale?: string }): Promise<IdentityRunSnapshot> {
-    const approval = await this.stage.approve(input);
+    if (this.status === 'cancelled') throw new StageError('This run was cancelled; Gate 1 cannot be decided on it.');
+    const approval = await this.stage.approve({ ...input, ...(this.abort ? { signal: this.abort.signal } : {}) });
     const record: Approval = approvalOf(approval.record, this.approvals.length);
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
     this.approvals.push(record);

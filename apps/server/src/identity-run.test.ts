@@ -433,6 +433,40 @@ describe('identity run', () => {
     await run.cancel();
   });
 
+  it('marks a run the captain stopped before its gate as cancelled, and refuses to decide it', async () => {
+    const repository = new ProjectRepository(database);
+    let entered = (): void => {};
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-director-')) {
+          entered();
+          await new Promise<void>((_resolve, reject) => { signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }); });
+        }
+        return inner.propose(task, signal);
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-stopped', repository, provider });
+    await run.initialize();
+    const started = run.start();
+    await reached;
+
+    const cancelled = await run.cancel();
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.gate.state).toBe('open');
+    await started.catch(() => undefined);
+
+    // A run nobody decided stays undecided: it cannot be approved, and it
+    // cannot be started again to spend the turns over.
+    await expect(run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Mesmo assim.' })).rejects.toThrow(/cancelled/i);
+    await expect(run.start()).rejects.toThrow(/cancelled/i);
+    expect(run.snapshot().status).toBe('cancelled');
+
+    const events = await repository.listEvents('identity-stopped');
+    expect(events.some((event) => event.type === 'identity.run.cancelled')).toBe(true);
+  });
+
   it('cancels imagery the raster lane never finished, keeping the decision', async () => {
     const repository = new ProjectRepository(database);
     const raster = new HiggsfieldMcpProvider({
@@ -610,6 +644,22 @@ describe('identity api', () => {
       // The one decision the server accepted is the one the ledger holds.
       expect(snapshot.approvals).toHaveLength(1);
     } finally { await second.close(); }
+  });
+
+  it('lets only the captain stop a run', async () => {
+    await withServer(async (origin) => {
+      await post(origin, '/api/identity/runs', { runId: 'stoppable' });
+      const refused = await post(origin, '/api/identity/runs/stoppable/cancel', { approverRole: 'designer' });
+      expect(refused.status).toBe(403);
+
+      const stopped = await post(origin, '/api/identity/runs/stoppable/cancel', { approverRole: 'captain' });
+      expect(stopped.status).toBe(200);
+      expect((await stopped.json() as { status: string }).status).toBe('cancelled');
+
+      // The run is over: it cannot be started to spend the turns it was stopped before.
+      const restarted = await post(origin, '/api/identity/runs/stoppable/start', { approverRole: 'captain' });
+      expect(restarted.status).toBe(400);
+    });
   });
 
   it('answers 404 for an unknown identity run', async () => {

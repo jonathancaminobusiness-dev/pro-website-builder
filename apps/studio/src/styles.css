@@ -56,7 +56,7 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .gate-panel { grid-column: 1 / -1; min-width: 0; border: 1px solid rgba(24,37,45,.12); border-radius: 22px; padding: 28px; background: rgba(250,247,241,.7); box-shadow: 0 18px 44px rgba(68,52,36,.08); }
 .gate-panel h3 { margin: 6px 0; font-family: Georgia, serif; font-size: 1.35rem; font-weight: 500; letter-spacing: -.03em; }
 .status-approved { color: #3f6b52; border-color: #a9c2b1; }
-.status-reopened, .status-failed { color: #8c3a2c; border-color: #c98d7c; }
+.status-reopened, .status-failed, .status-cancelled { color: #8c3a2c; border-color: #c98d7c; }
 .gate-briefing { max-width: 70ch; color: #58676c; line-height: 1.6; }
 .gate-actions { margin: 18px 0 6px; }
 .gate-check { border-radius: 12px; padding: 10px 14px; margin: 12px 0; font-size: .82rem; line-height: 1.5; }

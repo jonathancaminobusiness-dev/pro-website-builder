@@ -49,3 +49,34 @@ test('a decided run survives an API outage and is reopened from the screen', asy
   await expect(page.locator('.run-id code')).toHaveText(runId);
   await expect(page.locator('.direction-card.selected')).toHaveCount(1);
 });
+
+/**
+ * A run that spends three concurrent Claude processes and a raster job needs a
+ * stop. The start request is held open in the browser so the in-flight state is
+ * deterministic rather than a race against the fake provider, which answers in
+ * milliseconds; what the captain sees and clicks is the real control.
+ */
+test('the captain can stop a run before its gate, and it stays stopped', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+
+  let releaseStart = (): void => {};
+  const held = new Promise<void>((resolve) => { releaseStart = resolve; });
+  await page.route('**/api/identity/runs/*/start', async (route) => { await held; await route.continue(); });
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+
+  // The stop is offered only while there is something to stop.
+  const cancel = page.getByRole('button', { name: 'Cancelar execução' });
+  await expect(cancel).toBeVisible();
+  await cancel.click();
+  await expect(page.getByText('cancelada', { exact: true })).toBeVisible();
+
+  releaseStart();
+  await page.unroute('**/api/identity/runs/*/start');
+
+  // A stopped run is over: the stage cannot be run on it and no card appears.
+  await expect(page.getByRole('button', { name: 'Execução cancelada' })).toBeDisabled();
+  await expect(page.locator('.direction-card')).toHaveCount(0);
+  await expect(cancel).toHaveCount(0);
+});

@@ -76,6 +76,7 @@ export async function handleIdentityRequest(
         snapshot = await run.start();
         break;
       case 'cancel':
+        if (!captain(input, send, 'cancel')) return true;
         snapshot = await run.cancel();
         break;
       case 'approve': {
