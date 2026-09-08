@@ -54,13 +54,18 @@ export const routeManifestSchema = z.object({
   states: z.array(statePlanSchema).min(1),
 }).strict().superRefine((manifest, ctx) => {
   const seenRoutes = new Set<string>();
+  const seenRouteIds = new Set<string>();
   const seenNodeIds = new Set<string>();
   const seenSectionIds = new Set<string>();
   const destinations: Array<{ sectionId: string; href: string }> = [];
   for (const route of manifest.routes) {
     if (seenRoutes.has(route.route)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `The manifest repeats the route ${route.route}.` });
     seenRoutes.add(route.route);
-    if (seenNodeIds.has(route.rootNodeId)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Node id ${route.rootNodeId} is claimed by more than one section.` });
+    // A route id becomes the page id, and two pages sharing one is refused by the applier, which no
+    // retry can reach; the architect is told here instead, while it can still answer again.
+    if (seenRouteIds.has(route.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `The manifest repeats the route id ${route.id}; a route id has to name exactly one page.` });
+    seenRouteIds.add(route.id);
+    if (seenNodeIds.has(route.rootNodeId)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['routes'], message: `Node id ${route.rootNodeId} is the shell of more than one route; every node id is unique across the whole manifest.` });
     seenNodeIds.add(route.rootNodeId);
     let expected = ROUTE_SHELL_SLOT + 1;
     for (const section of route.sections) {

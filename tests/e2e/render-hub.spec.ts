@@ -6,7 +6,7 @@ import { expect, test } from '@playwright/test';
 import { createFixtureIR } from '../../packages/domain/src/index.js';
 import { runTier0 } from '../../packages/qa-deterministic/src/index.js';
 import { renderDesign } from '../../packages/renderer/src/index.js';
-import { createRenderMatrix, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../../packages/render-hub/src/index.js';
+import { createRenderMatrix, qaFor, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../../packages/render-hub/src/index.js';
 import { createPreviewServer } from '../../apps/server/src/preview.js';
 
 test('render hub captures a screenshot, DOM and accessibility snapshot, then reuses its cache', async () => {
@@ -17,16 +17,16 @@ test('render hub captures a screenshot, DOM and accessibility snapshot, then reu
   const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-render-hub-'));
   try {
     const hub = new RenderHub({ cacheDir });
-    const renderCase: RenderCase = { route: `/preview/${ir.meta.versionId}/`, width: 1440, state: 'default', reducedMotion: false };
-    const [first] = await hub.render(rendered, preview.origin, [renderCase]);
+    const request = { ir, rendered, baseUrl: preview.origin, previewPrefix: `/preview/${ir.meta.versionId}`, cases: [{ route: '/', width: 1440, state: 'default', reducedMotion: false }] as RenderCase[] };
+    const [first] = await hub.capture(request);
     expect(first?.cached).toBe(false);
-    expect((await stat(first!.screenshotPath)).size).toBeGreaterThan(0);
+    expect((await stat(first!.evidence.screenshotPath)).size).toBeGreaterThan(0);
     expect(first!.dom).toContain('data-node-id="home-title"');
     expect(JSON.stringify(first!.accessibility)).toContain('Toda escolha tem motivo.');
-    expect(first!.qa.passed).toBe(true);
-    const [second] = await hub.render(rendered, preview.origin, [renderCase]);
+    expect(qaFor(first!).passed).toBe(true);
+    const [second] = await hub.capture(request);
     expect(second?.cached).toBe(true);
-    expect(second?.screenshotPath).toBe(first?.screenshotPath);
+    expect(second?.evidence.screenshotPath).toBe(first?.evidence.screenshotPath);
   } finally {
     await preview.close();
     await rm(cacheDir, { recursive: true, force: true });
@@ -42,19 +42,75 @@ test('drives the whole route, viewport and state matrix against the preview serv
   const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-render-matrix-'));
   try {
     const prefix = `/preview/${ir.meta.versionId}`;
-    const cases = createRenderMatrix(ir, { viewports: REPRESENTATIVE_VIEWPORTS })
-      .map((renderCase) => ({ ...renderCase, route: renderCase.route === '/' ? `${prefix}/` : `${prefix}${renderCase.route}` }));
+    const cases = createRenderMatrix(ir, { viewports: REPRESENTATIVE_VIEWPORTS });
     expect(cases).toHaveLength(ir.pages.routes.length * REPRESENTATIVE_VIEWPORTS.length * Object.keys(ir.stateFixtures).length);
-    const results = await new RenderHub({ cacheDir }).render(rendered, preview.origin, cases);
+    const results = await new RenderHub({ cacheDir }).capture({ ir, rendered, baseUrl: preview.origin, previewPrefix: prefix, cases });
     expect(results).toHaveLength(cases.length);
-    expect(results.filter((result) => result.qa.passed)).toHaveLength(cases.length);
-    expect(results.map((result) => result.qa.status)).toEqual(cases.map(() => 200));
-    expect(new Set(results.map((result) => result.screenshotPath)).size).toBe(cases.length);
+    expect(results.filter((result) => qaFor(result).passed)).toHaveLength(cases.length);
+    expect(results.map((result) => result.status)).toEqual(cases.map(() => 200));
+    expect(new Set(results.map((result) => result.evidence.screenshotPath)).size).toBe(cases.length);
     for (const [route, nodeId] of [['/', 'home-title'], ['/proof', 'proof-title'], ['/contact', 'contact-title']] as const) {
-      const forRoute = results.filter((result) => result.renderCase.route === (route === '/' ? `${prefix}/` : `${prefix}${route}`));
+      const forRoute = results.filter((result) => result.renderCase.route === route);
       expect(forRoute).toHaveLength(REPRESENTATIVE_VIEWPORTS.length * Object.keys(ir.stateFixtures).length);
       for (const result of forRoute) expect(result.dom).toContain(`data-node-id="${nodeId}"`);
     }
+  } finally {
+    await preview.close();
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test('captures every enumerated state with the nodes it hides really hidden', async () => {
+  const ir = createFixtureIR();
+  // A state fixture the matrix enumerates: capturing it without applying `hidden` would repeat the
+  // default screenshot under another key and report it as state coverage.
+  ir.stateFixtures.empty = { description: 'Sem conteúdo', values: { motion: 'full', hidden: 'home-proof' } };
+  const rendered = renderDesign(ir, { routePrefix: `/preview/${ir.meta.versionId}` });
+  const preview = createPreviewServer((requested) => requested === ir.meta.versionId ? rendered : undefined, 0);
+  await preview.start();
+  const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-render-state-'));
+  try {
+    const cases = createRenderMatrix(ir, { viewports: [1440] as const, routes: ['/'] });
+    const captures = await new RenderHub({ cacheDir }).capture({ ir, rendered, baseUrl: preview.origin, previewPrefix: `/preview/${ir.meta.versionId}`, cases });
+    const byState = new Map(captures.map((capture) => [capture.renderCase.state, capture]));
+    expect([...byState.keys()].sort()).toEqual(['default', 'empty', 'reduced']);
+    const shown = (state: string): boolean | undefined => byState.get(state)!.evidence.nodes.find((node) => node.nodeId === 'home-proof')?.displayed;
+    expect(shown('empty')).toBe(false);
+    expect(shown('default')).toBe(true);
+    const shot = async (state: string): Promise<Buffer> => readFile(byState.get(state)!.evidence.screenshotPath);
+    expect((await shot('empty')).equals(await shot('default'))).toBe(false);
+  } finally {
+    await preview.close();
+    await rm(cacheDir, { recursive: true, force: true });
+  }
+});
+
+test('styles a node whose id needs escaping, because its rule and its attribute name one text', async () => {
+  const ir = createFixtureIR();
+  const home = ir.pages.routes[0]!;
+  // Nothing constrains a node id to an identifier, and every visual prop now travels through the
+  // selector that addresses it, so an id holding a quote or a backslash must still be styled.
+  const quirky = 'home-"odd\\id';
+  home.nodes.push({
+    id: quirky, kind: 'surface', semantic: 'section', slots: {},
+    props: { text: 'Prova rastreável', background: '{color.accent}', padding: '{space.xl}' },
+    responsive: [{ minWidth: '{breakpoint.compact}', props: { paddingInline: '{space.sm}' } }],
+  });
+  home.nodes[0]!.slots = { children: ['home-title', 'home-proof', quirky] };
+
+  const rendered = renderDesign(ir, { routePrefix: `/preview/${ir.meta.versionId}` });
+  const preview = createPreviewServer((requested) => requested === ir.meta.versionId ? rendered : undefined, 0);
+  await preview.start();
+  const cacheDir = await mkdtemp(join(tmpdir(), 'pwb-node-id-escape-'));
+  try {
+    const [capture] = await new RenderHub({ cacheDir }).capture({
+      ir, rendered, baseUrl: preview.origin, previewPrefix: `/preview/${ir.meta.versionId}`,
+      cases: [{ route: '/', width: 1440, state: 'default', reducedMotion: false }],
+    });
+    const node = capture!.evidence.nodes.find((entry) => entry.nodeId === quirky)!;
+    // 96px is {space.xl} from the node's own rule; 12px is {space.sm} from its container query.
+    expect(node.paddingBlockPx).toBe(96);
+    expect(node.paddingInlinePx).toBe(12);
   } finally {
     await preview.close();
     await rm(cacheDir, { recursive: true, force: true });

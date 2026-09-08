@@ -18,6 +18,7 @@ export function renderArchitectPrompt(task: AgentTask, identity: IdentitySpec): 
     'Answer as a RouteManifest. Name the routes and the order a visitor walks them, give each route a purpose, and break each route into sections with a role, an intent, and plausible copy written in the identity voice — never a placeholder or a slogan.',
     `Every route reserves slot ${ROUTE_SHELL_SLOT} for its shell, which you own; sections start at slot ${ROUTE_SHELL_SLOT + 1} and their windows must be contiguous and never overlap, because the composers write them in parallel and each one may only touch its own window. Reserve exactly as many node ids as the section needs; the composer must fill every one of them.`,
     'Declare the states the prototype must survive: a default state, and the loading, empty, error and focus states the journey implies. A state lists the node ids that are absent in it and, when relevant, the node id the keyboard should reach.',
+    'Every id is unique across the whole manifest, not only inside its route: no two routes share a route id, no two sections share a section id, and no node id is repeated anywhere — a route\'s shell node id counts as a node id like any other.',
     `Write titles, purposes and copy in ${identity.meta.locale}; keep ids, routes and node ids as lowercase kebab-case identifiers.`,
   ].join('\n\n');
 }

@@ -2,14 +2,13 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
-import { hashJson, type DesignIR } from '@pwb/domain';
+import { cssNodeSelector, hashJson, type DesignIR } from '@pwb/domain';
 import type { AxeViolation, FocusSample, RenderContext, RenderEvidence } from '@pwb/qa-deterministic';
 import type { RenderedDocument } from '@pwb/renderer';
 import { cacheKey, evaluateQa, type QaResult, type RenderCase } from './cases.js';
 import { applyRenderState, collectRenderEvidence, readFocusSample, type CollectedPage } from './collect.js';
 import { conditionFor, type StateCondition } from './matrix.js';
 
-export interface RenderCaseResult { renderCase: RenderCase; screenshotPath: string; dom: string; accessibility: string; qa: QaResult; cached: boolean; }
 export interface EvidenceCapture { renderCase: RenderCase; evidence: RenderEvidence; dom: string; accessibility: string; status: number | null; cached: boolean; }
 
 export interface CaptureRequest {
@@ -51,6 +50,15 @@ export function assertBrowserInstalled(executablePath: string = chromium.executa
   throw new Error(`Playwright has no Chromium at ${executablePath}. Run \`corepack pnpm exec playwright install chromium\` and start again.`);
 }
 
+/**
+ * The Tier 0 read of a capture: served, no horizontal overflow, no console or network error. Every
+ * caller reads it off the same evidence bundle, so nothing measures a page without the state applied.
+ */
+export function qaFor(capture: EvidenceCapture): QaResult {
+  const { documentMetrics, consoleErrors, networkErrors } = capture.evidence;
+  return evaluateQa({ scrollWidth: documentMetrics.scrollWidth, clientWidth: documentMetrics.clientWidth, status: capture.status, consoleErrors, networkErrors });
+}
+
 export class RenderHub {
   private readonly maxConcurrency: number;
 
@@ -73,26 +81,6 @@ export class RenderHub {
       const capture = await this.capturePage(browser, renderCase, condition, url, join(this.options.cacheDir, `${key}.evidence.png`), request.signal);
       await this.writeCache(`${key}.evidence.json`, capture);
       return capture;
-    }));
-  }
-
-  /** The single-condition capture the fixture CLI and the phase 0 tests drive. */
-  async render(rendered: RenderedDocument, baseUrl: string, cases: RenderCase[]): Promise<RenderCaseResult[]> {
-    return this.withBrowser(async (browser) => this.eachCase(cases, async (renderCase) => {
-      const key = cacheKey(rendered, renderCase);
-      const cached = await this.readCache<RenderCaseResult>(`${key}.json`);
-      if (cached) return { ...cached, cached: true };
-      const condition: StateCondition = { state: renderCase.state, description: renderCase.state, reducedMotion: renderCase.reducedMotion, hiddenNodeIds: [], focusNodeId: null };
-      const url = new URL(renderCase.route, baseUrl).toString();
-      const capture = await this.capturePage(browser, renderCase, condition, url, join(this.options.cacheDir, `${key}.png`));
-      const { evidence } = capture;
-      const result: RenderCaseResult = {
-        renderCase, screenshotPath: evidence.screenshotPath, dom: capture.dom, accessibility: capture.accessibility,
-        qa: evaluateQa({ scrollWidth: evidence.documentMetrics.scrollWidth, clientWidth: evidence.documentMetrics.clientWidth, status: capture.status, consoleErrors: evidence.consoleErrors, networkErrors: evidence.networkErrors }),
-        cached: false,
-      };
-      await this.writeCache(`${key}.json`, result);
-      return result;
     }));
   }
 
@@ -144,7 +132,7 @@ export class RenderHub {
   }
 
   private async focusNode(page: Page, nodeId: string): Promise<void> {
-    const target = page.locator(`[data-node-id="${nodeId}"]`).first();
+    const target = page.locator(cssNodeSelector(nodeId)).first();
     if (await target.count() === 0) return;
     const reachable = await target.evaluate((element: HTMLElement, selector: string) =>
       [element, ...element.querySelectorAll<HTMLElement>(selector)].some((candidate) => candidate.matches(selector) && candidate.checkVisibility()),

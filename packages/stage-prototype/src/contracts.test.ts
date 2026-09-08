@@ -53,7 +53,14 @@ describe('prototype contracts', () => {
     const plan = await manifest();
     const sharedShell = structuredClone(plan);
     sharedShell.routes[1]!.rootNodeId = sharedShell.routes[0]!.rootNodeId;
-    expect(() => routeManifestSchema.parse(sharedShell)).toThrow(/Node id home-shell is claimed by more than one section/);
+    expect(() => routeManifestSchema.parse(sharedShell)).toThrow(/Node id home-shell is the shell of more than one route/);
+  });
+
+  it('refuses two routes that share an id, because a route id becomes the page id the applier versions', async () => {
+    const plan = await manifest();
+    const sharedId = structuredClone(plan);
+    sharedId.routes[1]!.id = sharedId.routes[0]!.id;
+    expect(() => routeManifestSchema.parse(sharedId)).toThrow(/repeats the route id route-home/);
   });
 
   it('refuses two sections that share an id, because an id resolves one window and one composer task', async () => {

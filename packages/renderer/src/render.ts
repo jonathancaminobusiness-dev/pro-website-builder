@@ -1,4 +1,4 @@
-import { cssCustomPropertyName, cssTokenIssues, documentRules, hashJson, resolveTokens, slotChildIds, visualPropKeys, type Asset, type DesignIR, type IdentitySpec, type Page, type PageNode } from '@pwb/domain';
+import { cssCustomPropertyName, cssNodeSelector, cssTokenIssues, documentRules, hashJson, resolveTokens, slotChildIds, visualPropKeys, type Asset, type DesignIR, type IdentitySpec, type Page, type PageNode } from '@pwb/domain';
 
 export const RENDERER_VERSION = 'renderer-0.1.0';
 
@@ -117,7 +117,7 @@ function renderNodeRules(ir: DesignIR, values: Record<string, string | number | 
   for (const page of ir.pages.routes) for (const node of page.nodes) {
     const declarations = declarationsFor(node.props, values, node, '');
     if (declarations.length === 0) continue;
-    blocks.push(`  [data-node-id="${escapeHtml(node.id)}"] { ${declarations.join(' ')} }`);
+    blocks.push(`  ${cssNodeSelector(node.id)} { ${declarations.join(' ')} }`);
   }
   return blocks.length === 0 ? '' : `\n${blocks.join('\n')}`;
 }
@@ -141,7 +141,7 @@ function renderResponsive(ir: DesignIR, values: Record<string, string | number |
     for (const { rule, literal, width } of [...resolvedRules].sort((a, b) => a.width - b.width)) {
       const declarations = declarationsFor(rule.props, values, node, 'responsive.');
       if (declarations.length === 0) continue;
-      blocks.push(`  @container (min-width: ${String(literal)}) {\n    [data-node-id="${escapeHtml(node.id)}"] { ${declarations.join(' ')} }\n  }`);
+      blocks.push(`  @container (min-width: ${String(literal)}) {\n    ${cssNodeSelector(node.id)} { ${declarations.join(' ')} }\n  }`);
     }
   }
   return blocks.length === 0 ? '' : `\n${blocks.join('\n')}`;
