@@ -27,7 +27,17 @@ function nodeIdList(value: string | number | boolean | undefined): string[] {
   return typeof value === 'string' ? value.split(',').map((entry) => entry.trim()).filter(Boolean) : [];
 }
 
+/**
+ * The vocabulary above is the whole of what a capture can apply. Enumerating a state whose values fall
+ * outside it would report duplicate output as state coverage, so it is refused rather than ignored.
+ */
+const STATE_VALUE_KEYS = new Set(['motion', 'hidden', 'focus']);
+
 export function readStateConditions(ir: DesignIR): StateCondition[] {
+  for (const [state, fixture] of Object.entries(ir.stateFixtures)) {
+    const unsupported = Object.keys(fixture.values).filter((key) => !STATE_VALUE_KEYS.has(key));
+    if (unsupported.length > 0) throw new Error(`State fixture ${state} sets ${unsupported.join(', ')}, which the render hub cannot apply; it only applies motion, hidden and focus.`);
+  }
   return Object.entries(ir.stateFixtures)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([state, fixture]) => ({

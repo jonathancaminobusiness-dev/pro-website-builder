@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { renderDesign } from '@pwb/renderer';
-import { assertBrowserInstalled, cacheKey, evaluateQa, type RenderCase } from './index.js';
+import { assertBrowserInstalled, cacheKey, createRenderMatrix, evaluateQa, type RenderCase } from './index.js';
 
 describe('render hub', () => {
   it('names the install command when Playwright has no browser to measure with', () => {
@@ -26,6 +26,6 @@ describe('render hub', () => {
   it('refuses a state fixture whose values the hub cannot apply instead of reporting duplicate coverage', () => {
     const ir = createFixtureIR();
     ir.stateFixtures.dense = { description: 'Dense spacing', values: { gap: '{space.sm}' } };
-    expect(() => createRenderCases(ir, '/preview/v0')).toThrow(/cannot apply/i);
+    expect(() => createRenderMatrix(ir)).toThrow(/cannot apply/i);
   });
 });
