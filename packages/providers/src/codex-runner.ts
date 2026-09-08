@@ -170,7 +170,8 @@ export class CodexJsonRunner implements JsonModelRunner {
       const args = [
         'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
         '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false',
-        '--json', '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, request.prompt,
+        '--json', ...(request.strictSchema === false ? [] : ['--output-schema', JSON.stringify(request.schema)]),
+        '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, request.prompt,
       ];
       const result = await this.execute(this.executable, args, { cwd: this.cwd, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
       try {
@@ -219,7 +220,7 @@ export class CodexRunner implements ModelProvider {
     let correction = false;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const raw = await this.runner.run({ prompt: codexPrompt(task, correction), schema: stageResultJsonSchemas[task.stage], deadlineMs: task.deadlineMs }, signal);
+        const raw = await this.runner.run({ prompt: codexPrompt(task, correction), schema: stageResultJsonSchemas[task.stage], strictSchema: false, deadlineMs: task.deadlineMs }, signal);
         const result = agentResultSchema.parse(raw);
         return result.proposal ? { ...result, proposal: { ...result.proposal, idempotencyKey: idempotencyKey(task) } } : result;
       } catch (error) {

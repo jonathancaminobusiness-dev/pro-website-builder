@@ -55,6 +55,21 @@ describe('identity run', () => {
     ]));
   });
 
+  it('restores task failure details after a failed identity run restarts', async () => {
+    const repository = new ProjectRepository(database);
+    const provider = new CodexRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
+    const run = new IdentityRun({ runId: 'identity-codex-restore', repository, provider });
+    await run.initialize();
+    await run.start();
+
+    const restored = new IdentityRun({ runId: 'identity-codex-restore', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+
+    expect(restored.snapshot().failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'identity-curator', reason: expect.stringMatching(/Install Codex CLI/) }),
+    ]));
+  });
+
   it('persists every candidate version and the events behind the fan-out', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({ runId: 'identity-events', repository, provider: new FakeIdentityProvider() });
