@@ -87,7 +87,12 @@ test.describe('release evidence', () => {
         await page.setViewportSize({ width, height: 900 });
         const response = await page.goto(`${origin()}${route.releasePath}`, { waitUntil: 'load' });
         expect(response?.status(), `${route.route} must be served`).toBe(200);
-        await page.waitForFunction(() => document.fonts?.status === 'loaded');
+        // The faces are awaited through the promise the platform settles when it
+        // finishes loading them. Polling `document.fonts.status` instead runs the
+        // predicate in `requestAnimationFrame`, and an engine that stops painting
+        // after a viewport change never calls it back: the wait has no timeout of
+        // its own, so it takes the whole measurement down with the test timeout.
+        await page.evaluate(async () => { await document.fonts.ready; });
         const metrics = await page.evaluate(() => ({
           scrollWidth: document.documentElement.scrollWidth,
           clientWidth: document.documentElement.clientWidth,

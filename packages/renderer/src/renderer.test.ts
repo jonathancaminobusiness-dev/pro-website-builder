@@ -165,6 +165,20 @@ describe('deterministic renderer', () => {
     (colliding.identity.tokens as { color: { ink: Record<string, unknown> } }).color.ink = { strong: { $value: '#ffffff', $type: 'color' } };
     colliding.identity.tokenRoles.text = 'color.ink-strong';
     expect(() => renderDesign(colliding)).toThrow(/compile to the CSS custom property/i);
+
+    // An open function or string consumes the declaration's `;` and drops the tokens after it.
+    const truncated = createFixtureIR();
+    (truncated.identity.tokens as { shadow?: Record<string, unknown> }).shadow = { card: { $value: '0 1px 2px rgba(0,0,0,.2', $type: 'shadow' } };
+    expect(() => renderDesign(truncated)).toThrow(/parenthesis open/i);
+    (truncated.identity.tokens as { shadow: { card: { $value: string } } }).shadow.card.$value = '0 1px 2px rgba(0,0,0,.2)';
+    expect(renderDesign(truncated).css).toContain('--shadow-card: 0 1px 2px rgba(0,0,0,.2);');
+
+    const unquoted = createFixtureIR();
+    (unquoted.identity.tokens as { type: { body: { $value: string } } }).type.body.$value = '"Inter, Arial, sans-serif';
+    expect(() => renderDesign(unquoted)).toThrow(/quoted string open/i);
+    // A quote of the other kind inside a closed string is ordinary, not an open one.
+    (unquoted.identity.tokens as { type: { body: { $value: string } } }).type.body.$value = '"O\'Neil Sans", Inter, sans-serif';
+    expect(renderDesign(unquoted).css).toContain('--type-body: "O\'Neil Sans", Inter, sans-serif;');
   });
 
   it('renders a ready asset a media node references so generated images reach preview and export', () => {

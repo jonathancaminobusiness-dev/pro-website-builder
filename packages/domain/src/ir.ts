@@ -92,7 +92,7 @@ export const assetCropSchema = z.object({
 export const assetSchema = z.object({
   id: z.string(), kind: z.enum(['raster', 'vector', 'font', 'manual']), uri: z.string(), alt: z.string(),
   provenance: z.object({ source: z.string(), author: z.string(), license: z.string().min(1, 'An asset must record the license its provenance grants before the site can be exported.'), date: z.string(), hash: z.string(), prompt: z.string().optional(), model: z.string().optional(), termsNote: z.string().optional() }),
-  status: z.enum(['placeholder', 'ready', 'failed']),
+  status: z.enum(['generating', 'placeholder', 'ready', 'failed']),
   crop: assetCropSchema.optional(),
 });
 

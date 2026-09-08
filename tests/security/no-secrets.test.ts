@@ -6,7 +6,8 @@ import { compileRelease } from '../../packages/export/src/index.js';
 import { renderDesign } from '../../packages/renderer/src/index.js';
 import { openDatabase, ProjectRepository, scanSecrets } from '../../apps/server/src/db/repository.js';
 import { FixtureRun } from '../../apps/server/src/fixture-run.js';
-import { createModelProvider } from '../../apps/server/src/provider.js';
+import { IdentityRun } from '../../apps/server/src/identity-run.js';
+import { createIdentityProvider, createModelProvider } from '../../apps/server/src/provider.js';
 
 function releaseOptions(root: string) {
   return { releaseRoot: root, evidenceDir: join(root, '..', 'evidence') };
@@ -26,6 +27,22 @@ describe('phase 0 secret boundary', () => {
     expect(dump).toContain(snapshot.currentVersion.ir.identity.content.message);
     const logs = JSON.stringify({ runId: snapshot.runId, status: snapshot.status, versionId: snapshot.currentVersion.id });
     expect(scanSecrets(dump + bundle + logs)).toEqual([]);
+    database.sqlite.close();
+  });
+
+  it('keeps the identity stage database, events and prompts free of secret-like values', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pwb-identity-secrets-'));
+    const database = openDatabase(join(root, 'identity-secrets.sqlite'));
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({ runId: 'identity-secret-scan', repository, provider: createIdentityProvider() });
+    await run.initialize();
+    const snapshot = await run.start();
+    await run.approve({ directionId: snapshot.directions[0]!.directionId, approverRole: 'captain', rationale: 'Aprovada para o scan.' });
+    const dump = repository.dump();
+    expect(dump).toContain(snapshot.directions[0]!.versionId);
+    const events = JSON.stringify(await repository.listEvents('identity-secret-scan'));
+    const prompts = snapshot.directions.map((direction) => JSON.stringify(direction)).join('\n');
+    expect(scanSecrets(dump + events + prompts)).toEqual([]);
     database.sqlite.close();
   });
 });

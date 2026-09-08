@@ -54,7 +54,9 @@ async function loadedFaces(page: Page, families: Harness['fonts']): Promise<{ de
 
 async function computedByNode(page: Page, path: string): Promise<Record<string, Record<string, string>>> {
   await page.goto(`${origin()}${path}`, { waitUntil: 'load' });
-  await page.waitForFunction(() => document.fonts?.status === 'loaded');
+  // See release-evidence.spec.ts: the promise settles on the font loading itself,
+  // while polling for the status depends on the engine still painting frames.
+  await page.evaluate(async () => { await document.fonts.ready; });
   return page.evaluate((properties) => {
     const result: Record<string, Record<string, string>> = {};
     for (const element of document.querySelectorAll('[data-node-id]')) {

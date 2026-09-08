@@ -383,6 +383,23 @@ describe('orchestrator', () => {
     expect(store.get(root.id)?.hash).toBe(root.hash);
   });
 
+  it('starts no worker when the signal it was given had already aborted', async () => {
+    const scheduler = new Scheduler();
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const controller = new AbortController();
+    controller.abort();
+    const worked: string[] = [];
+    // A caller that awaits anything before scheduling can be cancelled in that
+    // window, and hands over a signal that will never fire an abort event.
+    const tasks = new RunPlanner(store).plan('run-preaborted', root.id, 'brief').tasks.map((task) => ({ ...task, deadlineMs: 60_000 }));
+    const result = await scheduler.run(tasks, async (task) => { worked.push(task.id); return 'value'; }, { signal: controller.signal });
+
+    expect(worked).toEqual([]);
+    expect(result.cancelled).toBe(true);
+    expect(result.results.map((entry) => entry.state)).toEqual(tasks.map(() => 'cancelled'));
+  });
+
   it('releases the scheduler when a cancel lands while a settle callback is still pending', async () => {
     const scheduler = new Scheduler();
     const store = new VersionStore();

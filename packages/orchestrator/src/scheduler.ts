@@ -41,6 +41,9 @@ export class Scheduler {
   async run<T>(tasks: AgentTask[], worker: (task: AgentTask, signal: AbortSignal) => Promise<T>, options: RunOptions<T> = {}): Promise<ScheduleResult<T>> {
     const controller = new AbortController();
     const relay = () => controller.abort();
+    // A signal that aborted before this call never fires the listener, and a
+    // caller that awaited anything before scheduling can hand one over.
+    if (options.signal?.aborted) controller.abort();
     options.signal?.addEventListener('abort', relay, { once: true });
     const results: ScheduleResult<T>['results'] = [];
     const succeeded = new Set<string>();

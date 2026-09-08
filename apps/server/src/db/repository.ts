@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { designIRSchema, hashJson, type AgentTask, type Approval, type DesignIR, type Patch } from '@pwb/domain';
+import { designIRSchema, hashJson, imagerySourceSchema, RASTER_IMAGERY_SOURCE, type AgentTask, type Approval, type DesignIR, type ImagerySource, type Patch } from '@pwb/domain';
 import * as schema from './schema.js';
 
 export interface LocalDatabase { sqlite: Database.Database; orm: BetterSQLite3Database<typeof schema>; }
@@ -14,17 +14,56 @@ CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY NOT NULL, run_id TEXT 
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS prototype_runs (id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL, step TEXT NOT NULL, detail TEXT NOT NULL, error TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL);`;
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export function openDatabase(filename: string): LocalDatabase {
   const sqlite = new Database(filename);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   const [version] = sqlite.pragma('user_version') as Array<{ user_version: number }>;
-  if ((version?.user_version ?? 0) < SCHEMA_VERSION) sqlite.exec('DROP TABLE IF EXISTS tasks; DROP TABLE IF EXISTS runs; DROP TABLE IF EXISTS assets;');
+  const current = version?.user_version ?? 0;
+  // Each step is the one its own version introduced, so a later bump does not
+  // re-run an earlier drop over rows that step never meant to lose.
+  if (current < 2) sqlite.exec('DROP TABLE IF EXISTS tasks; DROP TABLE IF EXISTS runs; DROP TABLE IF EXISTS assets;');
   sqlite.exec(migration);
+  if (current < 3) sqlite.transaction(() => renameImagerySources(sqlite))();
   sqlite.pragma(`user_version = ${SCHEMA_VERSION}`);
   return { sqlite, orm: drizzle(sqlite, { schema }) };
+}
+
+/**
+ * Version 3 closed the imagery vocabulary, so a document written before it can
+ * name a source this build no longer parses — and every stored version of a
+ * project is parsed to read any run of it. The documents are rewritten in place
+ * rather than dropped: the raster source keeps its meaning under its new name,
+ * and a source this build does not know becomes `manual`, which generates
+ * nothing. A rewritten row is stored as the schema normalizes it, under the hash
+ * of that same normalized document, because that is what every reader of the row
+ * sees; the content-derived row id is not touched, because `parent_id` and
+ * `approvals.version_id` point at it.
+ */
+function renameImagerySources(sqlite: Database.Database): void {
+  const rows = sqlite.prepare('SELECT id, ir FROM versions').all() as Array<{ id: string; ir: string }>;
+  const update = sqlite.prepare('UPDATE versions SET ir = ?, hash = ? WHERE id = ?');
+  for (const row of rows) {
+    let document: { identity?: { imagery?: { allowedSources?: unknown } } };
+    try { document = JSON.parse(row.ir) as typeof document; } catch { continue; }
+    const imagery = document.identity?.imagery;
+    const sources = imagery?.allowedSources;
+    if (!imagery || !Array.isArray(sources)) continue;
+    const renamed = [...new Set(sources.map(knownImagerySource))];
+    if (renamed.length === sources.length && renamed.every((source, index) => source === sources[index])) continue;
+    imagery.allowedSources = renamed;
+    const normalized = designIRSchema.safeParse(document);
+    const rewritten = normalized.success ? normalized.data : document;
+    update.run(JSON.stringify(rewritten), hashJson(rewritten), row.id);
+  }
+}
+
+function knownImagerySource(source: unknown): ImagerySource {
+  if (source === 'higgsfield') return RASTER_IMAGERY_SOURCE;
+  const known = imagerySourceSchema.safeParse(source);
+  return known.success ? known.data : 'manual';
 }
 
 interface ProjectInput { id: string; name: string; }

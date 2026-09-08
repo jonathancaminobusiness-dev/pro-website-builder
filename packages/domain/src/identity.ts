@@ -1,6 +1,16 @@
 import { z } from 'zod';
+import { decisionRecordSchema, divergenceSpecSchema, evidenceSchema, measuredAxes, rejectedAlternativeSchema, type MeasuredAxis } from './divergence.js';
 import { documentRules } from './rules.js';
 import { flattenTokens, resolveTokens, tokenGroupSchema } from './tokens.js';
+
+/**
+ * Where a direction admits its images from. The vocabulary is closed because it
+ * decides an external side effect: `higgsfield-mcp` is the only raster source in
+ * v1, so a direction that does not list it is never generated.
+ */
+export const imagerySourceSchema = z.enum(['higgsfield-mcp', 'manual']);
+export type ImagerySource = z.infer<typeof imagerySourceSchema>;
+export const RASTER_IMAGERY_SOURCE: ImagerySource = 'higgsfield-mcp';
 
 const provenanceSchema = z.object({
   source: z.string(), author: z.string(), license: z.string(), date: z.string(), hash: z.string(),
@@ -26,8 +36,17 @@ function referencedLengthPx(reference: string, values: Record<string, string | n
 
 export const identitySpecSchema = z.object({
   meta: z.object({ id: z.string(), version: z.string(), locale: z.string(), status: z.enum(['draft', 'approved']) }),
-  strategy: z.object({ audience: z.string(), job: z.string(), promise: z.string(), proof: z.array(z.string()), exclusions: z.array(z.string()) }),
-  direction: z.object({ thesis: z.string(), tension: z.string(), materiality: z.string(), density: z.enum(['airy', 'balanced', 'dense']), divergenceVector: z.array(z.string()).min(3), rationale: z.string() }),
+  strategy: z.object({
+    audience: z.string(), job: z.string(), promise: z.string(), proof: z.array(z.string()), exclusions: z.array(z.string()),
+    /** Briefing evidence a decision record may cite; see the ID-003 rule in `@pwb/linter`. */
+    evidence: z.array(evidenceSchema).default([]),
+  }),
+  direction: z.object({
+    thesis: z.string(), tension: z.string(), materiality: z.string(), density: z.enum(['airy', 'balanced', 'dense']), divergenceVector: z.array(z.string()).min(3), rationale: z.string(),
+    /** The typed divergence matrix this direction was produced under; see the DIV-030 rule in `@pwb/linter`. */
+    divergence: divergenceSpecSchema.optional(),
+    rejectedAlternatives: z.array(rejectedAlternativeSchema).default([]),
+  }),
   tokens: tokenGroupSchema,
   tokenRoles: z.object({ surface: z.string(), text: z.string(), bodyTypeface: z.string(), baseSpacing: z.string(), sectionSpacing: z.string() }),
   gridGrammar: z.object({
@@ -36,7 +55,7 @@ export const identitySpecSchema = z.object({
     breakpointTokens: z.array(z.string()).min(2),
     responsive: z.array(z.object({ container: z.string(), rule: z.string() })),
   }),
-  imagery: z.object({ treatment: z.string(), focalPolicy: z.string(), allowedSources: z.array(z.string()) }),
+  imagery: z.object({ treatment: z.string(), focalPolicy: z.string(), allowedSources: z.array(imagerySourceSchema) }),
   iconography: z.object({ family: z.string(), strokeToken: z.string(), naming: z.string() }),
   content: z.object({ voice: z.string(), message: z.string(), allowedTerms: z.array(z.string()), forbiddenTerms: z.array(z.string()) }),
   do: z.array(z.string()),
@@ -45,6 +64,8 @@ export const identitySpecSchema = z.object({
   governance: z.object({ approverRole: z.literal('captain'), rationaleRequired: z.boolean(), changePolicy: z.string() }),
   provenance: provenanceSchema,
   schemes: z.object({ dark: z.record(z.string()) }).partial().optional(),
+  /** One record per token and per governed contract field; ID-003 blocks Gate 1 when a choice has none. */
+  decisions: z.array(decisionRecordSchema).default([]),
 }).superRefine((identity, ctx) => {
   const paths = flattenTokens(identity.tokens);
   for (const [role, path] of Object.entries(identity.tokenRoles)) {
@@ -76,3 +97,37 @@ export function declaresDarkScheme(identity: IdentitySpec): boolean {
 }
 
 export type IdentitySpec = z.infer<typeof identitySpecSchema>;
+
+/** The colour values an identity actually resolves to, which is what a palette fingerprint is measured from. */
+export function identityColorValues(identity: IdentitySpec): string[] {
+  const { values, types } = resolveTokens(identity.tokens);
+  return Object.entries(values)
+    .filter(([path, value]) => typeof value === 'string' && (types[path] === 'color' || path.startsWith('color.')))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, value]) => String(value));
+}
+
+/**
+ * What the document itself shows on each divergence axis, measured from the
+ * tokens and the contract rather than declared. Two directions whose seats
+ * demanded opposite strategies but whose documents carry the same grid, the
+ * same families, the same imagery policy and the same motion are not divergent,
+ * and DIV-030 compares these signals to say so. The colour axis is measured by
+ * the palette fingerprint instead, so it is not signalled here.
+ */
+export function measuredAxisSignals(identity: IdentitySpec): Record<MeasuredAxis, string> {
+  const { values } = resolveTokens(identity.tokens);
+  const group = (prefix: string): string => Object.entries(values)
+    .filter(([path]) => path.startsWith(`${prefix}.`))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([path, value]) => `${path}=${String(value)}`)
+    .join(' ');
+  const signals: Record<MeasuredAxis, string> = {
+    composition: `columns=${identity.gridGrammar.columns}`,
+    typography: group('type'),
+    materiality: `density=${identity.direction.density} ${group('radius')}`,
+    imagery: `sources=${[...identity.imagery.allowedSources].sort().join(',')} treatment=${identity.imagery.treatment} focal=${identity.imagery.focalPolicy}`,
+    motion: group('motion'),
+  };
+  return Object.fromEntries(measuredAxes.map((axis) => [axis, signals[axis] || `${axis}=unstated`])) as Record<MeasuredAxis, string>;
+}

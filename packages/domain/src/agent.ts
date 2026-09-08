@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { hashJson } from './tokens.js';
 
 export const stageSchema = z.enum(['identity', 'prototype', 'finalization']);
-export const taskRoleSchema = z.enum(['director', 'composer', 'compiler']);
+export const taskRoleSchema = z.enum(['director', 'composer', 'compiler', 'curator', 'critic', 'refiner', 'art-director']);
 export const taskStateSchema = z.enum(['queued', 'running', 'cancel_requested', 'cancelled', 'succeeded', 'failed', 'needs_review']);
 export const taskLaneSchema = z.enum(['claude', 'raster']);
 
@@ -20,6 +20,13 @@ export const patchSchema = z.object({
 
 export const agentResultSchema = z.object({
   taskId: z.string(), status: z.enum(['succeeded', 'failed', 'needs_review']), summary: z.string(), proposal: patchSchema.optional(), errorCode: z.string().optional(),
+  /**
+   * A typed, role-specific document for read-only workers that never patch, such as the
+   * brief curator, the identity critics and the image art director. The envelope stays open
+   * here; the stage that asked for it validates the payload against its own closed schema
+   * on arrival and treats a violation as one correction, then human review.
+   */
+  artifact: z.record(z.unknown()).optional(),
 });
 
 export function idempotencyKey(input: Pick<AgentTask, 'stage' | 'role' | 'baseVersionId' | 'inputDigest' | 'promptVersion' | 'modelAlias'>): string {
