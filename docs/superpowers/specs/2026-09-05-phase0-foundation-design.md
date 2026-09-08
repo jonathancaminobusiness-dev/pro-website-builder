@@ -1,5 +1,7 @@
 # Phase 0 Foundation Design
 
+> **Scope.** This design describes Fase 0 as delivered. Later phases extend it — Fase 2 added `packages/qa-deterministic` and `packages/stage-prototype`, the critics and the prototype linter rules — so `README.md` owns the current package inventory and the delivered contracts.
+
 ## Context and goal
 
 pro-website-builder is a local, personal tool that compiles a visual identity into a reviewable prototype and a static production site. Phase 0 establishes the contracts that make later visual exploration safe: the identity is an approved input, the document is versioned, agents propose typed changes, one deterministic renderer produces every surface, and the orchestrator pauses at three captain-only gates.
