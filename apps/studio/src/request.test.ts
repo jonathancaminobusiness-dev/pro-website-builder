@@ -1,7 +1,7 @@
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { RequestError, requestJson } from './request.js';
+import { isMissing, RequestError, requestJson } from './request.js';
 
 let running: Server | undefined;
 afterEach(async () => {
@@ -48,6 +48,23 @@ describe('api request', () => {
     const cause = await requestJson(url).catch((error: unknown) => error);
     expect(cause).toBeInstanceOf(RequestError);
     expect((cause as RequestError).status).toBeUndefined();
+  });
+
+  it('calls a run missing only when the server said so', async () => {
+    const askOnce = async (answer: (response: ServerResponse) => void, closeFirst = false): Promise<unknown> => {
+      const url = await serve(answer);
+      const server = running!;
+      if (closeFirst) { running = undefined; await new Promise<void>((resolve) => { server.close(() => resolve()); }); }
+      const cause = await requestJson(url).catch((error: unknown) => error);
+      if (!closeFirst) { running = undefined; await new Promise<void>((resolve) => { server.close(() => resolve()); }); }
+      return cause;
+    };
+
+    expect(isMissing(await askOnce((response) => { response.writeHead(404, { 'content-type': 'application/json' }).end('{"error":"Identity run not found."}'); }))).toBe(true);
+    // A refusal the server could not explain, and no answer at all, both leave
+    // the question open: the run may still be there, so its id is worth keeping.
+    expect(isMissing(await askOnce((response) => { response.writeHead(500, { 'content-type': 'application/json' }).end('{"error":"boom"}'); }))).toBe(false);
+    expect(isMissing(await askOnce((response) => response.end(), true))).toBe(false);
   });
 
   it('still reports a refusal whose body is not the JSON the api usually sends', async () => {

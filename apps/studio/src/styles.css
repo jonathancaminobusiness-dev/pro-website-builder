@@ -103,6 +103,7 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .token-form { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; font-size: .8rem; }
 .token-form input { border: 1px solid #c7bcb0; border-radius: 10px; padding: 8px 10px; font: inherit; }
 .open-run { justify-content: center; }
+.run-id { margin-top: 6px; color: #879095; font-size: .72rem; overflow-wrap: anywhere; }
 .gate-panel .preview-frame { margin-top: 20px; }
 @media (max-width: 780px) { .topbar { flex-wrap: wrap; } .view-tabs { order: 3; width: 100%; } }
 @media (max-width: 520px) { .axis-list div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }

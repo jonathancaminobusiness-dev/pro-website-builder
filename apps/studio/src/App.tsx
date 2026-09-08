@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Gate2 from './Gate2.js';
 import Gate3Panel from './Gate3Panel.js';
 import IdentityGate, { type IdentityGateSnapshot } from './gate1/IdentityGate.js';
-import { RequestError, requestJson } from './request.js';
+import { failureMessage, isMissing, requestJson } from './request.js';
 
 interface Snapshot {
   runId: string;
@@ -45,11 +45,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const GATE2_ROUTE = '#/gate-2';
 
-/** A run the server answers 404 for is gone; anything else is worth trying again. */
-function isGone(cause: unknown): boolean {
-  return cause instanceof RequestError && cause.status === 404;
-}
-
 /** How many readings in a row may fail before the screen stops following the raster lane. */
 const POLL_MAX_FAILURES = 10;
 
@@ -62,6 +57,8 @@ export default function App() {
   const [view, setView] = useState<ViewId>('pipeline');
   const [identity, setIdentity] = useState<IdentityGateSnapshot | null>(null);
   const [identityError, setIdentityError] = useState('');
+  /** The remembered run the screen is holding because the last read of it did not answer. */
+  const [unreachableRunId, setUnreachableRunId] = useState('');
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
 
   useEffect(() => {
@@ -79,22 +76,30 @@ export default function App() {
 
   const identityAct = useCallback(async (action: () => Promise<IdentityGateSnapshot>): Promise<void> => {
     setBusy(true); setIdentityError('');
-    try { const next = await action(); rememberIdentityRun(next.runId); setIdentity(next); } catch (cause) { setIdentityError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); } finally { setBusy(false); }
+    try { const next = await action(); rememberIdentityRun(next.runId); setUnreachableRunId(''); setIdentity(next); } catch (cause) { setIdentityError(failureMessage(cause)); } finally { setBusy(false); }
   }, []);
   const identityGet = useCallback((runId: string) => request<IdentityGateSnapshot>(`/api/identity/runs/${encodeURIComponent(runId)}`), []);
   const openIdentityRun = useCallback((runId: string) => { void identityAct(() => identityGet(runId)); }, [identityAct, identityGet]);
 
-  useEffect(() => {
+  // Only a run the server no longer knows is forgotten. A server that is not
+  // listening yet says nothing about whether the run exists, and the id is the
+  // captain's one pointer back to a decided gate, so it is held and shown
+  // instead of being replaced by the screen that offers to start a new one.
+  const readRememberedRun = useCallback((): void => {
     const remembered = rememberedIdentityRun();
-    if (!remembered) return;
-    // Only a run the server no longer knows is forgotten. A server that is not
-    // listening yet says nothing about whether the run exists, and the id is
-    // the captain's one pointer back to a decided gate.
-    void identityGet(remembered).then(setIdentity, (cause: unknown) => {
-      if (isGone(cause)) { forgetIdentityRun(); return; }
-      setIdentityError(cause instanceof Error ? cause.message : 'Erro desconhecido.');
-    });
+    if (!remembered) { setUnreachableRunId(''); return; }
+    setBusy(true); setIdentityError('');
+    void identityGet(remembered).then(
+      (next) => { setUnreachableRunId(''); setIdentity(next); },
+      (cause: unknown) => {
+        if (isMissing(cause)) { forgetIdentityRun(); setUnreachableRunId(''); return; }
+        setUnreachableRunId(remembered);
+        setIdentityError(failureMessage(cause));
+      },
+    ).finally(() => setBusy(false));
   }, [identityGet]);
+
+  useEffect(() => { readRememberedRun(); }, [readRememberedRun]);
 
   // Imagery is shot on the raster lane after the gate closes, so the decided
   // screen follows it until every asset has settled. A reading that failed is
@@ -110,7 +115,7 @@ export default function App() {
       void identityGet(runId).then(
         (next) => { setIdentity(next); setPollFailures(0); },
         (cause: unknown) => {
-          if (isGone(cause)) {
+          if (isMissing(cause)) {
             forgetIdentityRun();
             setPollFailures(POLL_MAX_FAILURES);
             setIdentityError('Esta execução não está mais no servidor.');
@@ -137,7 +142,7 @@ export default function App() {
 
   return <div className="studio-shell">
     <header className="topbar"><div><span className="eyebrow">FIRSTMATE / STUDIO LOCAL</span><h1>Compilador de identidade</h1></div><nav className="view-tabs" aria-label="Telas do estúdio">{views.map((item) => <button key={item.id} className={view === item.id ? 'selected' : ''} aria-current={view === item.id ? 'page' : undefined} onClick={() => setView(item.id)}>{item.label}</button>)}</nav><span className="local-pill">uso próprio · pt-BR</span><a className="gate2-link" href={GATE2_ROUTE}>Gate 2 · revisão do protótipo →</a></header>
-    {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} onCreate={createIdentityRun} onOpen={openIdentityRun} onStart={startIdentityRun} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
+    {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} unreachableRunId={unreachableRunId} onCreate={createIdentityRun} onOpen={openIdentityRun} onRetry={readRememberedRun} onStart={startIdentityRun} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
       <section className="intro-panel"><p className="eyebrow">A identidade é o contrato</p><h2>Da direção visual ao site final, uma fonte de verdade.</h2><p>O editor mostra propostas tipadas; o renderer determinístico cuida do resultado. Os três gates desta versão são do capitão.</p><button className="primary" onClick={create} disabled={busy}>{busy ? 'Preparando…' : snapshot ? 'Reiniciar briefing' : 'Carregar briefing fixo'}</button></section>
       <section className="stage-panel"><div className="section-heading"><div><p className="eyebrow">Pipeline</p><h2>Três etapas, três decisões</h2></div>{snapshot && <span className={`status status-${snapshot.status}`}>{snapshot.status === 'needs_review' ? 'aguarda gate' : snapshot.status === 'rejected' ? 'rejeitado · reexecutar' : snapshot.status}</span>}</div><div className="stage-list">{stages.map((stage, index) => { const approval = snapshot?.approvals.find((item) => item.stage === stage.id); const active = snapshot?.currentStage === stage.id; return <div className={`stage-row ${active ? 'active' : ''}`} key={stage.id}><span className="stage-number">0{index + 1}</span><div><strong>{stage.label}</strong><small>{approval ? approval.decision === 'approved' ? 'Aprovado pelo capitão' : 'Rejeitado para revisão' : active ? 'Proposta pronta para revisão' : 'Bloqueada pelo gate anterior'}</small></div><span className="stage-dot" />{active && <span className="active-mark">●</span>}</div>; })}</div><div className="actions">{snapshot?.status === 'needs_review' ? <><button className="secondary" onClick={() => review('reject')} disabled={busy}>Rejeitar proposta</button>{snapshot.currentStage === 'finalization' ? <span className="qa-chip">Aprovar é publicar o bundle no Gate 3 abaixo</span> : <button className="primary" onClick={() => review('approve')} disabled={busy}>Aprovar gate</button>}</> : <button className="primary" onClick={runStage} disabled={!snapshot || busy || snapshot.status === 'succeeded'}>{busy ? 'Executando…' : snapshot?.status === 'succeeded' ? 'Release publicado' : snapshot?.status === 'rejected' ? 'Refazer etapa' : 'Executar próxima etapa'}</button>}</div></section>
       <section className="review-panel"><div className="section-heading"><div><p className="eyebrow">Revisão visual</p><h2>Preview isolado</h2></div><span className="qa-chip">linter: {snapshot?.lintErrorCount ?? 0} erros</span></div>{snapshot ? <><div className="route-tabs">{snapshot.rendered.routes.map((item) => <button key={item.route} className={route === item.route ? 'selected' : ''} onClick={() => setRoute(item.route)}>{item.route}</button>)}</div><iframe title="Preview do site" src={previewUrl} sandbox="" className="preview-frame" /></> : <div className="empty-state"><span>△</span><p>Carregue o briefing para abrir o primeiro contrato de identidade.</p></div>}</section>

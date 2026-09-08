@@ -56,6 +56,9 @@ export interface IdentityGateProps {
   error: string;
   onCreate: () => void;
   onOpen: (runId: string) => void;
+  /** A remembered run the last read could not reach; the screen holds it rather than offering a fresh start. */
+  unreachableRunId: string;
+  onRetry: () => void;
   onStart: () => void;
   onApprove: (directionId: string, rationale: string, overrideRationale?: string) => void;
   onReject: (directionId: string, rationale: string) => void;
@@ -68,8 +71,15 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [rationale, setRationale] = useState('');
   const [override, setOverride] = useState('');
   const [openRunId, setOpenRunId] = useState('');
+  const [confirmingCreate, setConfirmingCreate] = useState(false);
   const [tokenPath, setTokenPath] = useState('color.accent');
   const [tokenValue, setTokenValue] = useState('#ff7a00');
+
+  const openRunForm = (label: string): ReactElement => <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
+    <label htmlFor="gate1-open-run">{label}</label>
+    <input id="gate1-open-run" value={openRunId} placeholder="identity-…" onChange={(event) => setOpenRunId(event.target.value)} />
+    <button className="secondary" type="submit" disabled={props.busy || openRunId.trim() === ''}>Abrir</button>
+  </form>;
 
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),
@@ -97,19 +107,30 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       <div>
         <p className="eyebrow">Gate 1 · identidade</p>
         <h2 id="gate1-title">Três direções do mesmo briefing</h2>
+        {snapshot && <p className="run-id">Execução <code>{snapshot.runId}</code></p>}
       </div>
       <span className={`status status-${snapshot?.status ?? 'queued'}`}>{statusLabel(snapshot?.status)}</span>
     </div>
 
-    {!snapshot && <div className="empty-state">
+    {!snapshot && !props.unreachableRunId && <div className="empty-state">
       <span>◎</span>
       <p>Nenhuma execução de identidade aberta. Criar a execução não gasta nenhuma chamada de modelo.</p>
       <button className="primary" onClick={props.onCreate} disabled={props.busy}>Criar execução de identidade</button>
-      <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
-        <label htmlFor="gate1-open-run">Abrir execução existente</label>
-        <input id="gate1-open-run" value={openRunId} placeholder="identity-…" onChange={(event) => setOpenRunId(event.target.value)} />
-        <button className="secondary" type="submit" disabled={props.busy || openRunId.trim() === ''}>Abrir</button>
-      </form>
+      {openRunForm('Abrir execução existente')}
+    </div>}
+
+    {!snapshot && props.unreachableRunId && <div className="empty-state" role="status">
+      <span>◎</span>
+      <p>A execução <code>{props.unreachableRunId}</code> não pôde ser lida agora. Ela continua registrada no servidor; a decisão e as versões dela não se perderam.</p>
+      <button className="primary" onClick={props.onRetry} disabled={props.busy}>{props.busy ? 'Lendo…' : 'Tentar novamente'}</button>
+      {openRunForm('Abrir outra execução')}
+      {confirmingCreate
+        ? <div className="token-form open-run">
+            <span>Uma execução nova substitui <code>{props.unreachableRunId}</code> como a que este navegador lembra.</span>
+            <button className="secondary" onClick={() => setConfirmingCreate(false)} disabled={props.busy}>Cancelar</button>
+            <button className="primary" onClick={() => { setConfirmingCreate(false); props.onCreate(); }} disabled={props.busy}>Criar mesmo assim</button>
+          </div>
+        : <button className="secondary" onClick={() => setConfirmingCreate(true)} disabled={props.busy}>Criar execução nova</button>}
     </div>}
 
     {snapshot && <>

@@ -25,3 +25,16 @@ export async function requestJson<T>(url: string, init?: RequestInit): Promise<T
   }
   return await response.json() as T;
 }
+
+/**
+ * A 404 is the server saying the run is not there. Every other failure — a
+ * refusal it could not explain, or no answer at all — says nothing about
+ * whether the run exists, so the pointer to it is worth keeping.
+ */
+export function isMissing(cause: unknown): boolean {
+  return cause instanceof RequestError && cause.status === 404;
+}
+
+export function failureMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : 'Erro desconhecido.';
+}
