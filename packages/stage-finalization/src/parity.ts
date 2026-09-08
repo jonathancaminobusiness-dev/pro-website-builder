@@ -65,17 +65,14 @@ function nodeDeclarations(stylesheet: string, pageId: string | undefined): Map<s
   return styles;
 }
 
-/** The preview view: the document the captain reviewed, styled by the renderer's own sheet. */
-function previewView(html: string, stylesheet: string, pageId: string): DocumentView {
-  return { ...documentSkeleton(html), styles: nodeDeclarations(stylesheet, pageId) };
-}
-
 /**
- * The release view: the same styles, read back out of the compiled stylesheet by
- * a parser that shares no code with the compiler that wrote it, so the check
- * cannot pass by agreeing with itself.
+ * One document and its stylesheet, read into the shape the comparison speaks.
+ *
+ * The preview and the release are read by the very same parser, which shares no
+ * code with either writer, so a difference between the two sides is a real
+ * difference and the check cannot pass by agreeing with itself.
  */
-function releaseView(html: string, stylesheet: string, pageId: string): DocumentView {
+function documentView(html: string, stylesheet: string, pageId: string): DocumentView {
   return { ...documentSkeleton(html), styles: nodeDeclarations(stylesheet, pageId) };
 }
 
@@ -151,5 +148,5 @@ function routeDifferences(route: RenderedDocument['routes'][number], compiled: C
   if (!compiledRoute || !file || typeof file.contents !== 'string') return [`A rota ${route.route} existe no preview e não no release.`];
   const pageId = pageIdByRoute.get(route.route);
   if (pageId === undefined) return [`A rota ${route.route} não tem página correspondente no documento.`];
-  return compare(route.route, previewView(route.html, previewCss, pageId), releaseView(file.contents, css, pageId));
+  return compare(route.route, documentView(route.html, previewCss, pageId), documentView(file.contents, css, pageId));
 }

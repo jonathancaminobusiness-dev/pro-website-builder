@@ -1,4 +1,4 @@
-import type { ReleaseVeto } from '@pwb/domain';
+import { semanticSchema, type ReleaseVeto } from '@pwb/domain';
 import { scanTags } from './html-scan.js';
 
 export interface AuditableFile { path: string; contents: string | Uint8Array }
@@ -25,8 +25,20 @@ const SECRET_PATTERNS: Array<[string, RegExp]> = [
   ['oauth token assignment', /["']?oauth[_-]?token["']?\s*[:=]\s*["'][^"']{8,}["']/i],
 ];
 
-/** Every element the deterministic renderer and this compiler are allowed to emit. */
-const ALLOWED_TAGS = new Set(['html', 'head', 'meta', 'title', 'link', 'style', 'body', 'main', 'div', 'section', 'figure', 'figcaption', 'p', 'h1', 'h2', 'h3']);
+/** The element a semantic renders as when it is not spelled like its own tag. */
+const SEMANTIC_ELEMENTS: Record<string, string | undefined> = { link: 'a' };
+/** A media node renders as a figure wrapping the ready asset's image and its caption. */
+const MEDIA_ELEMENTS = ['img', 'figcaption'];
+/** The document chrome the renderer writes around a page, plus the head this compiler rewrites. */
+const DOCUMENT_ELEMENTS = ['html', 'head', 'meta', 'title', 'link', 'style', 'body', 'main'];
+
+/**
+ * Every element the deterministic renderer and this compiler are allowed to
+ * emit. Derived from the closed semantic vocabulary rather than restated, so a
+ * semantic added to the document schema cannot silently make a valid release
+ * `UNSANITIZED_HTML`.
+ */
+const ALLOWED_TAGS = new Set([...DOCUMENT_ELEMENTS, ...MEDIA_ELEMENTS, ...semanticSchema.options.map((semantic) => SEMANTIC_ELEMENTS[semantic] ?? semantic)]);
 const DANGEROUS_SCHEMES = /^\s*(?:javascript|vbscript|data:text\/html)/i;
 const URL_ATTRIBUTES = new Set(['href', 'src', 'action', 'formaction', 'poster', 'srcset']);
 
@@ -97,7 +109,9 @@ export function auditHtmlDocument(path: string, html: string, context: HtmlAudit
         if (absolute === undefined || absolute === '') continue;
         const target = context.basePath !== '' && absolute.startsWith(`${context.basePath}/`) ? absolute.slice(context.basePath.length) : absolute;
         const stripped = target.replace(/^\//, '').replace(/\/$/, '');
-        if (![target.replace(/^\//, ''), `${stripped}/index.html`].some((candidate) => context.paths.has(candidate))) {
+        // The site root strips to nothing, and its document is `index.html`, not `/index.html`.
+        const candidates = stripped === '' ? ['index.html'] : [stripped, `${stripped}/index.html`];
+        if (!candidates.some((candidate) => context.paths.has(candidate))) {
           vetoes.push({ id: 'BROKEN_PRIMARY_LINK', detector: 'compiler', where: path, detail: `<${tag.name} ${attribute.name}> points at ${url}, which the bundle does not contain.` });
         }
       }

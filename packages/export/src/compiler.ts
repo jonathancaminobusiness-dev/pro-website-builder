@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cssCustomPropertyName, hashJson, resolveTokens, type DesignIR, type ReleaseVeto } from '@pwb/domain';
+import { hashJson, resolveTokens, type DesignIR, type ReleaseVeto } from '@pwb/domain';
 import type { RenderedDocument } from '@pwb/renderer';
 import { auditHtmlDocument, auditRouteCoverage, scanBundleSecrets } from './audit.js';
 import { isFallbackFailure, needsColorFallback, srgbFallbackValue, supportsConditionFor } from './css-color.js';
@@ -53,34 +53,77 @@ function routeFilePath(route: string): string {
   return [...segments, 'index.html'].join('/');
 }
 
+const ROOT_SELECTOR = ':root {';
+const CUSTOM_PROPERTY = /^(\s*)(--[A-Za-z0-9_-]+):\s*(.+);\s*$/;
+
+interface RootRule { start: number; end: number; indent: string; body: string }
+
+/** Every `:root` rule of the rendered sheet: the token block and the dark scheme's override block. */
+function rootRules(css: string): RootRule[] {
+  const rules: RootRule[] = [];
+  for (let index = css.indexOf(ROOT_SELECTOR); index !== -1; index = css.indexOf(ROOT_SELECTOR, index + 1)) {
+    const open = index + ROOT_SELECTOR.length - 1;
+    const close = css.indexOf('}', open);
+    if (close === -1) continue;
+    const lineStart = css.lastIndexOf('\n', index) + 1;
+    const indent = css.slice(lineStart, index);
+    rules.push({ start: index, end: close + 1, indent: /^\s*$/.test(indent) ? indent : '', body: css.slice(open + 1, close) });
+  }
+  return rules;
+}
+
 /**
- * Rewrites the token layer so browsers without wide-gamut colour still resolve
- * every custom property, and re-declares the authored value in an unlayered
- * `@supports` block for browsers that do.
+ * One `:root` rule with an sRGB value in place of every modern colour, followed
+ * by an `@supports` sibling that re-declares the authored values.
+ *
+ * The companion has to sit where the declaration it replaces sits: an unlayered
+ * block would outrank every layered one, so re-declaring the base tokens
+ * outside `@layer tokens` would silently drop the dark scheme in exactly the
+ * browsers that can render the authored colour.
+ */
+function rewriteRootRule(rule: RootRule): string {
+  const modern = new Map<string, string[]>();
+  const body = rule.body.split('\n').map((line) => {
+    const declaration = CUSTOM_PROPERTY.exec(line);
+    if (!declaration) return line;
+    const lead = declaration[1]!;
+    const property = declaration[2]!;
+    const value = declaration[3]!;
+    if (!needsColorFallback(value)) return line;
+    const fallback = srgbFallbackValue(value);
+    if (fallback === undefined || isFallbackFailure(fallback)) return line;
+    const condition = supportsConditionFor(value);
+    modern.set(condition, [...(modern.get(condition) ?? []), `${property}: ${value};`]);
+    return `${lead}${property}: ${fallback.text};`;
+  }).join('\n');
+  const blocks = [...modern.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([condition, declarations]) => `\n${rule.indent}@supports (${condition}) {\n${rule.indent}  :root {\n${declarations.map((line) => `${rule.indent}    ${line}`).join('\n')}\n${rule.indent}  }\n${rule.indent}}`);
+  return `${ROOT_SELECTOR}${body}}${blocks.join('')}`;
+}
+
+/**
+ * Rewrites every `:root` rule so browsers without wide-gamut colour still
+ * resolve each custom property, and re-declares the authored value in an
+ * `@supports` block beside the rule it came from. A colour the compiler cannot
+ * express in sRGB is a veto, reported against the token that declares it.
  */
 function applyColorFallbacks(css: string, ir: DesignIR): { css: string; vetoes: ReleaseVeto[] } {
   const { values } = resolveTokens(ir.identity.tokens);
   const vetoes: ReleaseVeto[] = [];
-  const modern = new Map<string, string[]>();
-  let rewritten = css;
   for (const path of Object.keys(values).sort()) {
     const value = values[path];
     if (typeof value !== 'string' || !needsColorFallback(value)) continue;
-    const property = cssCustomPropertyName(path);
     const fallback = srgbFallbackValue(value);
-    if (fallback === undefined) continue;
-    if (isFallbackFailure(fallback)) {
-      vetoes.push({ id: 'BUILD_FAILED', detector: 'compiler', where: `/identity/tokens/${path.replaceAll('.', '/')}`, detail: fallback.reason });
-      continue;
-    }
-    rewritten = replaceOnce(rewritten, `${property}: ${value};`, `${property}: ${fallback.text};`);
-    const condition = supportsConditionFor(value);
-    modern.set(condition, [...(modern.get(condition) ?? []), `${property}: ${value};`]);
+    if (fallback !== undefined && isFallbackFailure(fallback)) vetoes.push({ id: 'BUILD_FAILED', detector: 'compiler', where: `/identity/tokens/${path.replaceAll('.', '/')}`, detail: fallback.reason });
   }
-  const blocks = [...modern.entries()]
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([condition, declarations]) => `@supports (${condition}) {\n  :root {\n${declarations.map((line) => `    ${line}`).join('\n')}\n  }\n}`);
-  return { css: blocks.length > 0 ? `${rewritten}\n\n${blocks.join('\n\n')}` : rewritten, vetoes };
+  let rewritten = '';
+  let cursor = 0;
+  for (const rule of rootRules(css)) {
+    rewritten += css.slice(cursor, rule.start) + rewriteRootRule(rule);
+    cursor = rule.end;
+  }
+  return { css: rewritten + css.slice(cursor), vetoes };
 }
 
 const STYLESHEET_PLACEHOLDER = '__PWB_STYLESHEET_HREF__';

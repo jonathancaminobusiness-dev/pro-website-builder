@@ -11,13 +11,11 @@ import { createPreviewServer } from './preview.js';
 import { createModelProvider } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
 
-export async function startServer(options: { dbPath?: string; exportRoot?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
+export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
   const root = process.cwd();
   const dbPath = options.dbPath ?? process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'pro-website-builder.sqlite');
-  const exportRoot = options.exportRoot ?? process.env.PWB_EXPORT_ROOT ?? join(root, 'exports');
   const renderCacheDir = options.renderCacheDir ?? process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
   await mkdir(join(dbPath, '..'), { recursive: true });
-  await mkdir(exportRoot, { recursive: true });
   await mkdir(renderCacheDir, { recursive: true });
   const provider = createModelProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
   const database = openDatabase(dbPath);

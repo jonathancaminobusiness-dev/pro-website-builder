@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createFixtureIR, type DesignIR } from '@pwb/domain';
+import { createFixtureIR, designIRSchema, type DesignIR } from '@pwb/domain';
 import { renderDesign } from '@pwb/renderer';
 import { appendReleasePublication, compileRelease, readBundleHashes, readReleasePublications, ReleaseVetoError, writeReleaseBundle, type CompiledSite } from './index.js';
 
@@ -12,6 +12,21 @@ function compileFixture(mutate?: (ir: DesignIR) => void): CompiledSite {
   const ir = createFixtureIR();
   mutate?.(ir);
   return compileRelease(renderDesign(ir), ir, OPTIONS);
+}
+
+const DATA_IMAGE = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=';
+
+/** The fixture home page extended with the three semantics its own document never exercises. */
+function withInteractiveHome(ir: DesignIR): void {
+  ir.assets.items[0]!.uri = DATA_IMAGE;
+  const home = ir.pages.routes[0]!;
+  home.nodes.find((node) => node.id === 'home-root')!.slots.children!.push('home-root-link', 'home-proof-link', 'home-cta', 'home-mark');
+  home.nodes.push(
+    { id: 'home-root-link', kind: 'component', semantic: 'link', props: { text: 'Início', href: '/' }, slots: {}, responsive: [] },
+    { id: 'home-proof-link', kind: 'component', semantic: 'link', props: { text: 'Ver a prova', href: '/proof' }, slots: {}, responsive: [] },
+    { id: 'home-cta', kind: 'component', semantic: 'button', props: { text: 'Falar com a oficina' }, slots: {}, responsive: [] },
+    { id: 'home-mark', kind: 'media', semantic: 'figure', props: { text: 'Marca da oficina' }, slots: {}, assetId: 'fixture-mark', responsive: [] },
+  );
 }
 
 function fileText(compiled: CompiledSite, path: string): string {
@@ -102,6 +117,27 @@ describe('deterministic release compiler', () => {
     expect(stylesheet).not.toContain('url("/assets');
   });
 
+  it('compiles a document that carries a link, a button and a ready media asset', () => {
+    const ir = createFixtureIR();
+    withInteractiveHome(ir);
+    expect(designIRSchema.safeParse(ir).success).toBe(true);
+    const compiled = compileRelease(renderDesign(ir), ir, OPTIONS);
+    expect(compiled.vetoes).toEqual([]);
+    const home = fileText(compiled, 'index.html');
+    expect(home).toContain('<a href="/proof"');
+    expect(home).toContain('<button type="button"');
+    expect(home).toContain(`<img src="${DATA_IMAGE}"`);
+  });
+
+  it('resolves a link to the site root as well as to a nested route, base path or not', () => {
+    const ir = createFixtureIR();
+    withInteractiveHome(ir);
+    for (const siteUrl of ['https://oficina.example', 'https://oficina.example/estudio']) {
+      const compiled = compileRelease(renderDesign(ir), ir, { ...OPTIONS, siteUrl });
+      expect(compiled.vetoes.filter((veto) => veto.id === 'BROKEN_PRIMARY_LINK')).toEqual([]);
+    }
+  });
+
   it('refuses a site URL that is not an absolute origin', () => {
     const ir = createFixtureIR();
     expect(() => compileRelease(renderDesign(ir), ir, { ...OPTIONS, siteUrl: '/relative' })).toThrow(/absolute http\(s\) site URL/i);
@@ -136,14 +172,22 @@ describe('release vetoes', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it('vetoes an executable URL and an element the renderer never produces', () => {
+  it('vetoes an executable URL without objecting to the anchor that carries it', () => {
     const ir = createFixtureIR();
     const rendered = renderDesign(ir);
     rendered.routes[0]!.html = rendered.routes[0]!.html.replace('</body>', '<a href="javascript:alert(1)">x</a></body>');
     const compiled = compileRelease(rendered, ir, OPTIONS);
     const ids = compiled.vetoes.map((veto) => veto.id);
     expect(ids).toContain('XSS_OR_JAVASCRIPT_URL');
-    expect(ids).toContain('UNSANITIZED_HTML');
+    expect(ids).not.toContain('UNSANITIZED_HTML');
+  });
+
+  it('vetoes an element the deterministic renderer never produces', () => {
+    const ir = createFixtureIR();
+    const rendered = renderDesign(ir);
+    rendered.routes[0]!.html = rendered.routes[0]!.html.replace('</body>', '<script>alert(1)</script></body>');
+    const compiled = compileRelease(rendered, ir, OPTIONS);
+    expect(compiled.vetoes.find((veto) => veto.id === 'UNSANITIZED_HTML')?.detail).toContain('<script>');
   });
 
   it('finds a secret whose quotes the renderer escaped', () => {
@@ -181,6 +225,109 @@ describe('release vetoes', () => {
     const compiled = compileFixture((ir) => { ir.identity.tokens.type = { ...(ir.identity.tokens.type as object), body: { $value: '"Only Me"', $type: 'fontFamily' } } as never; });
     const veto = compiled.vetoes.find((candidate) => candidate.id === 'BUILD_FAILED');
     expect(veto?.detail).toMatch(/generic family/);
+  });
+});
+
+interface CascadeEnvironment { dark: boolean; modern: boolean }
+interface CascadeDeclaration { layer: string | undefined; property: string; value: string }
+
+/** The blocks at one nesting level of a stylesheet, with `@layer a, b;` statements skipped. */
+function cssBlocks(css: string): Array<{ prelude: string; body: string }> {
+  const blocks: Array<{ prelude: string; body: string }> = [];
+  let index = 0;
+  while (index < css.length) {
+    const open = css.indexOf('{', index);
+    if (open === -1) break;
+    const statement = css.indexOf(';', index);
+    if (statement !== -1 && statement < open) { index = statement + 1; continue; }
+    let depth = 0;
+    let close = -1;
+    for (let cursor = open; cursor < css.length; cursor += 1) {
+      if (css[cursor] === '{') depth += 1;
+      else if (css[cursor] === '}') { depth -= 1; if (depth === 0) { close = cursor; break; } }
+    }
+    if (close === -1) break;
+    blocks.push({ prelude: css.slice(index, open).trim(), body: css.slice(open + 1, close) });
+    index = close + 1;
+  }
+  return blocks;
+}
+
+function collectRootDeclarations(css: string, layer: string | undefined, environment: CascadeEnvironment, into: CascadeDeclaration[]): void {
+  for (const block of cssBlocks(css)) {
+    if (block.prelude.startsWith('@layer')) { collectRootDeclarations(block.body, block.prelude.slice('@layer'.length).trim(), environment, into); continue; }
+    if (block.prelude.startsWith('@media')) {
+      if (/prefers-color-scheme:\s*dark/.test(block.prelude) && !environment.dark) continue;
+      collectRootDeclarations(block.body, layer, environment, into);
+      continue;
+    }
+    if (block.prelude.startsWith('@supports')) {
+      if (environment.modern) collectRootDeclarations(block.body, layer, environment, into);
+      continue;
+    }
+    if (block.prelude !== ':root') continue;
+    for (const line of block.body.split('\n')) {
+      const declaration = /^\s*(--[A-Za-z0-9_-]+):\s*(.+);\s*$/.exec(line);
+      if (declaration) into.push({ layer, property: declaration[1]!, value: declaration[2]! });
+    }
+  }
+}
+
+/**
+ * The value a browser resolves for one `:root` custom property, read out of the
+ * compiled stylesheet — the bundle's own public artifact — the way the cascade
+ * reads it: an unlayered author declaration outranks every layered one, a later
+ * layer outranks an earlier one, and source order decides inside a layer.
+ */
+function resolveCustomProperty(stylesheet: string, property: string, environment: CascadeEnvironment): string | undefined {
+  const declared = /@layer ([^{;]+);/.exec(stylesheet);
+  const order = declared ? declared[1]!.split(',').map((name) => name.trim()) : [];
+  const declarations: CascadeDeclaration[] = [];
+  collectRootDeclarations(stylesheet, undefined, environment, declarations);
+  const rank = (entry: CascadeDeclaration): number => (entry.layer === undefined ? Number.POSITIVE_INFINITY : order.indexOf(entry.layer));
+  let winner: CascadeDeclaration | undefined;
+  for (const entry of declarations) {
+    if (entry.property !== property) continue;
+    if (winner === undefined || rank(entry) >= rank(winner)) winner = entry;
+  }
+  return winner?.value;
+}
+
+const DARK_INK = 'oklch(25% 0.03 220)';
+const DARK_PAPER = 'oklch(96% 0.02 80)';
+
+/** An identity whose colours need an sRGB companion and which declares a dark scheme that swaps two roles. */
+function withDarkScheme(): CompiledSite {
+  return compileFixture((ir) => {
+    ir.identity.tokens.color = {
+      ink: { $value: DARK_INK, $type: 'color' },
+      paper: { $value: DARK_PAPER, $type: 'color' },
+      accent: { $value: 'oklch(65% 0.15 40)', $type: 'color' },
+      muted: { $value: '#607078', $type: 'color' },
+    } as never;
+    ir.identity.schemes = { dark: { 'color.paper': 'color.ink', 'color.ink': 'color.paper' } };
+  });
+}
+
+describe('the sRGB fallback does not change which declaration wins', () => {
+  it('still gives a browser that supports the modern syntax the identity dark scheme', () => {
+    const compiled = withDarkScheme();
+    expect(compiled.vetoes).toEqual([]);
+    const stylesheet = fileText(compiled, compiled.stylesheetPath);
+    expect(resolveCustomProperty(stylesheet, '--color-paper', { dark: true, modern: true })).toBe(DARK_INK);
+    expect(resolveCustomProperty(stylesheet, '--color-ink', { dark: true, modern: true })).toBe(DARK_PAPER);
+    expect(resolveCustomProperty(stylesheet, '--color-paper', { dark: false, modern: true })).toBe(DARK_PAPER);
+  });
+
+  it('gives a browser without the modern syntax a readable sRGB value on either scheme', () => {
+    const compiled = withDarkScheme();
+    const stylesheet = fileText(compiled, compiled.stylesheetPath);
+    const light = resolveCustomProperty(stylesheet, '--color-paper', { dark: false, modern: false });
+    const dark = resolveCustomProperty(stylesheet, '--color-paper', { dark: true, modern: false });
+    expect(light).toMatch(/^#[0-9a-f]{6}$/);
+    expect(dark).toMatch(/^#[0-9a-f]{6}$/);
+    expect(dark).toBe(resolveCustomProperty(stylesheet, '--color-ink', { dark: false, modern: false }));
+    expect(dark).not.toBe(light);
   });
 });
 
