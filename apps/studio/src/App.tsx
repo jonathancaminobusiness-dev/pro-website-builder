@@ -60,7 +60,12 @@ export default function App() {
   /** The remembered run the screen is holding because the last read of it did not answer. */
   const [unreachableRunId, setUnreachableRunId] = useState('');
   const [pollFailures, setPollFailures] = useState({ runId: '', count: 0 });
-  /** The stage is spending model turns right now: the start request has not answered yet. */
+  /**
+   * The tab that issued the start knows the stage is working before the server
+   * can say so: its own snapshot is still the one from before the request. The
+   * server's `running` answers for every other tab, including this one after a
+   * reload, so the stop is offered wherever the work is visible.
+   */
   const [startingRun, setStartingRun] = useState(false);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
 
@@ -116,17 +121,20 @@ export default function App() {
 
   useEffect(() => { readRememberedRun(); }, [readRememberedRun]);
 
-  // Imagery is shot on the raster lane after the gate closes, so the decided
-  // screen follows it until every asset has settled. A reading that failed is
-  // retried, because the server may be restarting mid-shoot, but only so many
-  // times: a run that is gone, or a server that never comes back, ends the loop
-  // and says so rather than being polled in silence for the rest of the session.
+  // The screen follows a run for as long as the server says it is working: the
+  // fan-out while the stage runs, then the raster lane until every asset has
+  // settled. A reading that failed is retried, because the server may be
+  // restarting mid-shoot, but only so many times: a run that is gone, or a
+  // server that never comes back, ends the loop and says so rather than being
+  // polled in silence for the rest of the session.
   const generating = identity?.assets.some((asset) => asset.status === 'generating') ?? false;
+  const running = identity?.status === 'running';
+  const following = generating || running;
   // The budget belongs to the run it was spent on, so a run that went away
   // cannot leave a later one looking as if its images never settled.
   const spent = identity && pollFailures.runId === identity.runId ? pollFailures.count : 0;
   useEffect(() => {
-    if (!identity || !generating || spent >= POLL_MAX_FAILURES) return;
+    if (!identity || !following || spent >= POLL_MAX_FAILURES) return;
     const runId = identity.runId;
     // A reading of a run the screen has left cannot rewrite what is on it now.
     let dropped = false;
@@ -148,7 +156,7 @@ export default function App() {
       );
     }, 1500);
     return () => { dropped = true; clearTimeout(timer); };
-  }, [acceptIdentityRun, generating, identity, identityGet, spent]);
+  }, [acceptIdentityRun, following, identity, identityGet, spent]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
   const startIdentityRun = (): void => {
@@ -167,7 +175,7 @@ export default function App() {
 
   return <div className="studio-shell">
     <header className="topbar"><div><span className="eyebrow">FIRSTMATE / STUDIO LOCAL</span><h1>Compilador de identidade</h1></div><nav className="view-tabs" aria-label="Telas do estúdio">{views.map((item) => <button key={item.id} className={view === item.id ? 'selected' : ''} aria-current={view === item.id ? 'page' : undefined} onClick={() => setView(item.id)}>{item.label}</button>)}</nav><span className="local-pill">uso próprio · pt-BR</span><a className="gate2-link" href={GATE2_ROUTE}>Gate 2 · revisão do protótipo →</a></header>
-    {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} unreachableRunId={unreachableRunId} onCreate={createIdentityRun} onOpen={openIdentityRun} onRetry={readRememberedRun} onStart={startIdentityRun} onCancel={cancelIdentityRun} inFlight={startingRun || generating} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
+    {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} unreachableRunId={unreachableRunId} onCreate={createIdentityRun} onOpen={openIdentityRun} onRetry={readRememberedRun} onStart={startIdentityRun} onCancel={cancelIdentityRun} inFlight={startingRun || following} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
       <section className="intro-panel"><p className="eyebrow">A identidade é o contrato</p><h2>Da direção visual ao site final, uma fonte de verdade.</h2><p>O editor mostra propostas tipadas; o renderer determinístico cuida do resultado. Os três gates desta versão são do capitão.</p><button className="primary" onClick={create} disabled={busy}>{busy ? 'Preparando…' : snapshot ? 'Reiniciar briefing' : 'Carregar briefing fixo'}</button></section>
       <section className="stage-panel"><div className="section-heading"><div><p className="eyebrow">Pipeline</p><h2>Três etapas, três decisões</h2></div>{snapshot && <span className={`status status-${snapshot.status}`}>{snapshot.status === 'needs_review' ? 'aguarda gate' : snapshot.status === 'rejected' ? 'rejeitado · reexecutar' : snapshot.status}</span>}</div><div className="stage-list">{stages.map((stage, index) => { const approval = snapshot?.approvals.find((item) => item.stage === stage.id); const active = snapshot?.currentStage === stage.id; return <div className={`stage-row ${active ? 'active' : ''}`} key={stage.id}><span className="stage-number">0{index + 1}</span><div><strong>{stage.label}</strong><small>{approval ? approval.decision === 'approved' ? 'Aprovado pelo capitão' : 'Rejeitado para revisão' : active ? 'Proposta pronta para revisão' : 'Bloqueada pelo gate anterior'}</small></div><span className="stage-dot" />{active && <span className="active-mark">●</span>}</div>; })}</div><div className="actions">{snapshot?.status === 'needs_review' ? <><button className="secondary" onClick={() => review('reject')} disabled={busy}>Rejeitar proposta</button>{snapshot.currentStage === 'finalization' ? <span className="qa-chip">Aprovar é publicar o bundle no Gate 3 abaixo</span> : <button className="primary" onClick={() => review('approve')} disabled={busy}>Aprovar gate</button>}</> : <button className="primary" onClick={runStage} disabled={!snapshot || busy || snapshot.status === 'succeeded'}>{busy ? 'Executando…' : snapshot?.status === 'succeeded' ? 'Release publicado' : snapshot?.status === 'rejected' ? 'Refazer etapa' : 'Executar próxima etapa'}</button>}</div></section>
       <section className="review-panel"><div className="section-heading"><div><p className="eyebrow">Revisão visual</p><h2>Preview isolado</h2></div><span className="qa-chip">linter: {snapshot?.lintErrorCount ?? 0} erros</span></div>{snapshot ? <><div className="route-tabs">{snapshot.rendered.routes.map((item) => <button key={item.route} className={route === item.route ? 'selected' : ''} onClick={() => setRoute(item.route)}>{item.route}</button>)}</div><iframe title="Preview do site" src={previewUrl} sandbox="" className="preview-frame" /></> : <div className="empty-state"><span>△</span><p>Carregue o briefing para abrir o primeiro contrato de identidade.</p></div>}</section>

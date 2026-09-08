@@ -116,3 +116,42 @@ test('a stopped run shows its directions for reading and decides none of them', 
   await expect(page.getByLabel(/Motivo da decisão/)).toHaveCount(0);
   await page.unroute('**/api/identity/runs/*');
 });
+
+/**
+ * A tab that did not issue the start still has to see the work. Landing inside
+ * the fan-out is a race against a fake provider that answers in about a second,
+ * so the server's own snapshot is read and the two fields it really carries
+ * mid-run — `running` with no directions yet — are put back on it, once. The
+ * second reading is the server's untouched answer, so the screen leaving the
+ * running state proves the poll followed it there.
+ */
+test('a reloaded tab offers the stop while the stage is working, and follows it to the end', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await expect(page.locator('.direction-card')).toHaveCount(3);
+
+  let midRun = true;
+  await page.route('**/api/identity/runs/*', async (route) => {
+    const answer = await route.fetch();
+    const snapshot = await answer.json() as Record<string, unknown>;
+    if (!midRun) { await route.fulfill({ response: answer, json: snapshot }); return; }
+    midRun = false;
+    await route.fulfill({ json: { ...snapshot, status: 'running', directions: [] } });
+  });
+  await page.reload();
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+
+  // The stop is offered on the strength of the server's answer alone, and the
+  // stage cannot be asked for a second time while it is already working.
+  await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
+  const start = page.getByRole('button', { name: 'Etapa em execução' });
+  await expect(start).toBeVisible();
+  await expect(start).toBeDisabled();
+
+  // No click follows: the screen learns on its own that the fan-out finished.
+  await expect(page.locator('.direction-card')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Cancelar execução' })).toHaveCount(0);
+  await page.unroute('**/api/identity/runs/*');
+});

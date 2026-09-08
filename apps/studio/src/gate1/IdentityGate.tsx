@@ -98,6 +98,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // its approve button while returning a card is off everywhere: the decision
   // those controls would answer is already made.
   const stopped = snapshot?.status === 'cancelled';
+  const running = snapshot?.status === 'running';
   const closed = snapshot?.gate.state === 'closed';
   const reopened = snapshot?.gate.state === 'reopened';
   const decided = closed || reopened;
@@ -142,8 +143,8 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       <div className="actions gate-actions">
         <button className="secondary" onClick={props.onCreate} disabled={props.busy}>Nova execução</button>
         {props.inFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
-        <button className="primary" onClick={props.onStart} disabled={props.busy || snapshot.directions.length > 0 || snapshot.status === 'cancelled'}>
-          {snapshot.status === 'cancelled' ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+        <button className="primary" onClick={props.onStart} disabled={props.busy || running || stopped || snapshot.directions.length > 0}>
+          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 
