@@ -235,6 +235,21 @@ so a face replaced after the captain looked at it is a divergence and not an
 identical route, and `tests/release/parity.spec.ts` asks both sides what they
 actually loaded rather than comparing two fallbacks.
 
+So that this last check measures a face instead of an empty `document.fonts`,
+installing seeds `fonts/` with one real face — Fraunces 400 normal, under the
+OFL, taken from the `@fontsource/fraunces` dev dependency rather than from a
+binary in this repository or a download at compile time
+(`scripts/seed-fixture-fonts.ts`, run by `prepare`; `corepack pnpm prepare`
+seeds it again). It is the family the fixture identity already names in its
+display stack, so text on every route loads it. The seeding happens once, at
+install, because every compile site reads that directory: seeding it later would
+move the digest between the gate and the runners meant to measure the gate's
+bundle. A `manifest.json` already there is left untouched — the faces an owner
+put in their own project are theirs — and a checkout installed with
+`--ignore-scripts` simply has no face, which is the default this repository
+shipped before. With the seeded face the parity artifacts record `faces: 1` on
+each engine, against `routes: 3` and `differences: 0`.
+
 **Release vetoes.** Eight objective stop conditions, catalogued in
 `packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
 XSS or `javascript:` URL, unsanitized HTML, a bundled asset without a licence, a
@@ -268,9 +283,14 @@ difference is named, because that is what the refiner recording a finding does.
 
 All three engines always run. On the macOS 27.0 host this was developed on,
 Playwright's Firefox 153 build does not start — it times out after
-`sandbox_extension_issue_file_to_process ... Operation not permitted` — so that
+`sandbox_extension_issue_file_to_process ... Operation not permitted`, an
+operating-system sandbox restriction rather than a missing dependency — so that
 run leaves no Firefox artifact, and the gate escalates "Nenhuma execução
-Playwright em firefox". Publishing over an open escalation takes a written
+Playwright em firefox". Firefox is measured where it does start: the
+`release-evidence` job in `.github/workflows/ci.yml` installs the three engines
+on `ubuntu-latest`, runs `corepack pnpm run:evidence` and uploads
+`artifacts/release`, so the captain reads the engine's own artifacts instead of
+a local run pretending it ran. Publishing over an open escalation takes a written
 reason from the captain, recorded in the run's log as `release.published` and in
 the release record beside the bundle. The manifest inside the bundle is a pure
 function of the compiled bytes and the toolchain — it names no document, no

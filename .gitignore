@@ -16,3 +16,6 @@ exports/
 .vite/
 releases/
 artifacts/
+
+# Seeded at install from the @fontsource dev dependency; see scripts/seed-fixture-fonts.ts.
+fonts/
