@@ -467,6 +467,52 @@ describe('identity run', () => {
     expect(events.some((event) => event.type === 'identity.run.cancelled')).toBe(true);
   });
 
+  it('keeps a fan-out that had already finished when the stop arrived', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({ runId: 'identity-late-stop', repository, provider: new FakeIdentityProvider() });
+    await run.initialize();
+    const started = await run.start();
+    expect(started.directions).toHaveLength(3);
+
+    // The stop lands after the stage produced its candidates. They cost the
+    // curator, three directors and the critics: the run keeps them.
+    const stopped = await run.cancel();
+    expect(stopped.status).toBe('needs_review');
+    expect(stopped.directions).toHaveLength(3);
+
+    const approved = await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Decidida depois do pedido de parada.' });
+    expect(approved.gate.state).toBe('closed');
+  });
+
+  it('reads a stopped run back as stopped after a restart', async () => {
+    const repository = new ProjectRepository(database);
+    let entered = (): void => {};
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-director-')) {
+          entered();
+          await new Promise<void>((_resolve, reject) => { signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }); });
+        }
+        return inner.propose(task, signal);
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-stop-restart', repository, provider });
+    await run.initialize();
+    const started = run.start();
+    await reached;
+    expect((await run.cancel()).status).toBe('cancelled');
+    await started.catch(() => undefined);
+
+    // A second process reads the ledger, not the memory of the one that stopped it.
+    const restored = new IdentityRun({ runId: 'identity-stop-restart', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    expect(restored.snapshot().status).toBe('cancelled');
+    await expect(restored.start()).rejects.toThrow(/cancelled/i);
+    await expect(restored.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Mesmo assim.' })).rejects.toThrow(/cancelled/i);
+  });
+
   it('cancels imagery the raster lane never finished, keeping the decision', async () => {
     const repository = new ProjectRepository(database);
     const raster = new HiggsfieldMcpProvider({

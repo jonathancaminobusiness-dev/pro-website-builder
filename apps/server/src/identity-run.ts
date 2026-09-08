@@ -139,8 +139,12 @@ export class IdentityRun {
     }
     this.approvals.push(...await this.options.repository.listApprovals(this.options.runId));
     const events = await this.options.repository.listEvents(this.options.runId);
+    // A stop is written to the ledger, so it is read back from it: a run the
+    // captain ended is still ended in a process that never saw the request.
+    const cancelled = events.some((event) => event.type === 'identity.run.cancelled');
     const checkpoint = events.filter((event) => event.type === CHECKPOINT_EVENT).at(-1);
     if (!checkpoint) {
+      if (cancelled) { this.status = 'cancelled'; this.started = true; return true; }
       const failed = events.filter((event) => event.type === 'identity.stage.failed').at(-1);
       if (failed) this.failure = typeof failed.payload.reason === 'string' ? failed.payload.reason : 'The identity stage failed.';
       else if (events.some((event) => event.type === 'identity.stage.started')) this.failure = INTERRUPTED;
@@ -153,9 +157,10 @@ export class IdentityRun {
     // The stage settles what the ended process left in flight, so the snapshot
     // reads what became of every image rather than one that never finishes.
     this.assets = this.stage.approvedImagery;
-    // The label is derived from the gate, exactly as it is on the live path.
+    // The label is derived from the gate, exactly as it is on the live path,
+    // unless the captain ended the run: that decision outranks the gate.
     const gate = this.result.gate;
-    this.status = gate.state === 'closed' ? 'approved' : gate.state === 'reopened' ? 'reopened' : 'needs_review';
+    this.status = cancelled ? 'cancelled' : gate.state === 'closed' ? 'approved' : gate.state === 'reopened' ? 'reopened' : 'needs_review';
     this.started = true;
     for (const candidate of this.result.candidates) this.render(candidate.versionId);
     this.render(this.stage.approvedVersionId);
@@ -200,16 +205,21 @@ export class IdentityRun {
   }
 
   async cancel(): Promise<IdentityRunSnapshot> {
+    // What the stop is worth is decided before anything is awaited: a fan-out
+    // that had already produced its result is the most expensive artefact in
+    // the run, and awaiting first would let it finish and be discarded anyway.
+    const interrupted = this.result === undefined;
     this.abort?.abort();
     await this.inFlight;
     // Imagery outlives the approve call, so cancelling the run has to reach it
     // too; what it did not finish stays recorded as a failed asset.
     await this.stage.cancelImagery();
     await this.settling;
-    // Stopping the work that followed a decision does not undo the decision:
-    // only a run the captain never got to decide becomes a cancelled one, and
-    // a run that survives its cancel gets a fresh scope for what comes next.
-    if (this.stage.gateState().state !== 'open') { this.abort = new AbortController(); return this.snapshot(); }
+    // A run that has candidates to decide, or a decision already recorded,
+    // survives its stop: the imagery is dropped and the gate stays open for the
+    // captain. Only work that never got that far ends as a cancelled run, and a
+    // run that survives gets a fresh scope for what comes next.
+    if (!interrupted || this.stage.gateState().state !== 'open') { this.abort = new AbortController(); return this.snapshot(); }
     this.status = 'cancelled';
     this.failure = undefined;
     await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.run.cancelled', payload: { runId: this.options.runId } }));
