@@ -65,10 +65,26 @@ describe('mcp tool transport', () => {
     expect(await new McpToolTransport({ url }).callTool('higgsfield_generate_image', {})).toMatchObject({ uri: 'higgsfield://asset-1' });
   });
 
-  it('reads the url a tool returned as plain text', async () => {
-    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : { content: [{ type: 'text', text: 'Pronto: https://cdn.higgsfield.ai/x.png' }] });
+  it('reads the url a tool returned as plain text, without the punctuation that ends the sentence', async () => {
+    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : { content: [{ type: 'text', text: 'Pronto: https://cdn.higgsfield.ai/x.png.' }] });
     const url = await listen(fake);
     expect(await new McpToolTransport({ url }).callTool('higgsfield_generate_image', {})).toEqual({ uri: 'https://cdn.higgsfield.ai/x.png' });
+  });
+
+  it('reads a text block that is itself JSON as the record it is, not as prose to scan', async () => {
+    // Scanning this would run the url into the quote that closes it.
+    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : { content: [{ type: 'text', text: '{"url":"https://cdn.higgsfield.ai/x.png","cost":0.02}' }] });
+    const url = await listen(fake);
+    expect(await new McpToolTransport({ url }).callTool('higgsfield_generate_image', {})).toEqual({ uri: 'https://cdn.higgsfield.ai/x.png' });
+  });
+
+  it('takes a JSON text block that names no image as an unrecognised shape', async () => {
+    const fake = fakeMcpServer((method) => method === 'initialize' ? {} : { content: [{ type: 'text', text: '{"jobId":"j-1","state":"running"}' }] });
+    const url = await listen(fake);
+    const job = await new HiggsfieldMcpProvider({ configured: true, transport: new McpToolTransport({ url }) })
+      .submit({ id: 'asset-job', digest: 'digest', prompt: 'papel impresso', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' });
+    expect(job.status).toBe('failed');
+    expect(job.uri).toBeUndefined();
   });
 
   it('records an answer it recognises no image in as a failed asset naming the shape', async () => {

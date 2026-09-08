@@ -150,7 +150,9 @@ export class IdentityRun {
     const state = checkpoint.payload as unknown as IdentityCheckpoint;
     this.stage.restore({ result: state.result, ...(state.currentVersionId ? { currentVersionId: state.currentVersionId } : {}), assets: state.assets ?? [] });
     this.result = this.stage.snapshot();
-    this.assets = state.assets ?? [];
+    // The stage settles what the ended process left in flight, so the snapshot
+    // reads what became of every image rather than one that never finishes.
+    this.assets = this.stage.approvedImagery;
     // The label is derived from the gate, exactly as it is on the live path.
     const gate = this.result.gate;
     this.status = gate.state === 'closed' ? 'approved' : gate.state === 'reopened' ? 'reopened' : 'needs_review';

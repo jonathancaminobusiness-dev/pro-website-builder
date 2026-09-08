@@ -7,7 +7,7 @@ import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
 import { identityAxisBriefs } from './axes.js';
-import { imageryPolicyViolations, plannedImagery } from './art-director.js';
+import { generateImageAsset, imageryPolicyViolations, plannedImagery } from './art-director.js';
 import { directionVectorDraftSchemaFor, type ImagePromptPlan } from './contracts.js';
 import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
@@ -960,9 +960,12 @@ describe('image art director', () => {
 
   it('shoots on the raster lane after the gate closes, and a cancellation lands on the asset', async () => {
     let reached: AbortSignal | undefined;
+    let entered = (): void => {};
+    const shooting = new Promise<void>((resolve) => { entered = resolve; });
     const transport = {
       callTool: async (_name: string, _args: Record<string, unknown>, signal?: AbortSignal) => {
         reached = signal;
+        entered();
         // A server that accepts the prompt and never answers.
         return new Promise<{ uri?: string }>((_resolve, reject) => {
           signal?.addEventListener('abort', () => reject(new Error('the call was cancelled')), { once: true });
@@ -973,10 +976,10 @@ describe('image art director', () => {
     await stage.run();
     const approval = await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
 
-    // The decision is recorded and returned while the image is still in flight.
+    // The decision is recorded and returned before the lane has even started.
     expect(approval.assets.map((asset) => asset.status)).toEqual(['generating']);
     expect(stage.gateState().state).toBe('closed');
-    expect(reached).toBeDefined();
+    await shooting;
     expect(reached!.aborted).toBe(false);
 
     await stage.cancelImagery();
@@ -989,6 +992,52 @@ describe('image art director', () => {
     expect(settled[0]?.provenance.termsNote).toMatch(/Expected licence:/);
     expect(stage.gateState().state).toBe('closed');
     expect(stage.handoff()!.assets.map((asset) => asset.id)).toEqual(settled.map((asset) => asset.id));
+  });
+
+  it('gives the captain the gate back while an earlier batch is still shooting', async () => {
+    const held: Array<() => void> = [];
+    let entered = (): void => {};
+    const shooting = new Promise<void>((resolve) => { entered = resolve; });
+    const transport = {
+      callTool: async () => {
+        entered();
+        return new Promise<{ uri?: string; license?: string; termsNote?: string }>((resolve) => {
+          held.push(() => resolve({ uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'ok' }));
+        });
+      },
+    };
+    const { stage } = harness({ raster: { configured: true, transport } });
+    await stage.run();
+    await stage.approve({ directionId: 'modular-technical', rationale: 'A direção modular responde ao briefing.', approverRole: 'captain' });
+    await shooting;
+
+    // A token change reopens the gate while the first batch is still on the
+    // lane. Re-approving must not wait for it: this call resolving at all is
+    // the assertion, since the endpoint above never answers on its own.
+    await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    const again = await stage.approve({ directionId: 'modular-technical', rationale: 'Token revisado e aprovado.', approverRole: 'captain' });
+    expect(again.assets.map((asset) => asset.status)).toEqual(['generating']);
+    expect(held).toHaveLength(1);
+
+    // The batch that was in flight settles first, and what it finished is not shot again.
+    for (const release of held) release();
+    await stage.imagerySettled();
+    expect(held).toHaveLength(1);
+    expect(stage.approvedImagery.map((asset) => asset.status)).toEqual(['ready']);
+  });
+
+  it('refuses to submit for a direction whose contract admits no generated source', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const provider = new HiggsfieldMcpProvider({ configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { uri: 'higgsfield://asset-1', license: 'x', termsNote: 'y' }; } } });
+    const plan: ImagePromptPlan = {
+      schemaVersion: 1,
+      directionId: 'typographic-low-chroma',
+      plans: [{ id: 'texture-01', role: 'texture', prompt: 'Textura de papel impresso em duas tintas, luz rasante.', negatives: ['fotografia de banco'], aspect: '3:2', axis: 'materiality', alt: 'Textura.', licenceExpectation: 'Uso interno do proprietário.' }],
+    };
+    // The guard is at the site that performs the call, so no caller can get past it.
+    await expect(generateImageAsset(plan, plan.plans[0]!, { provider, identityVersionId: 'v-test', identity: fakeIdentityFor('typographic-low-chroma') }))
+      .rejects.toThrow(/admits the sources/);
+    expect(calls).toEqual([]);
   });
 
   it('plans no image at all for a direction that admits no generated source', async () => {

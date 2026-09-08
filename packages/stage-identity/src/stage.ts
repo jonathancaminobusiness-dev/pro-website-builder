@@ -28,7 +28,7 @@ import { lintDesign, type LintFinding, type LintReport } from '@pwb/linter';
 import { Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider, RasterProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
-import { admitsGeneratedImagery, generateImageAsset, imageryPolicyViolations, plannedImagery, type IdentityAsset } from './art-director.js';
+import { admitsGeneratedImagery, generateImageAsset, imageryAssetId, imageryPolicyViolations, plannedImagery, type IdentityAsset } from './art-director.js';
 import { identityAxisBrief, identityAxisBriefIds, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
 import { CandidateBranchStore, siblingsOf } from './branches.js';
 import {
@@ -206,7 +206,7 @@ export class IdentityStage {
   private approvedAssets: IdentityAsset[] = [];
   private refinementCyclesUsed = 0;
   private imagery: Promise<void> | undefined;
-  private imageryAbort: AbortController | undefined;
+  private readonly imageryAborts = new Set<AbortController>();
 
   constructor(private readonly options: IdentityStageOptions) {
     this.scheduler = options.scheduler ?? new Scheduler();
@@ -264,7 +264,12 @@ export class IdentityStage {
     this.failures = [...result.failures];
     // The stage ran to its gate, so its one refinement cycle is spent.
     this.refinementCyclesUsed = 1;
-    this.approvedAssets = structuredClone(state.assets ?? []);
+    // An image the ended process was still shooting has no task behind it now.
+    // It is recorded as failed with that reason, which both states what became
+    // of it and leaves it re-submittable under its unchanged digest.
+    this.approvedAssets = structuredClone(state.assets ?? []).map((asset) => asset.status === 'generating'
+      ? { ...asset, status: 'failed' as const, provenance: { ...asset.provenance, termsNote: `${asset.provenance.termsNote} The process ended while this image was being generated; it was never finished.` } }
+      : asset);
     if (result.gate.state === 'open') return;
     const record = structuredClone(result.gate.record);
     const approved = this.options.store.get(record.versionId);
@@ -776,7 +781,7 @@ export class IdentityStage {
       // images this direction is about to be shot.
       assets = plannedImagery(candidate.imagePlan, { identity: version.ir.identity, existing: this.approvedAssets });
       this.approvedAssets = assets;
-      await this.startImagery(candidate.imagePlan, version, input.signal);
+      this.startImagery(candidate.imagePlan, version, input.signal);
     }
     return { record, assets, versionId: version.id };
   }
@@ -788,38 +793,51 @@ export class IdentityStage {
    * signal reaches the MCP client, so a stalled endpoint is dropped rather than
    * held open.
    */
-  private async startImagery(plan: ImagePromptPlan, version: VersionRecord, signal?: AbortSignal): Promise<void> {
-    await this.imagery;
+  private startImagery(plan: ImagePromptPlan, version: VersionRecord, signal?: AbortSignal): void {
     const raster = this.options.raster;
     if (!raster) return;
-    const pending = plan.plans.filter((item) => !this.approvedAssets.some((asset) => asset.id === `asset-${plan.directionId}-${item.id}` && asset.status === 'ready'));
-    if (pending.length === 0) return;
     const controller = new AbortController();
-    this.imageryAbort = controller;
+    this.imageryAborts.add(controller);
     signal?.addEventListener('abort', () => controller.abort(), { once: true });
-    const tasks = pending.map((item) => this.task({
-      id: `identity-imagery-${plan.directionId}-${item.id}`,
-      role: 'art-director',
-      lane: 'raster',
-      deadlineMs: this.deadlines.raster,
-      allowedPaths: [],
-      ir: version.ir,
-      baseVersionId: version.id,
-      brief: item.prompt,
-    }));
-    for (const task of tasks) await this.record('identity.task.queued', { taskId: task.id, role: task.role, baseVersionId: task.baseVersionId, deadlineMs: task.deadlineMs });
+    const previous = this.imagery;
 
+    // Nothing before the scheduler run touches the caller's path: a second
+    // approval queues behind the batch already in flight instead of making the
+    // captain wait for it, and what that batch finishes is not shot again,
+    // because the work is chosen only once it has settled.
     this.imagery = (async () => {
+      await previous;
+      const planned = plannedImagery(plan, { identity: version.ir.identity, existing: this.approvedAssets });
+      const pending = plan.plans
+        .map((item) => ({ item, asset: planned.find((entry) => entry.id === imageryAssetId(plan.directionId, item)) }))
+        .filter((entry): entry is { item: ImagePromptPlan['plans'][number]; asset: IdentityAsset } => entry.asset !== undefined && entry.asset.status !== 'ready');
+      if (pending.length === 0) { this.imageryAborts.delete(controller); return; }
+      this.approvedAssets = planned;
+
+      const tasks = pending.map(({ item }) => this.task({
+        id: `identity-imagery-${plan.directionId}-${item.id}`,
+        role: 'art-director',
+        lane: 'raster',
+        deadlineMs: this.deadlines.raster,
+        allowedPaths: [],
+        ir: version.ir,
+        baseVersionId: version.id,
+        brief: item.prompt,
+      }));
+      for (const task of tasks) await this.record('identity.task.queued', { taskId: task.id, role: task.role, baseVersionId: task.baseVersionId, deadlineMs: task.deadlineMs });
+
       const outcome = await this.scheduler.run(tasks, async (task, taskSignal) => {
-        const item = pending.find((entry) => task.id === `identity-imagery-${plan.directionId}-${entry.id}`)!;
-        return generateImageAsset(plan, item, { provider: raster, identityVersionId: version.id, identity: version.ir.identity, existing: this.approvedAssets, signal: taskSignal });
+        const { item } = pending.find((entry) => task.id === `identity-imagery-${plan.directionId}-${entry.item.id}`)!;
+        return generateImageAsset(plan, item, { provider: raster, identityVersionId: version.id, identity: version.ir.identity, signal: taskSignal });
       }, { signal: controller.signal });
+      this.imageryAborts.delete(controller);
 
       for (const entry of outcome.results) {
         if (entry.state === 'succeeded' && entry.value) { this.replaceAsset(entry.value.asset); continue; }
         const reason = entry.error instanceof Error ? entry.error.message : `Task ${entry.task.id} ended as ${entry.state}.`;
         this.failures.push({ taskId: entry.task.id, reason });
-        this.replaceAsset(this.failedAsset(entry.task.id, reason));
+        const failed = this.failedAsset(entry.task.id, reason);
+        if (failed) this.replaceAsset(failed);
       }
       await this.record('identity.imagery.generated', {
         directionId: plan.directionId,
@@ -836,10 +854,10 @@ export class IdentityStage {
   }
 
   /** An image the lane could not finish keeps its prompt and licence expectation, and says why. */
-  private failedAsset(taskId: string, reason: string): IdentityAsset {
+  private failedAsset(taskId: string, reason: string): IdentityAsset | undefined {
     const id = taskId.replace('identity-imagery-', 'asset-');
     const existing = this.approvedAssets.find((entry) => entry.id === id);
-    if (!existing) throw new StageError(`The raster task ${taskId} names no planned asset.`);
+    if (!existing) return undefined;
     return { ...existing, status: 'failed', provenance: { ...existing.provenance, termsNote: `${existing.provenance.termsNote} Higgsfield MCP returned no image: ${reason}` } };
   }
 
@@ -851,7 +869,7 @@ export class IdentityStage {
 
   /** Drops imagery still in flight; the assets it did not finish stay recorded as failed. */
   async cancelImagery(): Promise<void> {
-    this.imageryAbort?.abort();
+    for (const controller of [...this.imageryAborts]) controller.abort();
     await this.imagery;
   }
 

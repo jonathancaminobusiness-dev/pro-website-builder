@@ -14,8 +14,6 @@ export interface RasterGenerationOptions {
   identityVersionId: string;
   /** The approved contract, whose `imagery.allowedSources` decides whether anything may be generated at all. */
   identity: IdentitySpec;
-  /** Assets already generated for this direction; a finished one whose digest still matches is reused, never shot again. */
-  existing?: IdentityAsset[];
   model?: string;
   signal?: AbortSignal;
   date?: string;
@@ -38,6 +36,15 @@ export function imageryAssetId(directionId: string, item: ImagePromptPlan['plans
   return `asset-${directionId}-${item.id}`;
 }
 
+/**
+ * The one definition of "this image already exists": an asset that finished,
+ * for exactly this plan item. Every caller asks here, so the rule cannot drift
+ * between planning a shot and taking it.
+ */
+export function finishedImage(existing: IdentityAsset[] | undefined, digest: string): IdentityAsset | undefined {
+  return existing?.find((asset) => asset.status === 'ready' && asset.provenance.hash === digest);
+}
+
 function termsOf(item: ImagePromptPlan['plans'][number], note: string): string {
   return `${note} Negatives: ${item.negatives.join('; ')}. Axis: ${item.axis}. Expected licence: ${item.licenceExpectation}.`;
 }
@@ -55,7 +62,7 @@ export function plannedImagery(plan: ImagePromptPlan, options: { identity: Ident
   if (!admitsGeneratedImagery(options.identity)) return [];
   return plan.plans.map((item) => {
     const digest = imageryDigest(plan.directionId, item, model);
-    const reused = options.existing?.find((asset) => asset.status === 'ready' && asset.provenance.hash === digest);
+    const reused = finishedImage(options.existing, digest);
     if (reused) return reused;
     return {
       id: imageryAssetId(plan.directionId, item),
@@ -85,12 +92,15 @@ export function plannedImagery(plan: ImagePromptPlan, options: { identity: Ident
  * provenance-marked placeholder rather than a silent gap, and no credential is
  * read, logged or stored anywhere here.
  */
-export async function generateImageAsset(plan: ImagePromptPlan, item: ImagePromptPlan['plans'][number], options: RasterGenerationOptions): Promise<{ asset: IdentityAsset; job?: RasterJob }> {
+export async function generateImageAsset(plan: ImagePromptPlan, item: ImagePromptPlan['plans'][number], options: RasterGenerationOptions): Promise<{ asset: IdentityAsset; job: RasterJob }> {
   const model = options.model ?? DEFAULT_RASTER_MODEL;
   const date = options.date ?? new Date().toISOString().slice(0, 10);
   const digest = imageryDigest(plan.directionId, item, model);
-  const reused = options.existing?.find((asset) => asset.status === 'ready' && asset.provenance.hash === digest);
-  if (reused) return { asset: reused };
+  // The contract decides at the site that performs the call, so no path can
+  // submit for a direction whose allowed sources admit no generated image.
+  if (!admitsGeneratedImagery(options.identity)) {
+    throw new Error(`Direction ${plan.directionId} admits the sources ${options.identity.imagery.allowedSources.join(', ')}, so no image may be generated for it.`);
+  }
   const job = await options.provider.submit({ id: `${plan.directionId}-${item.id}`, digest, prompt: item.prompt, model, aspect: item.aspect, identityVersionId: options.identityVersionId }, options.signal);
   return {
     job,

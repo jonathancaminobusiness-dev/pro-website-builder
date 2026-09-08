@@ -398,6 +398,41 @@ describe('identity run', () => {
     expect(restored.snapshot().assets.map((asset) => asset.status)).toEqual(['ready']);
   });
 
+  it('settles an image the ended process was still shooting, instead of leaving it generating', async () => {
+    const repository = new ProjectRepository(database);
+    let entered = (): void => {};
+    const shooting = new Promise<void>((resolve) => { entered = resolve; });
+    const raster = new HiggsfieldMcpProvider({
+      configured: true,
+      transport: {
+        callTool: async (_name, _args, signal) => {
+          entered();
+          return new Promise<{ uri?: string }>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new Error('the call was cancelled')), { once: true });
+          });
+        },
+      },
+    });
+    const run = new IdentityRun({ runId: 'identity-restart-generating', repository, provider: new FakeIdentityProvider(), raster });
+    await run.initialize();
+    await run.start();
+    const approved = await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
+    expect(approved.assets.map((asset) => asset.status)).toEqual(['generating']);
+    await shooting;
+
+    // A second process reads the checkpoint written while the image was in flight.
+    const restored = new IdentityRun({ runId: 'identity-restart-generating', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    const snapshot = restored.snapshot();
+    expect(snapshot.assets.map((asset) => asset.status)).toEqual(['failed']);
+    expect(snapshot.assets[0]?.provenance.termsNote).toMatch(/process ended while this image was being generated/);
+    // The handoff states what became of the image rather than calling it work in progress.
+    expect(snapshot.handoff?.assets.map((asset) => asset.status)).toEqual(['failed']);
+    expect(snapshot.gate.state).toBe('closed');
+
+    await run.cancel();
+  });
+
   it('cancels imagery the raster lane never finished, keeping the decision', async () => {
     const repository = new ProjectRepository(database);
     const raster = new HiggsfieldMcpProvider({

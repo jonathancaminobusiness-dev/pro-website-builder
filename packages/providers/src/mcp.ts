@@ -31,18 +31,37 @@ function textOf(value: unknown): string | undefined {
 }
 
 /**
+ * The image a text block names. A tool without `structuredContent` usually
+ * serialises its answer as JSON, so a parseable block is read as the record it
+ * is and never scanned: scanning it would run the URL into the quote that
+ * closes it. A prose block is scanned instead, stopping before the punctuation
+ * that ends the sentence rather than at the next space.
+ */
+function urlInText(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(trimmed); } catch { return undefined; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const record = parsed as Record<string, unknown>;
+    return textOf(record.uri) ?? textOf(record.url);
+  }
+  const found = /https?:\/\/[^\s"'<>`]+/.exec(trimmed)?.[0];
+  return textOf(found?.replace(/[.,;:!?)\]}]+$/, ''));
+}
+
+/**
  * Where the image is, in the three forms a tool answers with: a structured
- * field, a linked resource, or a bare URL in the text it returned.
+ * field, a linked resource, or a URL in the text it returned.
  */
 function uriOf(result: McpToolResult): string | undefined {
   const structured = result.structuredContent ?? {};
   const declared = textOf(structured.uri) ?? textOf(structured.url);
   if (declared) return declared;
   for (const item of result.content ?? []) {
-    const linked = textOf(item.uri) ?? textOf(item.resource?.uri);
+    const linked = textOf(item.uri) ?? textOf(item.resource?.uri) ?? urlInText(item.text);
     if (linked) return linked;
-    const url = /https?:\/\/\S+/.exec(item.text ?? '')?.[0];
-    if (url) return url;
   }
   return undefined;
 }
