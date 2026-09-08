@@ -28,7 +28,7 @@ export interface IdentityDirectionView {
 
 export interface IdentityGateSnapshot {
   runId: string;
-  status: 'queued' | 'running' | 'needs_review' | 'approved' | 'reopened' | 'failed';
+  status: 'queued' | 'running' | 'needs_review' | 'approved' | 'reopened' | 'interrupted' | 'failed';
   baseVersionId: string;
   briefing: string;
   brief?: { audience: string; promise: string; proof: string[]; exclusions: string[]; evidence: Array<{ id: string; quote: string; source: string }>; unknowns: string[]; assumptions: Array<{ id: string; statement: string; risk: string }> };
@@ -265,6 +265,7 @@ function statusLabel(status: IdentityGateSnapshot['status'] | undefined): string
     case 'needs_review': return 'aguarda gate';
     case 'approved': return 'aprovado';
     case 'reopened': return 'reaberto';
+    case 'interrupted': return 'interrompido pelo reinício';
     case 'failed': return 'falhou';
     default: return 'sem execução';
   }

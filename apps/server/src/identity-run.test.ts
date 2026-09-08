@@ -290,6 +290,84 @@ describe('identity run', () => {
     expect(await readdir(cacheDir)).toEqual(['unrelated.json']);
   });
 
+  it('serves and decides an open Gate 1 after the server that opened it is gone', async () => {
+    const repository = new ProjectRepository(database);
+    const first = new IdentityRun({ runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
+    await first.initialize();
+    const started = await first.start();
+    expect(started.status).toBe('needs_review');
+
+    // A second process holds nothing in memory: the run has to come back from the ledger.
+    const restored = new IdentityRun({ runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    const snapshot = restored.snapshot();
+    expect(snapshot.status).toBe('needs_review');
+    expect(snapshot.directions.map((direction) => direction.versionId)).toEqual(started.directions.map((direction) => direction.versionId));
+    expect(snapshot.brief?.evidence.map((item) => item.id)).toEqual(started.brief?.evidence.map((item) => item.id));
+    expect(snapshot.critiques.length).toBe(started.critiques.length);
+
+    const approved = await restored.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Decidida depois do reinício.' });
+    expect(approved.gate.state).toBe('closed');
+    expect(restored.renderedFor(approved.previewVersionId!)).toBeDefined();
+    expect(approved.handoff?.stale).toBe(false);
+  });
+
+  it('carries the captain decision and the generated assets across a restart', async () => {
+    const repository = new ProjectRepository(database);
+    const first = new IdentityRun({ runId: 'identity-restart-approved', repository, provider: new FakeIdentityProvider() });
+    await first.initialize();
+    await first.start();
+    const decided = await first.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada antes do reinício.' });
+    if (decided.gate.state !== 'closed') throw new Error('unreachable');
+
+    const restored = new IdentityRun({ runId: 'identity-restart-approved', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    const snapshot = restored.snapshot();
+    expect(snapshot.status).toBe('approved');
+    if (snapshot.gate.state !== 'closed') throw new Error('the restored gate should still be closed');
+    expect(snapshot.gate.record.versionId).toBe(decided.gate.record.versionId);
+    expect(snapshot.approvals.map((approval) => approval.id)).toEqual(decided.approvals.map((approval) => approval.id));
+    expect(snapshot.assets.map((asset) => asset.id)).toEqual(decided.assets.map((asset) => asset.id));
+
+    // A token change after the restart still reopens the gate it closed.
+    const reopened = await restored.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });
+    expect(reopened.gate.state).toBe('reopened');
+  });
+
+  it('comes back interrupted when the process ended while the stage was running', async () => {
+    const repository = new ProjectRepository(database);
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-director-')) await held;
+        return inner.propose(task, signal);
+      },
+    };
+    const first = new IdentityRun({ runId: 'identity-midflight', repository, provider });
+    await first.initialize();
+    const running = first.start();
+    while (!(await repository.listEvents('identity-midflight')).some((event) => event.type === 'identity.stage.started')) {
+      await new Promise((resolve) => { setTimeout(resolve, 5); });
+    }
+
+    const restored = new IdentityRun({ runId: 'identity-midflight', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    const snapshot = restored.snapshot();
+    expect(snapshot.status).toBe('interrupted');
+    expect(snapshot.error).toMatch(/restart/i);
+    // The gate is decidable again by running the stage, not by a 404.
+    expect(snapshot.gate.state).toBe('open');
+    release();
+    await running;
+  });
+
+  it('does not invent a run the ledger never held', async () => {
+    const run = new IdentityRun({ runId: 'never-created', repository: new ProjectRepository(database), provider: new FakeIdentityProvider() });
+    expect(await run.restore()).toBe(false);
+  });
+
   it('refuses a rejection from anyone but the captain', async () => {
     const run = newRun();
     await run.initialize();
@@ -385,6 +463,34 @@ describe('identity api', () => {
       expect(response.status).toBe(400);
       expect((await response.json() as { error: string }).error).toMatch(/dimension token expects/);
     });
+  });
+
+  it('serves, refuses re-creation of, and decides a run across a server restart', async () => {
+    const dbPath = join(directory, 'restart.sqlite');
+    const exportRoot = join(directory, 'restart-exports');
+    const first = await startServer({ dbPath, exportRoot, apiPort: 0, previewPort: 0 });
+    const firstOrigin = `http://127.0.0.1:${(first.api.address() as AddressInfo).port}`;
+    await post(firstOrigin, '/api/identity/runs', { runId: 'restarted' });
+    await post(firstOrigin, '/api/identity/runs/restarted/start', { approverRole: 'captain' });
+    await first.close();
+
+    const second = await startServer({ dbPath, exportRoot, apiPort: 0, previewPort: 0 });
+    const origin = `http://127.0.0.1:${(second.api.address() as AddressInfo).port}`;
+    try {
+      const fetched = await fetch(`${origin}/api/identity/runs/restarted`, { headers: { origin: STUDIO_ORIGIN } });
+      expect(fetched.status).toBe(200);
+      const restored = await fetched.json() as { status: string; directions: unknown[] };
+      expect(restored.status).toBe('needs_review');
+      expect(restored.directions).toHaveLength(3);
+
+      // Creating over a run that is only on disk would hand the captain an empty
+      // one under an id whose approvals are already in the ledger.
+      const recreated = await post(origin, '/api/identity/runs', { runId: 'restarted' });
+      expect(recreated.status).toBe(409);
+
+      const approved = await post(origin, '/api/identity/runs/restarted/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'Decidida depois do reinício.' });
+      expect((await approved.json() as { gate: { state: string } }).gate.state).toBe('closed');
+    } finally { await second.close(); }
   });
 
   it('answers 404 for an unknown identity run', async () => {

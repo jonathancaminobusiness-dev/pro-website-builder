@@ -17,7 +17,19 @@ async function ignoringDuplicate(write: Promise<void>): Promise<void> {
 
 export const IDENTITY_BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A promessa é clareza com personalidade e a prova é o registro de cada decisão. Exclusão declarada: nada que pareça um SaaS genérico de template.';
 
-export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approved' | 'reopened' | 'failed';
+export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approved' | 'reopened' | 'interrupted' | 'failed';
+
+/**
+ * The one row a restarted server rebuilds a run from. Versions, approvals and
+ * events are already persisted by the rest of the product; what the stage
+ * measured once and cannot measure again — the brief, the candidates, the
+ * critiques and the generated assets — is written here after every step that
+ * changes it, so an open Gate 1 outlives the process that opened it.
+ */
+const CHECKPOINT_EVENT = 'identity.run.checkpoint';
+interface IdentityCheckpoint { currentVersionId?: string; assets?: IdentityAsset[]; result: IdentityStageResult }
+
+const INTERRUPTED = 'The server restarted while the identity stage was running, so that fan-out was lost. Start the stage again.';
 
 /** What the Gate 1 screen reads: three directions side by side, with everything the captain needs to decide. */
 export interface IdentityDirectionView {
@@ -111,16 +123,69 @@ export class IdentityRun {
     await ignoringDuplicate(this.options.repository.saveVersion({ id: this.root.id, projectId: this.projectId, hash: this.root.hash, ir: this.root.ir }));
   }
 
+  /**
+   * Rebuilds a persisted run so a restarted server can serve, decide and change
+   * an identity it already paid for. A run whose stage was still in flight when
+   * the process ended has no checkpoint, so it comes back as `interrupted` and
+   * the captain can start it again rather than reading a bare 404.
+   */
+  async restore(): Promise<boolean> {
+    const run = await this.options.repository.getRun(this.options.runId);
+    if (!run) return false;
+    for (const version of await this.options.repository.listVersions(run.projectId)) {
+      if (this.store.get(version.id)) continue;
+      this.store.save({ id: version.id, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir });
+    }
+    this.approvals.push(...await this.options.repository.listApprovals(this.options.runId));
+    const events = await this.options.repository.listEvents(this.options.runId);
+    const checkpoint = events.filter((event) => event.type === CHECKPOINT_EVENT).at(-1);
+    if (!checkpoint) {
+      const failed = events.filter((event) => event.type === 'identity.stage.failed').at(-1);
+      if (failed) this.failure = typeof failed.payload.reason === 'string' ? failed.payload.reason : 'The identity stage failed.';
+      else if (events.some((event) => event.type === 'identity.stage.started')) this.failure = INTERRUPTED;
+      this.status = failed ? 'failed' : this.failure ? 'interrupted' : 'queued';
+      return true;
+    }
+    const state = checkpoint.payload as unknown as IdentityCheckpoint;
+    this.stage.restore({ result: state.result, ...(state.currentVersionId ? { currentVersionId: state.currentVersionId } : {}), assets: state.assets ?? [] });
+    this.result = this.stage.snapshot();
+    this.assets = state.assets ?? [];
+    // The label is derived from the gate, exactly as it is on the live path.
+    const gate = this.result.gate;
+    this.status = gate.state === 'closed' ? 'approved' : gate.state === 'reopened' ? 'reopened' : 'needs_review';
+    this.started = true;
+    for (const candidate of this.result.candidates) this.render(candidate.versionId);
+    this.render(this.stage.approvedVersionId);
+    return true;
+  }
+
+  private render(versionId: string | undefined): void {
+    const version = versionId ? this.store.get(versionId) : undefined;
+    if (version) this.rendered.set(version.id, renderDesign(version.ir));
+  }
+
+  private async checkpoint(): Promise<void> {
+    if (!this.result) return;
+    const payload: IdentityCheckpoint = {
+      ...(this.stage.approvedVersionId ? { currentVersionId: this.stage.approvedVersionId } : {}),
+      assets: this.assets,
+      result: this.result,
+    };
+    await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: CHECKPOINT_EVENT, payload: payload as unknown as Record<string, unknown> }));
+  }
+
   /** The one entry point that spends model turns. Nothing else in this class starts a worker. */
   async start(): Promise<IdentityRunSnapshot> {
     if (this.started) { await this.inFlight; return this.snapshot(); }
     this.started = true;
     this.status = 'running';
     this.abort = new AbortController();
+    this.failure = undefined;
     this.inFlight = this.stage.run(this.abort.signal).then(async (result) => {
       this.result = result;
       await this.persistCandidates(result);
       this.status = 'needs_review';
+      await this.checkpoint();
     }).catch(async (error: unknown) => {
       this.failure = error instanceof Error ? error.message : 'The identity stage failed.';
       this.status = 'failed';
@@ -149,6 +214,7 @@ export class IdentityRun {
     }
     this.status = 'approved';
     this.result = this.stage.snapshot();
+    await this.checkpoint();
     return this.snapshot();
   }
 
@@ -177,6 +243,7 @@ export class IdentityRun {
       if (this.options.renderCacheDir) await pruneRenderCache(this.options.renderCacheDir, changed.gate.impact.staleRenderKeys);
     }
     this.result = this.stage.snapshot();
+    await this.checkpoint();
     return this.snapshot();
   }
 

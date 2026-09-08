@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createFixtureIR, flattenTokens, type AgentResult, type AgentTask } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
 import { IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
@@ -7,7 +8,7 @@ import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
 import { identityAxisBriefs } from './axes.js';
 import { generateApprovedImagery, imageryPolicyViolations } from './art-director.js';
-import type { ImagePromptPlan } from './contracts.js';
+import { directionVectorDraftSchemaFor, type ImagePromptPlan } from './contracts.js';
 import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
 import { IdentityStage } from './stage.js';
@@ -785,6 +786,47 @@ describe('image art director', () => {
     expect(result.failures.some((failure) => failure.taskId === 'identity-art-director-modular-technical')).toBe(true);
     // The seat that answered for itself is untouched by its neighbour's mistake.
     expect(result.candidates.find((entry) => entry.directionId === 'editorial-material')!.imagePlan!.directionId).toBe('editorial-material');
+  });
+
+  it('asks each director for the DirectionVectorDraft its own seat is held to', async () => {
+    const briefs = new Map<string, string>();
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-director-')) briefs.set(task.id, task.brief);
+        return inner.propose(task, signal);
+      },
+    };
+    const { stage } = harness({ provider });
+    await stage.run();
+    for (const seat of identityAxisBriefs) {
+      // The emitted prompt is the interface the director answers against: it has
+      // to carry the same closed schema the stage parses that seat's answer with,
+      // or a live model has no way to know an artifact is expected at all.
+      const brief = briefs.get(`identity-director-${seat.id}`)!;
+      expect(brief).toContain(JSON.stringify(zodToJsonSchema(directionVectorDraftSchemaFor(seat.id))));
+    }
+  });
+
+  it('spends the one correction when a director answers for another seat', async () => {
+    const inner = new FakeIdentityProvider();
+    const attempts: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-director-modular-technical') return result;
+        attempts.push(task.attempt);
+        if (task.attempt > 1) return result;
+        return { ...result, artifact: { ...(result.artifact as Record<string, unknown>), directionId: 'editorial-material' } };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    // The wrong seat is a schema violation, so it buys the re-invocation instead
+    // of costing the branch the fan-out needs.
+    expect(attempts).toEqual([1, 2]);
+    expect(result.candidates.map((candidate) => candidate.directionId)).toEqual(['editorial-material', 'modular-technical', 'typographic-low-chroma']);
+    expect(result.failures).toEqual([]);
   });
 
   it('keeps the plan when the art director corrects the seat it answered for', async () => {

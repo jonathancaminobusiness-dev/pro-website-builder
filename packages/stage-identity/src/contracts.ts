@@ -1,6 +1,6 @@
 import { divergenceAxisSchema, evidenceSchema } from '@pwb/domain';
 import { z } from 'zod';
-import { identityAxisBriefIds, type IdentityAxisBriefId } from './axes.js';
+import type { IdentityAxisBriefId } from './axes.js';
 
 export const IDENTITY_PROMPT_VERSION = 'identity-v1';
 
@@ -121,11 +121,14 @@ export type ImagePromptPlan = z.infer<ReturnType<typeof imagePromptPlanSchemaFor
  * What a director returns beside its patch. The axis keys are assigned by the
  * seat and the palette signature is measured from the tokens, so the only part
  * a model contributes here is the descriptor: what its axis choice means. A
- * model therefore cannot claim divergence it did not produce.
+ * model therefore cannot claim divergence it did not produce. The seat the task
+ * was issued for is pinned in that task's schema, so a director answering for
+ * another seat is a schema violation that buys the one corrective
+ * re-invocation instead of costing the branch.
  */
-export const directionVectorDraftSchema = z.object({
+export const directionVectorDraftSchemaFor = (directionId: IdentityAxisBriefId) => z.object({
   schemaVersion: z.literal(1),
-  directionId: z.enum(identityAxisBriefIds),
+  directionId: z.literal(directionId),
   label: z.string().min(1),
   descriptors: z.object({
     composition: z.string().min(8), typography: z.string().min(8), materiality: z.string().min(8),
@@ -136,4 +139,4 @@ export const directionVectorDraftSchema = z.object({
   /** Pairs of moves this direction refuses to combine, with the reason. */
   incompatibilities: z.array(z.object({ a: z.string().min(1), b: z.string().min(1), reason: z.string().min(1) })).default([]),
 }).strict();
-export type DirectionVectorDraft = z.infer<typeof directionVectorDraftSchema>;
+export type DirectionVectorDraft = z.infer<ReturnType<typeof directionVectorDraftSchemaFor>>;

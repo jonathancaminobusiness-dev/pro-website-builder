@@ -37,7 +37,7 @@ import {
   briefSpecSchema,
   critiqueReportSchema,
   critiqueReportSchemaFor,
-  directionVectorDraftSchema,
+  directionVectorDraftSchemaFor,
   imagePromptPlanSchemaFor,
   IDENTITY_PROMPT_VERSION,
   RUBRIC_MINIMUM,
@@ -139,6 +139,17 @@ export interface IdentityStageResult {
   failures: Array<{ taskId: string; reason: string }>;
 }
 
+/**
+ * What a restarted server hands back to a stage that already ran. The versions
+ * are already in the store; what cannot be measured again — the brief, the
+ * candidates, the critiques and the captain's decision — travels here.
+ */
+export interface IdentityStageRestoreState {
+  result: IdentityStageResult;
+  currentVersionId?: string;
+  assets?: IdentityAsset[];
+}
+
 export interface IdentityApproval {
   record: IdentityGateRecord;
   assets: IdentityAsset[];
@@ -235,6 +246,32 @@ export class IdentityStage {
     };
   }
 
+  /**
+   * Rebuilds a stage that already ran, so an open Gate 1 survives a restart and
+   * stays decidable. Nothing here starts a model: every version comes back from
+   * the store, and each branch gets a fresh `PatchGate`, which is what a lineage
+   * the captain still has to approve needs in order to stay writable.
+   */
+  restore(state: IdentityStageRestoreState): void {
+    const result = state.result;
+    this.brief = result.brief;
+    this.candidates = result.candidates.map((candidate) => structuredClone(candidate));
+    this.critiques = result.critiques.map((report) => structuredClone(report));
+    this.setCritique = structuredClone(result.setCritique);
+    this.divergence = structuredClone(result.divergence);
+    this.failures = [...result.failures];
+    // The stage ran to its gate, so its one refinement cycle is spent.
+    this.refinementCyclesUsed = 1;
+    this.approvedAssets = structuredClone(state.assets ?? []);
+    if (result.gate.state === 'open') return;
+    const record = structuredClone(result.gate.record);
+    const approved = this.options.store.get(record.versionId);
+    if (!approved) throw new StageError(`The approved version ${record.versionId} is not in the store; Gate 1 cannot be restored.`);
+    this.gateRecord = record;
+    this.approvedIr = approved.ir;
+    this.currentVersionId = state.currentVersionId ?? record.versionId;
+  }
+
   gateState(): IdentityGateState {
     if (!this.gateRecord || !this.approvedIr) return evaluateIdentityGate(undefined, undefined, this.branches.version(this.options.baseVersionId).ir);
     const current = this.options.store.get(this.currentVersionId ?? this.gateRecord.versionId)?.ir ?? this.approvedIr;
@@ -272,16 +309,19 @@ export class IdentityStage {
       allowedPaths: IDENTITY_ALLOWED_PATHS,
       ir: base.ir,
     }));
-    const results = await this.dispatch(tasks, signal, () => directionVectorDraftSchema);
+    // The seat the task was issued for is the only direction the draft can be
+    // about, so it is pinned in that task's schema: a draft written for another
+    // seat is a schema violation and gets the one corrective re-invocation.
+    const seatOfDirector = (taskId: string) => taskId.replace('identity-director-', '') as IdentityAxisBriefId;
+    const results = await this.dispatch(tasks, signal, (task) => directionVectorDraftSchemaFor(seatOfDirector(task.id)));
 
     // One director failing its schema is a recoverable loss of a branch, not the
     // loss of the stage; the matrix still needs at least two directions to exist.
     const drafts: Array<{ seatId: IdentityAxisBriefId; draft: DirectionVectorDraft; identity: IdentitySpec; task: AgentTask }> = [];
     for (const result of results) {
-      const seatId = result.taskId.replace('identity-director-', '') as IdentityAxisBriefId;
+      const seatId = seatOfDirector(result.taskId);
       try {
-        const draft = requireArtifact(directionVectorDraftSchema, result.artifact, result.taskId, 'DirectionVectorDraft');
-        if (draft.directionId !== seatId) throw new StageError(`Director ${result.taskId} answered for direction ${draft.directionId} instead of its own seat.`);
+        const draft = requireArtifact(directionVectorDraftSchemaFor(seatId), result.artifact, result.taskId, 'DirectionVectorDraft');
         drafts.push({ seatId, draft, identity: this.identityFromProposal(result.taskId, result.proposal), task: tasks.find((entry) => entry.id === result.taskId)! });
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'The director answer did not validate.';
@@ -323,8 +363,12 @@ export class IdentityStage {
           role: stageRoles.identity,
           idempotencyKey: idempotencyKey(entry.task),
         };
-        const version = this.branches.applierFor(entry.seatId).apply(patch, IDENTITY_TASK_SCOPE, entry.task.baseVersionId);
-        renderDesign(version.ir);
+        // The branch's gate bucket only closes over a document that is known to
+        // render: a proposal that cannot be emitted as CSS is refused before
+        // anything is committed, so the base it was written from stays writable.
+        const applier = this.branches.applierFor(entry.seatId);
+        renderDesign(applier.dryRun(patch, IDENTITY_TASK_SCOPE, entry.task.baseVersionId).next);
+        const version = applier.apply(patch, IDENTITY_TASK_SCOPE, entry.task.baseVersionId);
         candidates.push(this.candidateOf(entry.seatId, version));
         await this.record('identity.candidate.opened', { directionId: entry.seatId, versionId: version.id, parentVersionId: version.parentId, identityHash: identityHash(version.ir) });
       } catch (error) {
@@ -558,8 +602,12 @@ export class IdentityStage {
       try {
         const identity = this.repairedIdentity(task.id, result.proposal, base.ir.identity);
         const patch: Patch = { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: identity }], baseVersionId: base.id, touchedPaths: ['/identity'], stage: 'identity', role: stageRoles.identity, idempotencyKey: idempotencyKey(task) };
-        version = this.branches.applierFor(candidate.directionId).apply(patch, IDENTITY_TASK_SCOPE, base.id);
-        renderDesign(version.ir);
+        // Same invariant as the fan-out and the token change: an unrenderable
+        // refinement must leave the branch's gate bucket clean, or the candidate
+        // it was written from could never be approved again.
+        const applier = this.branches.applierFor(candidate.directionId);
+        renderDesign(applier.dryRun(patch, IDENTITY_TASK_SCOPE, base.id).next);
+        version = applier.apply(patch, IDENTITY_TASK_SCOPE, base.id);
       } catch (error) {
         this.failures.push({ taskId: task.id, reason: error instanceof Error ? error.message : 'The refinement did not validate.' });
         await this.record('identity.refine.rejected', { directionId: candidate.directionId, reason: error instanceof Error ? error.message : 'invalid refinement' });

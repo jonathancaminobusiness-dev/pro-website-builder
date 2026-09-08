@@ -7,6 +7,12 @@ import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
 export interface IdentityApiOptions {
   runs: Map<string, IdentityRun>;
   createRun: (id: string) => Promise<IdentityRun>;
+  /** Rebuilds a run this process never held, so a restart does not lose an open Gate 1. */
+  loadRun?: (id: string) => Promise<IdentityRun | undefined>;
+}
+
+async function resolve(options: IdentityApiOptions, runId: string): Promise<IdentityRun | undefined> {
+  return options.runs.get(runId) ?? (options.loadRun ? await options.loadRun(runId) : undefined);
 }
 
 type Send = (status: number, body: unknown) => void;
@@ -39,7 +45,9 @@ export async function handleIdentityRequest(
   if (request.method === 'POST' && pathname === '/api/identity/runs') {
     const input = await body(request);
     const runId = typeof input.runId === 'string' ? input.runId : `identity-${randomUUID()}`;
-    if (options.runs.has(runId)) { send(409, { error: `Run ${runId} already exists.` }); return true; }
+    // A run that is only on disk exists just as much as one this process holds:
+    // creating over it would hand the captain an empty run under a decided id.
+    if (options.runs.has(runId) || await resolve(options, runId)) { send(409, { error: `Run ${runId} already exists.` }); return true; }
     const run = await options.createRun(runId);
     send(201, run.snapshot());
     return true;
@@ -47,7 +55,7 @@ export async function handleIdentityRequest(
 
   const match = /^\/api\/identity\/runs\/([^/]+)(?:\/(start|approve|reject|cancel|token))?$/.exec(pathname);
   if (!match) { send(404, { error: 'Not found.' }); return true; }
-  const run = options.runs.get(decodeURIComponent(match[1]!));
+  const run = await resolve(options, decodeURIComponent(match[1]!));
   if (!run) { send(404, { error: 'Identity run not found.' }); return true; }
   const action = match[2];
 

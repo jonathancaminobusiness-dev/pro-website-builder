@@ -88,6 +88,14 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     identity: {
       runs: identityRuns,
       createRun: async (id) => { const run = new IdentityRun({ runId: id, repository, provider: identityProvider, renderCacheDir }); await run.initialize(); identityRuns.set(id, run); return run; },
+      loadRun: async (id) => {
+        const existing = identityRuns.get(id);
+        if (existing) return existing;
+        const run = new IdentityRun({ runId: id, repository, provider: identityProvider, renderCacheDir });
+        if (!await run.restore()) return undefined;
+        identityRuns.set(id, run);
+        return run;
+      },
     },
   });
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);

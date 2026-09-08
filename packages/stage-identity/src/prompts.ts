@@ -1,7 +1,7 @@
 import { documentPathSchemas, documentRules, governedContractFields, imagerySourceSchema, RASTER_IMAGERY_SOURCE, stageRoles, visualPropKeys, type DesignIR, type IdentitySpec } from '@pwb/domain';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { identityAxisBrief, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
-import { briefSpecSchema, critiqueReportSchema, imagePromptPlanSchemaFor, IDENTITY_PROMPT_VERSION, RUBRIC_MINIMUM, type BriefSpec, type CritiqueReport } from './contracts.js';
+import { briefSpecSchema, critiqueReportSchema, directionVectorDraftSchemaFor, imagePromptPlanSchemaFor, IDENTITY_PROMPT_VERSION, RUBRIC_MINIMUM, type BriefSpec, type CritiqueReport } from './contracts.js';
 
 /**
  * Every prompt in this stage obeys the same six rules the fidelity research
@@ -63,7 +63,9 @@ export function identityDirectorPrompt(input: { brief: BriefSpec; axisBriefId: I
     `The brief, with the evidence ids you must cite:\n${JSON.stringify(input.brief)}`,
     `The identity contract currently in the document, which you are replacing wholesale. Keep the same token paths so the existing pages keep resolving; change what the tokens mean, not what they are called:\n${JSON.stringify(input.currentIdentity)}`,
     `Every token you define and every one of these governed contract fields needs exactly one entry in \`decisions\`: ${governedContractFields.join(', ')}. A decision carries an axis, at least one evidence id, and a rationale that says what the choice does to hierarchy or use.`,
-    `Answer with an AgentResult whose \`proposal\` is a patch. It must set baseVersionId to ${input.baseVersionId}, declare stage "identity" and role "${stageRoles.identity}", touch only ${input.allowedPaths.join(', ')}, and contain exactly one operation: replace /identity with the complete IdentitySpec.`,
+    `Answer with an AgentResult that carries both a \`proposal\` and an \`artifact\`; an answer missing either one is discarded. The \`proposal\` is a patch: it must set baseVersionId to ${input.baseVersionId}, declare stage "identity" and role "${stageRoles.identity}", touch only ${input.allowedPaths.join(', ')}, and contain exactly one operation: replace /identity with the complete IdentitySpec.`,
+    `The \`artifact\` is the DirectionVectorDraft for your seat: \`directionId\` is "${input.axisBriefId}" and nothing else, \`label\` names this direction in one phrase, \`descriptors\` says in one sentence per axis what your choice on that axis means, \`constants\` lists what must hold across the whole fan-out, and \`incompatibilities\` names the pairs of moves this direction refuses to combine. The axis keys and the palette are measured from the document you propose, so the draft describes what you built; it cannot claim divergence the document does not carry.`,
+    schemaBlock('DirectionVectorDraft', zodToJsonSchema(directionVectorDraftSchemaFor(input.axisBriefId))),
     `The imagery policy you write is enforced: \`imagery.allowedSources\` accepts only ${imagerySourceSchema.options.map((source) => `"${source}"`).join(' and ')}, and "${RASTER_IMAGERY_SOURCE}" is the one source that can be generated. A direction that does not list it is never asked for image prompts and never generates an image.`,
     `A page node may only declare these props: ${[...visualPropKeys].join(', ')} and text, and every visual prop must be a token reference such as {color.ink}. You are not editing pages in this stage.`,
     `The gate also enforces rules no JSON Schema can state, and rejects a proposal that breaks any of them: ${Object.values(documentRules).join(' ')}`,
