@@ -145,7 +145,7 @@ export class ClaudeCritiqueRunner implements CritiqueProvider {
     } catch (error) {
       if (error instanceof CritiqueUnavailableError) throw error;
       if (error instanceof ClaudeSessionError) throw new CritiqueUnavailableError(task.id, error.errorCode, `The ${task.dimension} critic could not produce a typed report (${error.errorCode}).`);
-      if (error instanceof CodexSessionError) throw new CritiqueUnavailableError(task.id, error.errorCode, `The ${task.dimension} critic could not produce a typed report (${error.errorCode}).`);
+      if (error instanceof CodexSessionError) throw new CritiqueUnavailableError(task.id, error.errorCode, error.message);
       throw error;
     }
   }
