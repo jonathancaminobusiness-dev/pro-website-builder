@@ -65,7 +65,7 @@ export const IDENTITY_READABLE_PATHS = ['/identity', '/pages', '/assets', '/revi
 export const IDENTITY_TASK_SCOPE: TaskScope = { allowedPaths: IDENTITY_ALLOWED_PATHS, stage: 'identity', role: stageRoles.identity };
 
 export interface IdentityStageDeadlines { curator: number; director: number; critic: number; refiner: number; artDirector: number; raster: number; }
-export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 5 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000, raster: 5 * 60_000 };
+export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 7 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000, raster: 5 * 60_000 };
 
 export interface IdentityStageOptions {
   runId: string;
@@ -259,6 +259,8 @@ export class IdentityStage {
     };
   }
 
+  get recordedFailures(): Array<{ taskId: string; reason: string }> { return [...this.failures]; }
+
   /**
    * Rebuilds a stage that already ran, so an open Gate 1 survives a restart and
    * stays decidable. Nothing here starts a model: every version comes back from
@@ -311,7 +313,7 @@ export class IdentityStage {
     const base = this.branches.version(this.options.baseVersionId);
     const task = this.task({ id: 'identity-curator', role: 'curator', deadlineMs: this.deadlines.curator, brief: briefCuratorPrompt(this.options.briefing), allowedPaths: [], ir: base.ir });
     const [result] = await this.dispatch([task], signal, () => briefSpecSchema);
-    if (!result) throw new StageError('The brief curator produced no result.');
+    if (!result) throw new StageError(this.failures.at(-1)?.reason ?? 'The brief curator produced no result.');
     return requireArtifact(briefSpecSchema, result.artifact, task.id, 'BriefSpec');
   }
 
@@ -1002,7 +1004,7 @@ export class IdentityStage {
       const correction = corrections.get(task.id);
       const brief = correction ? `${task.brief}\n\n## Correção\nA resposta anterior não passou no schema desta função. Corrija exatamente estes erros e responda de novo, no mesmo formato:\n${correction}` : task.brief;
       const result = agentResultSchema.parse(await this.options.provider.propose({ ...task, brief }, taskSignal));
-      if (result.status === 'failed') throw new Error(`${task.id} failed: ${result.summary}`);
+      if (result.status !== 'succeeded') throw new Error(`${task.id} returned ${result.status}: ${result.summary}`);
       return result;
     }, {
       ...(signal ? { signal } : {}),
