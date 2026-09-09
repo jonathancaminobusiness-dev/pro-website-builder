@@ -166,10 +166,14 @@ export class CodexJsonRunner implements JsonModelRunner {
         '--output-schema', schemaPath, '--json', '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, request.prompt,
       ];
       const result = await this.execute(this.executable, args, { cwd: this.cwd, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
-      if (!result.stdout.trim() && CODEX_AUTH_FAILURE.test(result.stderr)) {
-        throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
+      try {
+        return parseCodexOutput(result.stdout);
+      } catch (error) {
+        if (error instanceof CodexCliError && error.code === 'SCHEMA_INVALID' && CODEX_AUTH_FAILURE.test(result.stderr)) {
+          throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
+        }
+        throw error;
       }
-      return parseCodexOutput(result.stdout);
     } catch (error) {
       const details = error as { code?: unknown; name?: unknown };
       if (details.code === 'ABORT_ERR' || details.name === 'AbortError') throw error;

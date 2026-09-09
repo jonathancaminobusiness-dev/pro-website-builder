@@ -60,6 +60,26 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED' });
   });
 
+  it('surfaces a sign-in failure after non-answer JSONL output', async () => {
+    const runner = new CodexJsonRunner({
+      execute: async () => ({
+        stdout: `${JSON.stringify({ type: 'thread.started', thread_id: 'fixture' })}\n${JSON.stringify({ type: 'turn.started' })}\n`,
+        stderr: 'Codex requires ChatGPT sign-in.',
+      }),
+    });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED', message: expect.stringMatching(/codex login/i) });
+  });
+
+  it('keeps a valid terminal answer despite incidental auth-like stderr', async () => {
+    const runner = new CodexJsonRunner({
+      execute: async () => ({
+        stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'ok' }) } })}\n`,
+        stderr: 'warning: authentication cache refreshed',
+      }),
+    });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).resolves.toEqual({ answer: 'ok' });
+  });
+
   it('reports a non-auth process failure without echoing stderr', async () => {
     const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error('Codex failed'), { code: 'EIO', stderr: 'authorization=sk-secret-value' }); } });
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED', message: expect.not.stringContaining('sk-secret-value') });
