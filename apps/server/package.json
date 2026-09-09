@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "corepack pnpm --filter @pwb/server^... build && tsx src/index.ts"
+    "predev": "corepack pnpm --filter @pwb/server... build",
+    "dev": "tsx src/index.ts"
   },
   "dependencies": {
     "@pwb/domain": "workspace:*",

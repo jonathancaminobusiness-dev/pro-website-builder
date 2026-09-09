@@ -28,6 +28,20 @@ export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approve
 const CHECKPOINT_EVENT = 'identity.run.checkpoint';
 interface IdentityCheckpoint { currentVersionId?: string; assets?: IdentityAsset[]; result: IdentityStageResult }
 
+function mergeFailures(...groups: Array<Array<{ taskId: string; reason: string }>>): Array<{ taskId: string; reason: string }> {
+  const merged: Array<{ taskId: string; reason: string }> = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const failure of group) {
+      const key = `${failure.taskId}\u0000${failure.reason}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({ ...failure });
+    }
+  }
+  return merged;
+}
+
 const INTERRUPTED = 'The server restarted while the identity stage was running, so that fan-out was lost. Start the stage again.';
 
 /** What the Gate 1 screen reads: three directions side by side, with everything the captain needs to decide. */
@@ -93,6 +107,7 @@ export class IdentityRun {
   private readonly rendered = new Map<string, RenderedDocument>();
   private root!: VersionRecord;
   private result: IdentityStageResult | undefined;
+  private restoredFailures: Array<{ taskId: string; reason: string }> = [];
   private status: IdentityRunStatus = 'queued';
   private assets: IdentityAsset[] = [];
   private failure: string | undefined;
@@ -148,6 +163,13 @@ export class IdentityRun {
     }
     this.approvals.push(...await this.options.repository.listApprovals(this.options.runId));
     const events = await this.options.repository.listEvents(this.options.runId);
+    const lastStageStart = events.reduce((index, event, current) => event.type === 'identity.stage.started' ? current : index, -1);
+    this.restoredFailures = events.slice(lastStageStart >= 0 ? lastStageStart : 0).flatMap((event) => {
+      if (event.type !== 'identity.task.failed') return [];
+      const taskId = event.payload.taskId;
+      const reason = event.payload.reason;
+      return typeof taskId === 'string' && typeof reason === 'string' ? [{ taskId, reason }] : [];
+    });
     // A stop is written to the ledger, so it is read back from it: a run the
     // captain ended is still ended in a process that never saw the request.
     const cancelled = events.some((event) => event.type === 'identity.run.cancelled');
@@ -199,7 +221,7 @@ export class IdentityRun {
     this.refuseIfCancelled('create another one to run the identity stage.');
     // A failure is not the end of the run: the captain can ask again here, on
     // the same terms a restarted process already offers.
-    if (this.status === 'failed') { this.started = false; this.result = undefined; this.stage = this.newStage(); }
+    if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
     if (this.started) { await this.inFlight; return this.snapshot(); }
     this.started = true;
     this.status = 'running';
@@ -335,7 +357,7 @@ export class IdentityRun {
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),
       critiques: this.result?.critiques ?? [],
       setCritique: this.result?.setCritique ?? { scores: [], rubricGaps: [], unscoredDimensions: [], blocking: [], abstained: false },
-      failures: this.result?.failures ?? [],
+      failures: mergeFailures(this.result?.failures ?? [], this.restoredFailures, this.stage.recordedFailures),
       gate,
       approvals: structuredClone(this.approvals),
       assets: structuredClone(this.assets),
