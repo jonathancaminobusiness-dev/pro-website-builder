@@ -96,6 +96,12 @@ importers:
 
   apps/studio:
     dependencies:
+      '@pwb/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@pwb/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
       react:
         specifier: ^19.1.0
         version: 19.2.8

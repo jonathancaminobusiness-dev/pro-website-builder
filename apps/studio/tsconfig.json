@@ -2,5 +2,5 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "composite": true, "rootDir": "src", "outDir": "dist", "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo", "jsx": "react-jsx", "lib": ["ES2022", "DOM", "DOM.Iterable"], "types": ["node"] },
   "include": ["src"],
-  "references": []
+  "references": [{ "path": "../../packages/domain" }, { "path": "../../packages/renderer" }]
 }

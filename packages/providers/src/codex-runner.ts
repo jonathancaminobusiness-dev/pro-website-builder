@@ -6,7 +6,7 @@ import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, 
 import type { JsonModelRunner, JsonRunRequest } from './json-runner.js';
 import type { ModelProvider } from './model.js';
 
-const CODEX_AUTH_FAILURE = /\b(?:auth|authentication|authenticated|login|credential|unauthori[sz]ed|not logged)\b|chatgpt sign[- ]?in/i;
+const CODEX_AUTH_FAILURE = /chatgpt sign[- ]?in|unauthori[sz]ed|\bnot\s+(?:authenticated|logged(?:\s+in)?)\b|\b(?:please\s+)?run\s+codex\s+login\b|\b(?:auth(?:entication|enticated)?|login|credential(?:s)?)\b[^\n.]{0,80}\b(?:required|missing|needed|failed|failure|error|invalid|expired|denied)\b|\b(?:requires?|needs?)\s+(?:auth(?:entication|enticated)?|login|credential(?:s)?)\b/i;
 
 export const CODEX_MODEL = 'gpt-5.6-sol';
 export const CODEX_REASONING_EFFORT = 'high';
@@ -26,6 +26,11 @@ export interface CodexJsonRunnerOptions {
   timeoutMs?: number;
   /** Injected by tests; production executes the local Codex CLI. */
   execute?: CodexExecutor;
+}
+
+interface CodexRunResult {
+  output: unknown;
+  stderr: string;
 }
 
 export class CodexCliError extends Error {
@@ -180,7 +185,7 @@ export class CodexJsonRunner implements JsonModelRunner {
     this.execute = options.execute ?? executeCodex;
   }
 
-  async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
+  private async runWithDiagnostics(request: JsonRunRequest, signal?: AbortSignal): Promise<CodexRunResult> {
     try {
       const execute = (schemaPath?: string): Promise<{ stdout: string; stderr: string }> => this.execute(this.executable, [
         'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
@@ -193,7 +198,7 @@ export class CodexJsonRunner implements JsonModelRunner {
         throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
       }
       try {
-        return parseCodexOutput(result.stdout);
+        return { output: parseCodexOutput(result.stdout), stderr: result.stderr };
       } catch (error) {
         if (error instanceof CodexCliError && CODEX_AUTH_FAILURE.test(result.stderr)) {
           throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
@@ -207,8 +212,27 @@ export class CodexJsonRunner implements JsonModelRunner {
       const processError = classifyProcessError(error);
       if (processError.code !== 'CODEX_PROCESS_FAILED') throw processError;
       const stdout = (error as { stdout?: unknown }).stdout;
-      if (typeof stdout === 'string' && stdout.trim()) return parseCodexOutput(stdout);
+      if (typeof stdout === 'string' && stdout.trim()) {
+        const stderr = (error as { stderr?: unknown }).stderr;
+        return { output: parseCodexOutput(stdout), stderr: typeof stderr === 'string' ? stderr : '' };
+      }
       throw processError;
+    }
+  }
+
+  async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
+    return (await this.runWithDiagnostics(request, signal)).output;
+  }
+
+  async runValidated<T>(request: JsonRunRequest, parse: (raw: unknown) => T, signal?: AbortSignal): Promise<T> {
+    const result = await this.runWithDiagnostics(request, signal);
+    try {
+      return parse(result.output);
+    } catch (error) {
+      if (error instanceof ZodError && CODEX_AUTH_FAILURE.test(result.stderr)) {
+        throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
+      }
+      throw error;
     }
   }
 }
@@ -238,8 +262,7 @@ export class CodexRunner implements ModelProvider {
     let correction = false;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const raw = await this.runner.run({ prompt: codexPrompt(task, correction), schema: stageResultJsonSchemas[task.stage], strictSchema: false, deadlineMs: task.deadlineMs }, signal);
-        const result = agentResultSchema.parse(raw);
+        const result = await this.runner.runValidated({ prompt: codexPrompt(task, correction), schema: stageResultJsonSchemas[task.stage], strictSchema: false, deadlineMs: task.deadlineMs }, agentResultSchema.parse, signal);
         return result.proposal ? { ...result, proposal: { ...result.proposal, idempotencyKey: idempotencyKey(task) } } : result;
       } catch (error) {
         const details = error as { code?: unknown; name?: unknown };
