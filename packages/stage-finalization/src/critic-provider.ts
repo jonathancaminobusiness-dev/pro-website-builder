@@ -107,7 +107,7 @@ export class FakeReleaseCriticProvider implements ReleaseCriticProvider {
 }
 
 /**
- * The real critic: one Claude Code session per dimension, separate from the
+ * The real critic: one structured local-model session per dimension, separate from the
  * session that produced the document, answering with schema-closed JSON.
  * `taskId` and `dimension` are re-stamped from the task so a session cannot
  * report under another critic's name.

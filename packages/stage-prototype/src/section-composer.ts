@@ -74,7 +74,7 @@ export class FakeSectionComposer implements ComposerProvider {
   }
 }
 
-/** The real composer: one local Claude Code session per section, all of them under the scheduler's lane limit. */
+/** The real composer: one structured local-model session per section, all of them under the scheduler's lane limit. */
 export class ClaudeSectionComposer implements ComposerProvider {
   private readonly session: StructuredSession;
   constructor(options: ClaudeSessionOptions & { session?: StructuredSession } = {}) {

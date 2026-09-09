@@ -93,9 +93,9 @@ not exist yet.
 
 The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:4311`, and Vite serves the Studio on `http://127.0.0.1:5173`. `PWB_PORT` and `PWB_PREVIEW_PORT` move this server's API and preview ports — the `run:fixture` and `run:prototype` CLIs bind an ephemeral preview port instead, so several checkouts can render at once — and `VITE_API_ORIGIN` and `VITE_PREVIEW_ORIGIN` point the Studio at the moved origins. That Studio origin is the only one allowed to send state-changing requests or frame the preview; `PWB_STUDIO_ORIGIN` overrides it for the Playwright run, which serves the built Studio on `4173`. The Studio copy is pt-BR; code and technical identifiers remain English.
 
-## Real local Claude Code
+## Real local model providers
 
-CI and the fixture use `FakeModelProvider`. `PWB_MODEL_PROVIDER` selects the model provider for both `corepack pnpm --filter @pwb/server dev` and `corepack pnpm run:fixture`: `fake` (the default), `claude-code`, or `codex`. To exercise the Claude adapter, install and log in to the unmodified Claude Code binary as its owner, verify `claude --version`, then start either entry point with `PWB_MODEL_PROVIDER=claude-code`. The runner uses `execFile` with no shell, a fresh session UUID, `--no-session-persistence`, structured JSON, schema validation, deadlines, abort signals, and a denied tool list, because a worker proposes JSON and never touches the filesystem. Each `claude` invocation is capped at 7 minutes and each stage at 15 minutes (20 for finalization), so one stage can spend a first answer and a schema correction inside its budget; `PWB_STAGE_DEADLINE_MS` replaces all three stage deadlines and leaves the invocation cap alone. It never reads, stores, prints, forwards, or asks for tokens or credentials. No paid API is required by this repository.
+CI and runs without `PWB_MODEL_PROVIDER` use `FakeModelProvider`. `PWB_MODEL_PROVIDER` selects the model provider for both `corepack pnpm --filter @pwb/server dev` and `corepack pnpm run:fixture`: `fake` (the default), `claude-code`, or `codex`. To exercise the Claude adapter, install and log in to the unmodified Claude Code binary as its owner, verify `claude --version`, then start either entry point with `PWB_MODEL_PROVIDER=claude-code`. The runner uses `execFile` with no shell, a fresh session UUID, `--no-session-persistence`, structured JSON, schema validation, deadlines, abort signals, and a denied tool list, because a worker proposes JSON and never touches the filesystem. Each `claude` invocation is capped at 7 minutes and each stage at 15 minutes (20 for finalization), so one stage can spend a first answer and a schema correction inside its budget; `PWB_STAGE_DEADLINE_MS` replaces all three stage deadlines and leaves the invocation cap alone. It never reads, stores, prints, forwards, or asks for tokens or credentials. No paid API is required by this repository.
 
 The Codex adapter uses the local `codex` CLI in read-only, ephemeral mode with the exact `gpt-5.6-sol` model, `high` reasoning effort, and normal service explicitly pinned (`service_tier="standard"` plus `features.fast_mode=false`). Install Codex CLI and sign in with ChatGPT before selecting it. The adapter writes each stage schema to a temporary file, passes it to `codex exec --output-schema`, and parses the final JSONL agent message. A missing CLI or ChatGPT sign-in produces an actionable error instead of falling back to another provider. The model supports `high` reasoning effort according to [OpenAI's GPT-5.6 Sol documentation](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
 
@@ -200,9 +200,10 @@ Each transition is written to a `prototype_runs` row together with the outcome a
 
 The review only offers what the run measured: `result.viewports` is the set of widths the evidence actually carried, so the A/B comparison cannot be opened at a width the deterministic gate never looked at.
 
-## Real local Claude Code in the prototype stage
+## Real local model providers in the prototype stage
 
-`PWB_MODEL_PROVIDER=claude-code` swaps all three prototype workers at once: `ClaudeInformationArchitect`, `ClaudeSectionComposer` and `ClaudeCritiqueRunner` replace their deterministic counterparts, for both `corepack pnpm run:prototype` and `corepack pnpm --filter @pwb/server dev`. `PWB_MODEL_PROVIDER=codex` selects the same three workers through the read-only, ephemeral Codex adapter, with the model and normal service settings documented above. Each is a separate session with a fresh id, a closed JSON schema, a deadline and an abort signal. The two adapters draw their filesystem boundary differently, and the difference is worth knowing before choosing one. A Claude session adds `--no-session-persistence` and a denied tool list: a critic keeps `Read` so it can open the screenshots it was handed, and every other Claude worker is denied the filesystem and the network entirely. A Codex session is confined by the CLI's `--sandbox read-only` and `--ephemeral` instead of a tool list, so every Codex worker — the architect and the composer, not only the critic — may read the filesystem, while none of them may write to it or reach the network. No credential is read, requested, logged or stored, and no paid API is involved. CI never runs this path: it uses the deterministic providers, which produce the same typed contracts.
+`PWB_MODEL_PROVIDER=claude-code` swaps all three prototype workers at once: `ClaudeInformationArchitect`, `ClaudeSectionComposer` and `ClaudeCritiqueRunner` replace their deterministic counterparts, for both `corepack pnpm run:prototype` and `corepack pnpm --filter @pwb/server dev`. `PWB_MODEL_PROVIDER=codex` selects the same three workers through the read-only, ephemeral Codex adapter, with the model and normal service settings documented above. Each is a separate session with a fresh id, a closed JSON schema, a deadline and an abort signal. The two adapters draw their filesystem boundary differently, and the difference is worth knowing before choosing one. A Claude session adds `--no-session-persistence` and a denied tool list: a critic keeps `Read` so it can open the screenshots it was handed, and every other Claude worker is denied the filesystem and the network entirely. A Codex session is confined by the CLI's `--sandbox read-only` and `--ephemeral` instead of a tool list, so every Codex worker — the architect and the composer, not only the critic — may read the filesystem, while none of them may write to it or reach the network. No credential is read, requested, logged or stored, and no paid API is involved. CI and runs without `PWB_MODEL_PROVIDER` use the deterministic providers, which produce the same typed contracts.
+
 ## Finalization stage and Gate 3
 
 The third stage compiles the approved document into an immutable release, has it
@@ -404,7 +405,7 @@ log and the release record keep. Only the captain publishes.
 
 ### Real critic sessions
 
-CI and the fixture use the deterministic providers. `PWB_MODEL_PROVIDER=claude-code`
+CI and runs without `PWB_MODEL_PROVIDER` use the deterministic providers. `PWB_MODEL_PROVIDER=claude-code`
 switches the five critics, the patch-refiner and the release-summarizer to the
 owner's local Claude Code binary through `ClaudeJsonRunner`, which uses the same
 boundary as `ClaudeRunner`: `execFile` with no shell, a fresh session that is
@@ -418,9 +419,8 @@ PWB_MODEL_PROVIDER=claude-code corepack pnpm run:release
 
 The same variable switches the studio's Gate 3 routes when the server starts.
 
-Set `PWB_MODEL_PROVIDER=codex` to use the read-only, ephemeral Codex adapter for
-the same critics, refiner and summarizer. It uses `gpt-5.6-sol` with `high`
-reasoning effort and normal service, and requires a ChatGPT sign-in:
+Set `PWB_MODEL_PROVIDER=codex` to use the same critics, refiner and summarizer
+through the Codex adapter documented above:
 
 ```bash
 PWB_MODEL_PROVIDER=codex corepack pnpm run:release

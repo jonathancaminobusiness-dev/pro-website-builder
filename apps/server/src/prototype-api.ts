@@ -30,7 +30,7 @@ export type PrototypeRunStatus = 'queued' | 'running' | 'settled' | 'failed' | '
 /**
  * Headroom the scheduler deadline keeps over the loop's own budget. The loop reads its budget only at
  * a cycle boundary, so the abort has to outlast everything one more cycle can spend after the last
- * check: every wave of critics the claude lane admits, plus the capture matrix that precedes them.
+ * check: every wave of critics the model lane admits, plus the capture matrix that precedes them.
  * The matrix carries no deadline of its own, so this is generous headroom rather than a bound.
  */
 const CRITIC_WAVES = Math.ceil(criticRegistry.length / DEFAULT_MAX_ACTIVE_CLAUDE);

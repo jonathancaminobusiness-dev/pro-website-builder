@@ -4,7 +4,7 @@ import { ZodError } from 'zod';
 
 const execFileAsync = promisify(execFile);
 
-/** Every worker of this stage is denied the filesystem and the network; a critic keeps Read for its screenshots. */
+/** The Claude worker boundary denies the filesystem and network; a Claude critic keeps Read for its screenshots. */
 export const WORKER_DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 export const CRITIC_DENIED_TOOLS = 'Bash Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 

@@ -118,9 +118,10 @@ export class FakeCritiqueProvider implements CritiqueProvider {
 }
 
 /**
- * Runs one critic as its own local Claude Code session. The session is separate from the generator's,
- * carries no history of how the composition was made, and is allowed to read only the screenshots it
- * was handed. No credential is read, requested, logged or stored.
+ * Runs one critic as its own structured local-model session. The session is separate from the
+ * generator's, carries no history of how the composition was made, and the default Claude session is
+ * allowed to read only the screenshots it was handed. No credential is read, requested, logged or
+ * stored.
  */
 export class ClaudeCritiqueRunner implements CritiqueProvider {
   private readonly session: StructuredSession;

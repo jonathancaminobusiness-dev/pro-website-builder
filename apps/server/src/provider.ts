@@ -19,8 +19,8 @@ export function createModelProvider(name: string = 'fake'): ModelProvider {
 /**
  * The identity stage asks its workers for role-specific artefacts, so its fake
  * is a different fixture from the one the phase 0 journey uses. The real
- * adapter is the same `ClaudeRunner`: the stage carries each role's closed
- * schema in the prompt it builds.
+ * adapters are `ClaudeRunner` and `CodexRunner`: the stage carries each role's
+ * closed schema in the prompt it builds.
  */
 export function createIdentityProvider(name: string = 'fake'): ModelProvider {
   const selected = modelProviderName(name);

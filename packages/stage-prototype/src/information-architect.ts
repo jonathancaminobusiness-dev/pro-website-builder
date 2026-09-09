@@ -74,7 +74,7 @@ export class FakeInformationArchitect implements ArchitectProvider {
   }
 }
 
-/** The real architect: one local Claude Code session answering a closed JSON schema. */
+/** The real architect: one structured local-model session answering a closed JSON schema. */
 export class ClaudeInformationArchitect implements ArchitectProvider {
   private readonly session: StructuredSession;
   constructor(options: ClaudeSessionOptions & { session?: StructuredSession } = {}) {
