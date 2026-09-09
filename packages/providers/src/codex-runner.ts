@@ -167,10 +167,11 @@ export class CodexJsonRunner implements JsonModelRunner {
 
   async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
     try {
+      const prompt = `${request.prompt}\n\nReturn JSON matching this schema:\n${JSON.stringify(request.schema)}`;
       const args = [
         'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
         '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false',
-        '--json', '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, request.prompt,
+        '--json', '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, prompt,
       ];
       const result = await this.execute(this.executable, args, { cwd: this.cwd, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
       try {

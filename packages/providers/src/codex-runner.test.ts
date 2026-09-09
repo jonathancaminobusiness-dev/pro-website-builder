@@ -58,6 +58,20 @@ describe('Codex provider', () => {
     expect(prompt).toContain('artifact');
   });
 
+  it('includes the supplied JSON schema in the Codex CLI prompt', async () => {
+    let prompt = '';
+    const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] };
+    const runner = new CodexJsonRunner({
+      execute: async (_executable, args) => {
+        prompt = args.at(-1)!;
+        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'ok' }) } })}\n`, stderr: '' };
+      },
+    });
+
+    await expect(runner.run({ prompt: 'fixture', schema, deadlineMs: 1000 })).resolves.toEqual({ answer: 'ok' });
+    expect(prompt).toContain(JSON.stringify(schema));
+  });
+
   it('reports an actionable error when the Codex CLI is unavailable', async () => {
     const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_UNAVAILABLE' });
