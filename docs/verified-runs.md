@@ -1,0 +1,62 @@
+# Verified runs
+
+This page is the repository's observed verification log. It preserves the
+commands, outputs, failures, timings, and environment notes recorded while the
+system was exercised. The README remains the introduction and usage guide;
+these records are historical and tied to the commits and output paths named in
+each entry.
+
+## Render matrix
+
+Observed on 2026-09-07, with the default `fake` provider and scratch paths so the recorded `claude-code` run remained intact — `PWB_DB_PATH=.treehouse/render-matrix.sqlite PWB_EXPORT_ROOT=.treehouse/render-matrix-exports PWB_RENDER_CACHE=.treehouse/render-matrix-cache corepack pnpm run:fixture --render` — the run printed `"render": {"cases": 18, "passed": 18, "cached": 0, "failed": []}` for the fixture's three routes, and repeating the same command against the warm cache printed `"cached": 18`. That run also pinned `PWB_EXPORT_ROOT` and `PWB_PREVIEW_PORT=4319`, neither of which the CLI still reads: the release root is the only output, and the preview binds an ephemeral port so parallel checkouts never contend. When `--render` is passed, any failed render case makes the command exit `1` after printing the JSON, so a caller sees a failed matrix without comparing `passed` against `cases` itself.
+
+## Real local Claude Code
+
+Exercised against the owner's signed-in `claude 2.1.263`. What each run confirmed is recorded below; the flag and envelope contract has held since 2026-09-06, and the paragraphs after the command say which runs completed the whole journey and which did not:
+
+```bash
+PWB_MODEL_PROVIDER=claude-code corepack pnpm run:fixture
+```
+
+The adapter's contract with the binary holds: `--json-schema`, `--session-id`, `--no-session-persistence`, `--max-turns`, `--disallowed-tools` and `--output-format json` are accepted, and the proposal arrives in the envelope's top-level `structured_output`. Earlier runs corrected three things. The schema handed to `--json-schema` must be a self-contained object schema: a `$ref` root is rejected by the API (`tools.custom.input_schema.type: Field required`) and `type: [...]` unions are rejected by the CLI's strict validator, so every generated schema is emitted with `anyOf` and with `$refStrategy: 'none'`, leaving no pointer for the binary to resolve. One turn is not enough for a structured answer. A headless worker with tools enabled spends its turns exploring the filesystem instead of answering, so the runner denies them.
+
+Each stage writes only its own part of the document: the identity director writes `/identity` and `/reviewRecord`; the prototype composer writes `/pages`, `/assets`, `/stateFixtures` and `/reviewRecord`; the finalization compiler writes `/pages`, `/assets` and `/reviewRecord`. The identity is frozen once the captain approves Gate 1, so no later stage may write `/identity`. Every stage reads the whole document; only writing is narrowed. `RunPlanner` takes each task's `allowedPaths` from that same table, so `PatchGate` refuses an out-of-stage path before anything else runs.
+
+`--json-schema` carries a per-stage `AgentResult` schema built from that table: `operations` is a union in which replacing one of the stage's writable roots types `value` with the inlined subtree schema, and any other operation must address a path beneath one of those roots. `PatchGate` validates every proposal against the same per-stage Zod schema before the applier reads the document, so a wrong-shaped whole-subtree replacement is refused at the gate; a deeper write (`/identity/meta/version`, `/assets/items/0/id`) is constrained only in its path there, and its value is still validated by `designIRSchema` in the applier's dry run. The recursive DTCG token group is the one shape that cannot be inlined; `zod-to-json-schema` degrades it to `any` and says so on stderr.
+
+Two 2026-09-06 runs failed at the identity stage. Before the task carried its `documentSlice`, the applier's dry run rejected the proposal with `identity.meta: Required`; later the same day, with the slice but without the document shapes, it rejected `Expected string, received object` at `reviewRecord.findings.0` through `.3` and `reviewRecord.approvals.0`, because nothing in the contract told the worker that `designIRSchema` declares those as arrays of strings.
+
+A 2026-09-07 run against the closed `semantic` vocabulary failed at the prototype stage: the composer proposed `semantic: 'section'` on a `grid` node and on a `component` node, and a per-kind rule that pinned every non-`type` kind to `div` rejected it. The renderer emits whatever `semantic` declares, so that rule refused a document it would have rendered exactly as written; only `figure` is tied to a kind, because that is the one branch the renderer hard-codes. The rule was narrowed to that, and the command was run again. A later change pinned each stage's `stage` and `role` as constants in the schema and made a phrasing node (`h1`, `h2`, `h3`, `p`) a leaf, and the command was run once more against that contract.
+
+The last complete 2026-09-07 run of that command was against that contract, before the structural rules below were added to the prompt. It predates the finalization stage: at that commit `run:fixture` still wrote a static export of its own. Claude produced a proposal for each of the three stages, all three passed the patch gate and the applier's dry run on attempt 1, and the captain gate approved each one: the event log holds `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization`, with no `task.failed`, and ends at `run.finished` carrying the export digest. The database holds 3 patches, 3 tasks, 3 approvals and 4 versions (root plus one per stage), each task at attempt 1, and each patch declares the stage and role of the task that produced it (`identity/director`, `prototype/composer`, `finalization/compiler`). The command exited 0 and wrote `index.html`, `proof/index.html`, `contact/index.html` and `manifest.json` under `exports/<digest>/`. That run's identity stage replaced `/reviewRecord`, the prototype stage replaced `/pages` as a whole subtree, and the finalization stage appended a node at `/pages/routes/0/nodes/-`.
+
+`zod-to-json-schema` cannot express a `superRefine`, so the structural rules in `documentRules` — the media/figure pairing, the phrasing leaf rule, page-graph reachability and node id uniqueness, page id/route uniqueness, the token role and CSS-emittable token rules, the rule that every token alias and every visual prop reference names a token path the identity defines, and the asset rules (only a media node declares `assetId`, it names an asset the document lists, and a ready asset carries alt text and a `data:` URI) — reach the worker as prompt text built from that same object the gate quotes in its rejection messages. The one visual-prop rule a JSON Schema can carry is machine-enforced instead: a node prop is typed as a token reference (`"type": "string"` with `"pattern": "^\\{[^}]+\\}$"`), so the constraint now travels to the binary in the schema itself rather than only as prose, and the gate refuses a raw literal such as `700` or `#d86445` quoting that same rule. What the binary does with a `pattern` while decoding has not been observed here and is not claimed; the run recorded below says what was seen. Three runs of the command on 2026-09-07 after that line was added were aborted by the then 5-minute per-stage deadline rather than reaching a gate: the first after the identity stage was approved and while the prototype stage was running, the other two during the identity stage, each leaving `task.started` as the last event and no patch committed. The cause was local, not the contract: `claude -p 'Reply with the single word: ok' --output-format json --max-turns 1` reported `duration_ms: 3390` for the API call and took 1m47s of wall clock, so roughly 100s of per-invocation process overhead was consuming the budget. The stage deadlines were then sized to hold two full runner invocations (15/15/20 minutes against a 7-minute runner timeout).
+
+The next 2026-09-07 run of the command, with those deadlines and the contract as of commit `018ec55`, completed the whole journey. Every stage passed on attempt 1: the event log runs `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization` with no `task.failed`, and ends at `run.finished`. The database holds 3 patches, 3 tasks, 3 approvals and 4 versions, and each patch declares its own task's stage and role (`identity/director` writing `/reviewRecord`, `prototype/composer` replacing `/pages`, `finalization/compiler` writing `/pages/routes/0/nodes/44/id`). The command exited 0. The composer proposed a fourth page, so the export under `exports/<digest>/` carries `index.html`, `process/index.html`, `proof/index.html`, `contact/index.html` and `manifest.json` — the route list the run printed was `/`, `/process`, `/proof`, `/contact`.
+
+The same command was run again on 2026-09-07 at commit `c067ebe`, the first head that hands the binary a `pattern` for every visual prop:
+
+```bash
+PWB_MODEL_PROVIDER=claude-code corepack pnpm run:fixture
+```
+
+It completed the whole journey and exited 0, printing `"status": "succeeded"` with the route list `/`, `/proof`, `/contact`; wall clock was 11m43s (18:48:24Z to 19:00:07Z), split 1m58s for identity, 6m54s for prototype and 2m50s for finalization, all inside the 15/15/20-minute stage deadlines. Every stage passed on attempt 1: the database holds 3 tasks each at attempt 1, 3 patches, 3 approvals and 4 versions, and the 22-event log runs `task.queued`, `task.started`, `patch.applied`, `version.created`, `task.succeeded` and `approval.recorded` for `identity`, `prototype` and `finalization` with no `task.failed`, ending at `run.finished`. Each patch declared its own task's stage and role — `identity/director` touching `/reviewRecord`, `prototype/composer` and `finalization/compiler` touching `/pages`, `/assets` and `/reviewRecord`. The export under `exports/1cc32d2d.../` carries `index.html`, `proof/index.html`, `contact/index.html` and `manifest.json`.
+
+That run is what the `pattern` claim rests on, and no more: the binary's strict schema validator accepted the per-stage schema carrying it (all sixteen visual props emitted as `"type": "string"` with `"pattern": "^\{[^}]+\}$"`), and the approved document holds 174 visual props, every one of them a token reference, so the gate had no raw literal to refuse. Whether the API constrained decoding by that `pattern` or the worker simply followed the contract was not distinguished; no run has been observed in which the two disagree.
+
+Those runs are records of the commits they were made at, and `exports/<digest>/` is where that version of the command wrote. Neither directory nor exit code is what the command produces now: there is one publish path, it writes the content-addressed bundle under `PWB_RELEASE_ROOT` (default `releases/`), and `run:fixture` stops at Gate 3 and exits non-zero whenever the report carries a veto or an open escalation — which it does until the evidence runners have measured that exact bundle.
+
+## Release evidence
+
+With the seeded face the parity artifacts record `faces: 1` on each engine, against `routes: 3` and `differences: 0`.
+
+All three engines always run. On the macOS 27.0 host this was developed on,
+Playwright's Firefox 153 build does not start — it times out after
+`sandbox_extension_issue_file_to_process ... Operation not permitted`, an
+operating-system sandbox restriction rather than a missing dependency — so that
+run leaves no Firefox artifact, and the gate escalates "Nenhuma execução
+Playwright em firefox". Firefox is measured where it does start: the
+`release-evidence` job in `.github/workflows/ci.yml` installs the three engines
+on `ubuntu-latest`, runs `corepack pnpm run:evidence` and uploads
+`artifacts/release`, so the captain reads the engine's own artifacts instead of
+a local run pretending it ran.
