@@ -5,6 +5,9 @@ import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { approvalOf, identityHash, identityLint, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
+import { IDENTITY_BRIEFING } from './identity-briefing.js';
+
+export { IDENTITY_BRIEFING } from './identity-briefing.js';
 
 const duplicateCodes = new Set(['SQLITE_CONSTRAINT_PRIMARYKEY', 'SQLITE_CONSTRAINT_UNIQUE']);
 async function ignoringDuplicate(write: Promise<void>): Promise<void> {
@@ -13,8 +16,6 @@ async function ignoringDuplicate(write: Promise<void>): Promise<void> {
     if (!duplicateCodes.has(code)) throw error;
   }
 }
-
-export const IDENTITY_BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A promessa é clareza com personalidade e a prova é o registro de cada decisão. Exclusão declarada: nada que pareça um SaaS genérico de template.';
 
 export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'reopened' | 'interrupted' | 'failed';
 
@@ -101,8 +102,10 @@ export class IdentityRun {
   private inFlight: Promise<void> | undefined;
   private settling: Promise<void> | undefined;
   private abort: AbortController | undefined;
+  private briefing: string;
 
   constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string }) {
+    this.briefing = options.briefing ?? IDENTITY_BRIEFING;
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
     this.rendered.set(this.root.id, renderDesign(this.root.ir));
@@ -119,7 +122,7 @@ export class IdentityRun {
     return new IdentityStage({
       runId: this.options.runId,
       baseVersionId: this.root.id,
-      briefing: this.options.briefing ?? IDENTITY_BRIEFING,
+      briefing: this.briefing,
       provider: this.options.provider,
       store: this.store,
       ...(this.options.scheduler ? { scheduler: this.options.scheduler } : {}),
@@ -130,7 +133,7 @@ export class IdentityRun {
 
   async initialize(): Promise<void> {
     await ignoringDuplicate(this.options.repository.createProject({ id: this.projectId, name: 'Identity stage project' }));
-    await ignoringDuplicate(this.options.repository.createRun({ id: this.options.runId, projectId: this.projectId }));
+    await ignoringDuplicate(this.options.repository.createRun({ id: this.options.runId, projectId: this.projectId, briefing: this.briefing }));
     await ignoringDuplicate(this.options.repository.saveVersion({ id: this.root.id, projectId: this.projectId, hash: this.root.hash, ir: this.root.ir }));
   }
 
@@ -143,6 +146,8 @@ export class IdentityRun {
   async restore(): Promise<boolean> {
     const run = await this.options.repository.getRun(this.options.runId);
     if (!run) return false;
+    this.briefing = run.briefing ?? IDENTITY_BRIEFING;
+    this.stage = this.newStage();
     for (const version of await this.options.repository.listVersions(run.projectId)) {
       if (this.store.get(version.id)) continue;
       this.store.save({ id: version.id, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir });
@@ -337,7 +342,7 @@ export class IdentityRun {
       projectId: this.projectId,
       status: this.status,
       baseVersionId: this.root.id,
-      briefing: this.options.briefing ?? IDENTITY_BRIEFING,
+      briefing: this.briefing,
       ...(this.result ? { brief: this.result.brief } : {}),
       directions: this.result ? this.result.candidates.map((candidate) => this.viewOf(candidate, decided === candidate.directionId ? this.store.get(this.stage.approvedVersionId!) : undefined)) : [],
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),

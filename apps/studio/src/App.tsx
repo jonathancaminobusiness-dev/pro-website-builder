@@ -158,7 +158,7 @@ export default function App() {
     return () => { dropped = true; clearTimeout(timer); };
   }, [acceptIdentityRun, following, identity, identityGet, running, spent]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
-  const createIdentityRun = () => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }));
+  const createIdentityRun = (briefing?: string) => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...(briefing === undefined ? {} : { briefing }) }));
   const startIdentityRun = (): void => {
     if (!identity) return;
     setStartingRun(true);

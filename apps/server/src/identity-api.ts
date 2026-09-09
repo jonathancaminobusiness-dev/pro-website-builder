@@ -4,10 +4,11 @@ import { tokenValueSchema } from '@pwb/domain';
 import { StageError } from '@pwb/stage-identity';
 import { RunConflictError } from './run-conflict.js';
 import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
+import { IDENTITY_BRIEFING_MAX_LENGTH } from './identity-briefing.js';
 
 export interface IdentityApiOptions {
   runs: Map<string, IdentityRun>;
-  createRun: (id: string) => Promise<IdentityRun>;
+  createRun: (id: string, briefing?: string) => Promise<IdentityRun>;
   /** Rebuilds a run this process never held, so a restart does not lose an open Gate 1. */
   loadRun?: (id: string) => Promise<IdentityRun | undefined>;
 }
@@ -46,11 +47,18 @@ export async function handleIdentityRequest(
   if (request.method === 'POST' && pathname === '/api/identity/runs') {
     const input = await body(request);
     const runId = typeof input.runId === 'string' ? input.runId : `identity-${randomUUID()}`;
+    let briefing: string | undefined;
+    if (Object.prototype.hasOwnProperty.call(input, 'briefing')) {
+      if (typeof input.briefing !== 'string') { send(400, { error: 'O briefing deve ser um texto.' }); return true; }
+      briefing = input.briefing.trim();
+      if (briefing.length === 0) { send(400, { error: 'O briefing é obrigatório e não pode estar vazio.' }); return true; }
+      if (briefing.length > IDENTITY_BRIEFING_MAX_LENGTH) { send(400, { error: `O briefing não pode ter mais de ${IDENTITY_BRIEFING_MAX_LENGTH} caracteres.` }); return true; }
+    }
     // A run that is only on disk exists just as much as one this process holds:
     // creating over it would hand the captain an empty run under a decided id.
     if (options.runs.has(runId) || await resolve(options, runId)) { send(409, { error: `Run ${runId} already exists.` }); return true; }
     let created: IdentityRun;
-    try { created = await options.createRun(runId); }
+    try { created = await options.createRun(runId, briefing); }
     catch (error) { if (error instanceof RunConflictError) { send(409, { error: error.message }); return true; } throw error; }
     send(201, created.snapshot());
     return true;
