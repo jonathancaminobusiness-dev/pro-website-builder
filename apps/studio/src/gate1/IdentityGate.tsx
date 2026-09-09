@@ -175,7 +175,6 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       <p>A execução <code>{props.unreachableRunId}</code> não pôde ser lida agora. Ela continua registrada no servidor; a decisão e as versões dela não se perderam.</p>
       <button className="primary" onClick={props.onRetry} disabled={props.busy}>{props.busy ? 'Lendo…' : 'Tentar novamente'}</button>
       {openRunForm('Abrir outra execução')}
-      {createConfirm(props.unreachableRunId, 'Criar execução nova')}
     </div>}
 
     {snapshot && <>
