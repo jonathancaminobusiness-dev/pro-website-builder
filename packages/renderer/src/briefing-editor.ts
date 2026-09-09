@@ -1,6 +1,6 @@
 /**
- * The Studio supplies its element factory so this package can own the editor's
- * structure without taking a DOM or React dependency.
+ * The Studio supplies its element factory so this package can own the briefing
+ * editor and its controls without taking a DOM or React dependency.
  */
 export interface BriefingEditorElementFactory<Element> {
   createElement(type: 'button' | 'code' | 'div' | 'label' | 'textarea' | 'small' | 'span', props: Record<string, unknown> | null, ...children: Array<Element | string>): Element;
