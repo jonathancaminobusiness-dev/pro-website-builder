@@ -13,7 +13,8 @@ import {
 /**
  * A revision with a known defect, so the loop is never only shown clean input: the grid grammar declares
  * a beat the identity's own spacing roles cannot land on, and every section inherits spacing off it.
- * It lives here because it is a test fixture; the product itself runs one briefing and one mode.
+ * It lives here because it is a test fixture; this prototype-stage fixture runs
+ * one fixed briefing and one mode, while Gate 1 supplies a briefing per run.
  */
 function createOffRhythmControlIR(): DesignIR {
   const ir = createFixtureIR();
