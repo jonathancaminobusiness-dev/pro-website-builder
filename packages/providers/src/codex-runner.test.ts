@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentTask } from '@pwb/domain';
 import { CODEX_MODEL, CODEX_REASONING_EFFORT, CodexJsonRunner, CodexRunner } from './index.js';
@@ -76,6 +76,27 @@ describe('Codex provider', () => {
 
       await expect(runner.run({ prompt: 'fixture', schema, deadlineMs: 1000 })).resolves.toEqual({ answer: 'ok' });
       expect(args).toEqual(expect.arrayContaining(['--output-schema', expect.any(String)]));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('opens a direct schema when the configured cwd is relative', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pwb-codex-relative-cwd-'));
+    const script = join(directory, 'codex-fixture.mjs');
+    const executable = join(directory, 'codex-fixture');
+    await writeFile(script, [
+      "import { readFile } from 'node:fs/promises';",
+      "const schemaIndex = process.argv.indexOf('--output-schema');",
+      "if (schemaIndex < 0) process.exit(2);",
+      "await readFile(process.argv[schemaIndex + 1], 'utf8');",
+      "console.log(JSON.stringify({type: 'item.completed', item: {type: 'agent_message', text: JSON.stringify({answer: 'ok'})}}));",
+    ].join('\n'), 'utf8');
+    await writeFile(executable, `#!/bin/sh\nexec ${process.execPath} ${script} "$@"\n`, 'utf8');
+    await chmod(executable, 0o755);
+    try {
+      const runner = new CodexJsonRunner({ executable, cwd: relative(process.cwd(), directory), timeoutMs: 1_000 });
+      await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1_000 })).resolves.toEqual({ answer: 'ok' });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

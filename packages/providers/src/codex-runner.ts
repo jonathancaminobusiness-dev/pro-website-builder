@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { ZodError } from 'zod';
 import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { JsonModelRunner, JsonRunRequest } from './json-runner.js';
@@ -175,7 +175,7 @@ export class CodexJsonRunner implements JsonModelRunner {
 
   constructor(options: CodexJsonRunnerOptions = {}) {
     this.executable = options.executable ?? 'codex';
-    this.cwd = options.cwd ?? process.cwd();
+    this.cwd = resolve(options.cwd ?? process.cwd());
     this.timeoutMs = options.timeoutMs ?? CODEX_RUNNER_TIMEOUT_MS;
     this.execute = options.execute ?? executeCodex;
   }

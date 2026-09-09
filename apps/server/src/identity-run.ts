@@ -28,6 +28,20 @@ export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approve
 const CHECKPOINT_EVENT = 'identity.run.checkpoint';
 interface IdentityCheckpoint { currentVersionId?: string; assets?: IdentityAsset[]; result: IdentityStageResult }
 
+function mergeFailures(...groups: Array<Array<{ taskId: string; reason: string }>>): Array<{ taskId: string; reason: string }> {
+  const merged: Array<{ taskId: string; reason: string }> = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const failure of group) {
+      const key = `${failure.taskId}\u0000${failure.reason}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({ ...failure });
+    }
+  }
+  return merged;
+}
+
 const INTERRUPTED = 'The server restarted while the identity stage was running, so that fan-out was lost. Start the stage again.';
 
 /** What the Gate 1 screen reads: three directions side by side, with everything the captain needs to decide. */
@@ -343,7 +357,7 @@ export class IdentityRun {
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),
       critiques: this.result?.critiques ?? [],
       setCritique: this.result?.setCritique ?? { scores: [], rubricGaps: [], unscoredDimensions: [], blocking: [], abstained: false },
-      failures: this.result?.failures ?? (this.restoredFailures.length > 0 ? this.restoredFailures : this.stage.recordedFailures),
+      failures: mergeFailures(this.result?.failures ?? [], this.restoredFailures, this.stage.recordedFailures),
       gate,
       approvals: structuredClone(this.approvals),
       assets: structuredClone(this.assets),

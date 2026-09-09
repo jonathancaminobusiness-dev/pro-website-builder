@@ -420,6 +420,31 @@ describe('identity run', () => {
     expect(reopened.gate.state).toBe('reopened');
   });
 
+  it('merges raster failures recorded after the approval checkpoint when restoring', async () => {
+    const repository = new ProjectRepository(database);
+    const runId = 'identity-raster-failure-restore';
+    const first = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    await first.initialize();
+    await first.start();
+    const approved = await first.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
+    expect(approved.gate.state).toBe('closed');
+
+    // Simulate the raster lane persisting its failure after the approval checkpoint
+    // but before the follow-up imagery checkpoint could be written.
+    await repository.appendEvent({
+      id: 'identity-raster-failure-after-checkpoint',
+      runId,
+      type: 'identity.task.failed',
+      payload: { taskId: 'identity-imagery-modular-technical-texture-01', role: 'art-director', reason: 'The MCP tool answered with no image.' },
+    });
+
+    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    expect(restored.snapshot().failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'identity-imagery-modular-technical-texture-01', reason: 'The MCP tool answered with no image.' }),
+    ]));
+  });
+
   it('comes back interrupted when the process ended while the stage was running', async () => {
     const repository = new ProjectRepository(database);
     let release = (): void => {};

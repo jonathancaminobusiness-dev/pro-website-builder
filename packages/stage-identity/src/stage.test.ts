@@ -953,7 +953,7 @@ describe('image art director', () => {
   it('asks again for an image the provider named no uri for, under the same digest', async () => {
     const calls: Array<Record<string, unknown>> = [];
     let uri: string | undefined;
-    const { stage } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { ...(uri ? { uri } : {}), license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
+    const { stage, events } = harness({ raster: { configured: true, transport: { callTool: async (_name, args) => { calls.push(args); return { ...(uri ? { uri } : {}), license: 'provider terms 2026', termsNote: 'Owner review required.' }; } } } });
     await stage.run();
     // The MCP accepted the prompt and named no image, which is a recorded
     // failure the captain can see, never a placeholder that looks unfinished.
@@ -962,6 +962,10 @@ describe('image art director', () => {
     const first = stage.approvedImagery;
     expect(first.map((asset) => asset.status)).toEqual(['failed']);
     expect(first[0]?.provenance.termsNote).toMatch(/no image/);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'identity.task.failed',
+      payload: expect.objectContaining({ taskId: 'identity-imagery-modular-technical-texture-01', role: 'art-director', reason: expect.stringMatching(/no image/) }),
+    }));
 
     uri = 'higgsfield://asset-1';
     await stage.changeToken({ tokenPath: 'color.accent', value: '#ff7a00', rationale: 'Sinal mais quente.' });

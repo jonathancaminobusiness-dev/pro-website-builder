@@ -849,9 +849,18 @@ export class IdentityStage {
       this.imageryAborts.delete(controller);
 
       for (const entry of outcome.results) {
-        if (entry.state === 'succeeded' && entry.value) { this.replaceAsset(entry.value.asset); continue; }
+        if (entry.state === 'succeeded' && entry.value) {
+          this.replaceAsset(entry.value.asset);
+          if (entry.value.job.status === 'failed') {
+            const reason = entry.value.job.error ?? entry.value.asset.provenance.termsNote ?? 'The raster job failed.';
+            this.failures.push({ taskId: entry.task.id, reason });
+            await this.record('identity.task.failed', { taskId: entry.task.id, role: entry.task.role, reason });
+          }
+          continue;
+        }
         const reason = entry.error instanceof Error ? entry.error.message : `Task ${entry.task.id} ended as ${entry.state}.`;
         this.failures.push({ taskId: entry.task.id, reason });
+        await this.record('identity.task.failed', { taskId: entry.task.id, role: entry.task.role, reason });
         const failed = this.failedAsset(entry.task.id, reason);
         if (failed) this.replaceAsset(failed);
       }
