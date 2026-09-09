@@ -169,7 +169,7 @@ export class CodexJsonRunner implements JsonModelRunner {
       try {
         return parseCodexOutput(result.stdout);
       } catch (error) {
-        if (error instanceof CodexCliError && error.code === 'SCHEMA_INVALID' && CODEX_AUTH_FAILURE.test(result.stderr)) {
+        if (error instanceof CodexCliError && CODEX_AUTH_FAILURE.test(result.stderr)) {
           throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
         }
         throw error;

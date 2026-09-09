@@ -70,6 +70,16 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED', message: expect.stringMatching(/codex login/i) });
   });
 
+  it('surfaces a sign-in failure after a failed JSONL turn', async () => {
+    const runner = new CodexJsonRunner({
+      execute: async () => ({
+        stdout: `${JSON.stringify({ type: 'turn.failed', error: { message: 'request failed' } })}\n`,
+        stderr: 'Codex requires ChatGPT sign-in.',
+      }),
+    });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED', message: expect.stringMatching(/codex login/i) });
+  });
+
   it('keeps a valid terminal answer despite incidental auth-like stderr', async () => {
     const runner = new CodexJsonRunner({
       execute: async () => ({
