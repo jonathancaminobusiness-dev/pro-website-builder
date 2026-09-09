@@ -31,6 +31,25 @@ function newRun(runId = 'identity-test'): IdentityRun {
 }
 
 describe('identity run', () => {
+  it('passes the exact execution briefing to the curator and exposes it in the snapshot', async () => {
+    const briefing = 'Nicho de cerâmica autoral para oficinas de bairro.';
+    const inner = new FakeIdentityProvider();
+    let curatorPrompt = '';
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-curator') curatorPrompt = task.brief;
+        return inner.propose(task, signal);
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-custom-briefing', repository: new ProjectRepository(database), provider, briefing });
+    await run.initialize();
+
+    const snapshot = await run.start();
+
+    expect(snapshot.briefing).toBe(briefing);
+    expect(curatorPrompt).toContain(briefing);
+  });
+
   it('spends no model turn until the captain starts it', async () => {
     const run = newRun();
     await run.initialize();
@@ -484,7 +503,7 @@ describe('identity run', () => {
     const now = new Date().toISOString();
     seeding.sqlite.prepare('INSERT INTO projects VALUES (?, ?, ?)').run('fixture-project', 'Fixture', now);
     seeding.sqlite.prepare('INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)').run('v-legacy', 'fixture-project', null, 'hash-legacy', JSON.stringify(legacy), now);
-    seeding.sqlite.prepare('INSERT INTO runs VALUES (?, ?, ?)').run('identity-legacy', 'fixture-project', now);
+    seeding.sqlite.prepare('INSERT INTO runs (id, project_id, created_at) VALUES (?, ?, ?)').run('identity-legacy', 'fixture-project', now);
     seeding.sqlite.pragma('user_version = 2');
     seeding.sqlite.close();
 

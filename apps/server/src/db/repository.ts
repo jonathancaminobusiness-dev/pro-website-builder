@@ -1,20 +1,22 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { designIRSchema, hashJson, imagerySourceSchema, RASTER_IMAGERY_SOURCE, type AgentTask, type Approval, type DesignIR, type ImagerySource, type Patch } from '@pwb/domain';
+import { IDENTITY_BRIEFING } from '../identity-briefing.js';
 import * as schema from './schema.js';
 
 export interface LocalDatabase { sqlite: Database.Database; orm: BetterSQLite3Database<typeof schema>; }
+const sqlIdentityBriefing = IDENTITY_BRIEFING.replaceAll("'", "''");
 const migration = `PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, parent_id TEXT, hash TEXT NOT NULL, ir TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, briefing TEXT NOT NULL DEFAULT '${sqlIdentityBriefing}', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tasks (id TEXT NOT NULL, run_id TEXT NOT NULL, attempt INTEGER NOT NULL, stage TEXT NOT NULL, role TEXT NOT NULL, state TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (run_id, id, attempt));
 CREATE TABLE IF NOT EXISTS patches (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, project_id TEXT NOT NULL, stage TEXT NOT NULL, approver_role TEXT NOT NULL, version_id TEXT NOT NULL, version_hash TEXT NOT NULL, decision TEXT NOT NULL, rationale TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS prototype_runs (id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL, step TEXT NOT NULL, detail TEXT NOT NULL, error TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL);`;
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export function openDatabase(filename: string): LocalDatabase {
   const sqlite = new Database(filename);
@@ -27,8 +29,15 @@ export function openDatabase(filename: string): LocalDatabase {
   if (current < 2) sqlite.exec('DROP TABLE IF EXISTS tasks; DROP TABLE IF EXISTS runs; DROP TABLE IF EXISTS assets;');
   sqlite.exec(migration);
   if (current < 3) sqlite.transaction(() => renameImagerySources(sqlite))();
+  if (current < 4) sqlite.transaction(() => addRunBriefing(sqlite))();
   sqlite.pragma(`user_version = ${SCHEMA_VERSION}`);
   return { sqlite, orm: drizzle(sqlite, { schema }) };
+}
+
+function addRunBriefing(sqlite: Database.Database): void {
+  const columns = sqlite.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === 'briefing')) return;
+  sqlite.exec(`ALTER TABLE runs ADD COLUMN briefing TEXT NOT NULL DEFAULT '${sqlIdentityBriefing}'`);
 }
 
 /**
@@ -72,7 +81,7 @@ interface ApprovalInput { id: string; runId: string; projectId: string; stage: '
 interface EventInput { id: string; runId: string; type: string; payload: Record<string, unknown>; }
 /** A Gate 2 run as it survives a restart: its progress in columns, its review in the payload. */
 export interface PrototypeRunRow { id: string; status: string; step: string; detail: string; error?: string; startedAt: string; updatedAt: string; payload: Record<string, unknown>; }
-interface RunInput { id: string; projectId: string; }
+interface RunInput { id: string; projectId: string; briefing?: string; }
 
 export class ProjectRepository {
   private writer = Promise.resolve();
@@ -80,7 +89,7 @@ export class ProjectRepository {
 
   private write<T>(operation: () => T): Promise<T> { const next = this.writer.then(operation); this.writer = next.then(() => undefined, () => undefined); return next; }
   async createProject(input: ProjectInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.projects).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
-  async createRun(input: RunInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.runs).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
+  async createRun(input: RunInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.runs).values({ id: input.id, projectId: input.projectId, briefing: input.briefing ?? IDENTITY_BRIEFING, createdAt: new Date().toISOString() }).run(); }); }
   async saveTask(task: AgentTask, runId: string): Promise<void> { await this.write(() => { this.db.orm.insert(schema.tasks).values({ id: task.id, runId, attempt: task.attempt, stage: task.stage, role: task.role, state: task.state, baseVersionId: task.baseVersionId, payload: JSON.stringify(task) }).run(); }); }
   async savePatch(patch: Patch, runId: string): Promise<void> { await this.write(() => { this.db.orm.insert(schema.patches).values({ id: hashJson(patch), runId, baseVersionId: patch.baseVersionId, payload: JSON.stringify(patch), createdAt: new Date().toISOString() }).run(); }); }
   async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(designIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }
@@ -100,8 +109,8 @@ export class ProjectRepository {
     });
   }
 
-  async getRun(runId: string): Promise<{ id: string; projectId: string } | undefined> {
-    const row = this.db.sqlite.prepare('SELECT id, project_id AS projectId FROM runs WHERE id = ?').get(runId) as { id: string; projectId: string } | undefined;
+  async getRun(runId: string): Promise<{ id: string; projectId: string; briefing: string } | undefined> {
+    const row = this.db.sqlite.prepare('SELECT id, project_id AS projectId, briefing FROM runs WHERE id = ?').get(runId) as { id: string; projectId: string; briefing: string } | undefined;
     return row;
   }
 

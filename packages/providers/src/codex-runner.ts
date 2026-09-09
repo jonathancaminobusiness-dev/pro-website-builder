@@ -204,6 +204,12 @@ export class CodexJsonRunner implements JsonModelRunner {
       const details = error as { code?: unknown; name?: unknown };
       if (details.code === 'ABORT_ERR' || details.name === 'AbortError') throw error;
       if (error instanceof CodexCliError) throw error;
+      const stderr = (error as { stderr?: unknown }).stderr;
+      // A non-zero Codex exit may leave incidental or malformed JSON on stdout,
+      // but an auth diagnostic on stderr is still the actionable outcome.
+      if (typeof stderr === 'string' && CODEX_AUTH_FAILURE.test(stderr)) {
+        throw classifyProcessError({ code: 'CODEX_AUTH', stderr });
+      }
       const processError = classifyProcessError(error);
       if (processError.code !== 'CODEX_PROCESS_FAILED') throw processError;
       const stdout = (error as { stdout?: unknown }).stdout;

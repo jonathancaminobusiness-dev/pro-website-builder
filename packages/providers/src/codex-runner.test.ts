@@ -193,6 +193,30 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED' });
   });
 
+  it('preserves an authentication failure when a non-zero exit contains incidental stdout', async () => {
+    let calls = 0;
+    const runner = new CodexJsonRunner({
+      execute: async () => {
+        calls += 1;
+        throw Object.assign(new Error('Codex exited'), { code: 'EIO', stdout: 'not-json\n', stderr: 'Codex requires ChatGPT sign-in.' });
+      },
+    });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED' });
+    expect(calls).toBe(1);
+  });
+
+  it('does not retry a schema correction over an authentication failure with stdout', async () => {
+    let calls = 0;
+    const provider = new CodexRunner({
+      execute: async () => {
+        calls += 1;
+        throw Object.assign(new Error('Codex exited'), { code: 'EIO', stdout: 'not-json\n', stderr: 'Codex requires ChatGPT sign-in.' });
+      },
+    });
+    await expect(provider.propose(task)).resolves.toMatchObject({ status: 'failed', errorCode: 'CODEX_AUTH_REQUIRED' });
+    expect(calls).toBe(1);
+  });
+
   it('does not accept an earlier answer when a non-zero exit reports a terminal failure', async () => {
     const stdout = [
       { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'earlier' }) } },

@@ -2,6 +2,7 @@ export * from './agent.js';
 export * from './color.js';
 export * from './divergence.js';
 export * from './approval.js';
+export * from './briefing.js';
 export * from './fixture.js';
 export * from './font-manifest.js';
 export * from './identity.js';

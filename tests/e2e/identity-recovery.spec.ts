@@ -33,17 +33,8 @@ test('a decided run survives an API outage and is reopened from the screen', asy
   await expect(recovery).toContainText(runId);
   await expect(recovery.getByRole('button', { name: 'Tentar novamente' })).toBeVisible();
   await expect(recovery.getByRole('button', { name: 'Criar execução de identidade' })).toHaveCount(0);
+  await expect(recovery.getByRole('button', { name: 'Criar execução nova' })).toHaveCount(0);
   await expect(recovery.getByLabel('Abrir outra execução')).toBeVisible();
-
-  // Creating a new run costs the remembered id, so it takes a second decision.
-  await recovery.getByRole('button', { name: 'Criar execução nova' }).click();
-  await expect(recovery).toContainText('Uma execução nova substitui');
-  await recovery.getByRole('button', { name: 'Manter esta execução' }).click();
-  await expect(recovery).toContainText(runId);
-
-  // A question left unanswered here is not carried to the screen that follows.
-  await recovery.getByRole('button', { name: 'Criar execução nova' }).click();
-  await expect(recovery).toContainText('Uma execução nova substitui');
 
   await page.unroute('**/api/identity/**');
   await recovery.getByRole('button', { name: 'Tentar novamente' }).click();
