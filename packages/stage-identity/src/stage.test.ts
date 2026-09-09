@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createFixtureIR, flattenTokens, type AgentResult, type AgentTask } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
-import { IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
+import { defaultIdentityDeadlines, IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
 import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
@@ -55,6 +55,24 @@ describe('identity stage fan-out', () => {
     }
     // The base version still holds the identity it started with: no branch was merged into it.
     expect(store.get(baseVersionId)!.ir.identity.meta.id).toBe('fixture-identity');
+  });
+
+  it('gives Codex identity directors the full invocation window', async () => {
+    const inner = new FakeIdentityProvider();
+    const directorDeadlines: number[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.role === 'director') directorDeadlines.push(task.deadlineMs);
+        return inner.propose(task, signal);
+      },
+    };
+    const { stage } = harness({ provider });
+
+    await stage.run();
+
+    expect(directorDeadlines).toHaveLength(3);
+    expect(new Set(directorDeadlines)).toEqual(new Set([defaultIdentityDeadlines.director]));
+    expect(defaultIdentityDeadlines.director).toBe(7 * 60_000);
   });
 
   it('passes DIV-030 and ID-003 for every direction, and each one still renders', async () => {
