@@ -94,11 +94,11 @@ export function parseCodexOutput(stdout: string): unknown {
       failureMessage = errorMessage(event.error) ?? errorMessage(event) ?? `Codex emitted ${String(event.type)}.`;
     }
   }
+  if (failureMessage !== undefined) throw classifyProcessError({ code: 'CODEX_PROCESS_FAILED', stderr: failureMessage });
   if (sawAgentMessage) {
     if (finalAgentMessage !== undefined) return finalAgentMessage;
     throw new CodexCliError('SCHEMA_INVALID', 'Codex did not return a final JSON message matching the requested schema.');
   }
-  if (failureMessage) throw classifyProcessError({ code: 'CODEX_PROCESS_FAILED', stderr: failureMessage });
   if (responseCandidate !== undefined) return responseCandidate;
   const direct = lines.length === 1 ? parseJsonText(lines[0]!) : undefined;
   if (direct !== undefined) {

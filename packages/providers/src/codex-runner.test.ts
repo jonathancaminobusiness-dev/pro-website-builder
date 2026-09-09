@@ -172,6 +172,15 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED' });
   });
 
+  it('does not accept an earlier answer when a non-zero exit reports a terminal failure', async () => {
+    const stdout = [
+      { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'earlier' }) } },
+      { type: 'turn.failed', error: {} },
+    ].map((event) => JSON.stringify(event)).join('\n');
+    const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error('Codex exited'), { code: 'EIO', stdout, stderr: '' }); } });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
+  });
+
   it('retries a schema correction when malformed JSONL was captured on stdout after a non-zero exit', async () => {
     let calls = 0;
     const malformed = `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'not-json' } })}\n`;
