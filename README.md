@@ -308,9 +308,9 @@ have, so a run never inherits an earlier run's evidence in silence. An artifact
 that measured the same bytes from a different document is credited and the
 difference is named, because that is what the refiner recording a finding does.
 
-The observed release-engine evidence is recorded in [Verified runs](docs/verified-runs.md). Publishing over an open escalation takes a written
-reason from the captain, recorded in the run's log as `release.published` and in
-the release record beside the bundle. The manifest inside the bundle is a pure
+The observed release-engine evidence is recorded in [Verified runs](docs/verified-runs.md).
+
+Publishing over an open escalation takes a written reason from the captain, recorded in the run's log as `release.published` and in the release record beside the bundle. The manifest inside the bundle is a pure
 function of the compiled bytes and the toolchain — it names no document, no
 version, no publication and no path on the machine that compiled it — so writing
 the same bytes again is an idempotent success that appends a second entry to
