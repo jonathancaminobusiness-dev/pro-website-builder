@@ -65,7 +65,7 @@ export const IDENTITY_READABLE_PATHS = ['/identity', '/pages', '/assets', '/revi
 export const IDENTITY_TASK_SCOPE: TaskScope = { allowedPaths: IDENTITY_ALLOWED_PATHS, stage: 'identity', role: stageRoles.identity };
 
 export interface IdentityStageDeadlines { curator: number; director: number; critic: number; refiner: number; artDirector: number; raster: number; }
-export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 5 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000, raster: 5 * 60_000 };
+export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 7 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000, raster: 5 * 60_000 };
 
 export interface IdentityStageOptions {
   runId: string;
