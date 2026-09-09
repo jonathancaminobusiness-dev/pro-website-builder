@@ -7,7 +7,8 @@ describe('configured studio origin', () => {
   it('uses explicitly configured origins for moved-port CORS and CSRF requests', async () => {
     const primaryOrigin = 'http://127.0.0.1:5173';
     const studioOrigin = 'http://127.0.0.1:5273';
-    vi.stubEnv('PWB_STUDIO_ORIGINS', studioOrigin);
+    vi.stubEnv('PWB_STUDIO_ORIGIN', studioOrigin);
+    vi.stubEnv('PWB_STUDIO_ORIGINS', primaryOrigin);
     vi.resetModules();
     const { createApiServer } = await import('./api.js');
     const identityRun = {
@@ -64,6 +65,7 @@ describe('configured studio origin', () => {
         body: JSON.stringify({ approverRole: 'captain' }),
       });
       expect(crossSite.status).toBe(403);
+      expect(crossSite.headers.get('access-control-allow-origin')).toBeNull();
     } finally {
       if (server.listening) await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       vi.unstubAllEnvs();

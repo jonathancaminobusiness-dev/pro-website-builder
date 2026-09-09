@@ -5,7 +5,7 @@ import { handleIdentityRequest, type IdentityApiOptions } from './identity-api.j
 import type { PrototypeRunRegistry } from './prototype-api.js';
 import { handlePrototypeRequest } from './prototype-routes.js';
 import { RunConflictError } from './run-conflict.js';
-import { STUDIO_ORIGIN, STUDIO_ORIGINS } from './security.js';
+import { STUDIO_ORIGINS } from './security.js';
 
 export { RunConflictError };
 
@@ -19,14 +19,15 @@ interface ApiOptions {
 
 const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' };
 const allowedOrigins = new Set<string>(STUDIO_ORIGINS);
-function allowedOrigin(origin: string | undefined): string { return origin && allowedOrigins.has(origin) ? origin : STUDIO_ORIGIN; }
+function allowedOrigin(origin: string | undefined): string | undefined { return origin && allowedOrigins.has(origin) ? origin : undefined; }
 
 function send(response: ServerResponse, status: number, body: unknown): void { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...corsHeaders }); response.end(JSON.stringify(body)); }
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> { const chunks: Buffer[] = []; for await (const chunk of request) { chunks.push(Buffer.from(chunk)); if (Buffer.concat(chunks).length > 64 * 1024) throw new Error('Request body too large.'); } const text = Buffer.concat(chunks).toString('utf8'); return text ? JSON.parse(text) as Record<string, unknown> : {}; }
 
 export function createApiServer(options: ApiOptions): Server {
   return createServer(async (request, response) => {
-    response.setHeader('Access-Control-Allow-Origin', allowedOrigin(request.headers.origin));
+    const origin = allowedOrigin(request.headers.origin);
+    if (origin) response.setHeader('Access-Control-Allow-Origin', origin);
     if (request.method === 'OPTIONS') { response.writeHead(204, corsHeaders).end(); return; }
     try {
       let pathname: string;
