@@ -1,4 +1,6 @@
-import { access, readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentTask } from '@pwb/domain';
 import { CODEX_MODEL, CODEX_REASONING_EFFORT, CodexJsonRunner, CodexRunner } from './index.js';
@@ -21,12 +23,9 @@ const result = {
 describe('Codex provider', () => {
   it('pins the requested model and normal service and parses the final JSONL message', async () => {
     const calls: { executable: string; args: string[]; cwd: string }[] = [];
-    let schemaPath = '';
     const provider = new CodexRunner({
       execute: async (executable, args, options) => {
         calls.push({ executable, args, cwd: options.cwd });
-        schemaPath = args[args.indexOf('--output-schema') + 1]!;
-        expect(JSON.parse(await readFile(schemaPath, 'utf8'))).toBeTruthy();
         return {
           stdout: `${JSON.stringify({ type: 'thread.started', thread_id: 'fixture' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(result) } })}\n`,
           stderr: '',
@@ -40,9 +39,46 @@ describe('Codex provider', () => {
     expect(args).toEqual(expect.arrayContaining(['exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`, '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false', '--sandbox', 'read-only', '--ephemeral', '--json']));
     expect(args).toEqual(expect.arrayContaining(['-m', 'gpt-5.6-sol', '-c', 'model_reasoning_effort=high', '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false']));
     expect(args).not.toContain('features.fast_mode=true');
-    expect(args).toContain('--output-schema');
+    expect(args).not.toContain('--output-schema');
     expect(args).not.toContain('--api-key');
-    await expect(access(schemaPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('describes the AgentResult envelope when Codex is not given a provider schema', async () => {
+    let prompt = '';
+    const provider = new CodexRunner({
+      execute: async (_executable, args) => {
+        prompt = args.at(-1)!;
+        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(result) } })}\n`, stderr: '' };
+      },
+    });
+
+    await provider.propose({ ...task, role: 'curator' });
+    expect(prompt).toContain('Return exactly one AgentResult JSON object');
+    expect(prompt).toContain('taskId');
+    expect(prompt).toContain('artifact');
+  });
+
+  it('passes closed schemas to direct Codex responses', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pwb-codex-schema-'));
+    try {
+      const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false };
+      let args: string[] = [];
+      const runner = new CodexJsonRunner({
+        cwd: directory,
+        execute: async (_executable, receivedArgs) => {
+          args = receivedArgs;
+          const schemaPath = receivedArgs[receivedArgs.indexOf('--output-schema') + 1]!;
+          expect(schemaPath).not.toBe(JSON.stringify(schema));
+          await expect(readFile(schemaPath, 'utf8').then((text) => JSON.parse(text))).resolves.toEqual(schema);
+          return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'ok' }) } })}\n`, stderr: '' };
+        },
+      });
+
+      await expect(runner.run({ prompt: 'fixture', schema, deadlineMs: 1000 })).resolves.toEqual({ answer: 'ok' });
+      expect(args).toEqual(expect.arrayContaining(['--output-schema', expect.any(String)]));
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('reports an actionable error when the Codex CLI is unavailable', async () => {
@@ -109,6 +145,11 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
   });
 
+  it('does not treat a missing model as an unavailable CLI when the process reports it', async () => {
+    const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error("model 'gpt-5.6-sol' not found"), { code: 'EIO', stderr: "model 'gpt-5.6-sol' not found" }); } });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
+  });
+
   it('maps a process timeout and preserves an abort signal', async () => {
     let timeoutMs = 0;
     const timeout = new CodexJsonRunner({ timeoutMs: 10_000, execute: async (_executable, _args, options) => { timeoutMs = options.timeoutMs; throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }); } });
@@ -125,6 +166,35 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED', message: expect.stringMatching(/codex login/i) });
   });
 
+  it('classifies authentication JSONL captured on stdout after a non-zero exit', async () => {
+    const stdout = `${JSON.stringify({ type: 'turn.failed', error: { message: 'Please run codex login.' } })}\n`;
+    const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error('Codex exited'), { code: 'EIO', stdout, stderr: '' }); } });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED' });
+  });
+
+  it('does not accept an earlier answer when a non-zero exit reports a terminal failure', async () => {
+    const stdout = [
+      { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'earlier' }) } },
+      { type: 'turn.failed', error: {} },
+    ].map((event) => JSON.stringify(event)).join('\n');
+    const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error('Codex exited'), { code: 'EIO', stdout, stderr: '' }); } });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
+  });
+
+  it('retries a schema correction when malformed JSONL was captured on stdout after a non-zero exit', async () => {
+    let calls = 0;
+    const malformed = `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'not-json' } })}\n`;
+    const provider = new CodexRunner({
+      execute: async (_executable, args) => {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error('Codex exited'), { code: 'EIO', stdout: malformed, stderr: '' });
+        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(result) } })}\n`, stderr: '' };
+      },
+    });
+    await expect(provider.propose(task)).resolves.toMatchObject({ taskId: task.id, status: 'succeeded' });
+    expect(calls).toBe(2);
+  });
+
   it('rejects a malformed final message instead of using an earlier answer', async () => {
     const stdout = [
       { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'earlier' }) } },
@@ -133,5 +203,22 @@ describe('Codex provider', () => {
     // Exercise the parser through the runner contract without invoking a process.
     const runner = new CodexJsonRunner({ execute: async () => ({ stdout, stderr: '' }) });
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'SCHEMA_INVALID' });
+  });
+
+  it('closes Codex stdin so the CLI can finish when invoked through execFile', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pwb-codex-stdin-'));
+    const script = join(directory, 'wait-for-stdin.mjs');
+    const executable = join(directory, 'codex-fixture');
+    await writeFile(script, [
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => console.log(JSON.stringify({type: 'item.completed', item: {type: 'agent_message', text: JSON.stringify({ok: true})}})));",
+    ].join('\n'), 'utf8');
+    await writeFile(executable, `#!/bin/sh\nexec ${process.execPath} ${script} "$@"\n`, 'utf8');
+    await chmod(executable, 0o755);
+    try {
+      await expect(new CodexJsonRunner({ executable, timeoutMs: 1000 }).run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).resolves.toEqual({ ok: true });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

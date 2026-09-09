@@ -14,7 +14,7 @@ import {
   PrototypeStage, RenderHubEvidenceSource, type CritiqueProvider, type EvidenceSource,
 } from '../packages/stage-prototype/src/index.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
-import { modelProviderName } from '../apps/server/src/provider.js';
+import { createModelProvider, modelProviderName } from '../apps/server/src/provider.js';
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
 const useBrowser = process.argv.includes('--render');
@@ -23,6 +23,7 @@ const fullMatrix = process.argv.includes('--full-matrix');
 
 async function main(): Promise<void> {
   const provider = modelProviderName(process.env.PWB_MODEL_PROVIDER);
+  createModelProvider(provider);
   const codex = provider === 'codex';
   const model = provider !== 'fake';
   const store = new VersionStore();
