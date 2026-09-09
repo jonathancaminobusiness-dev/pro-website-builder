@@ -1,5 +1,5 @@
 import { patchSchema, releaseJsonSchemas, stageRoles, type AgentTask, type DesignIR, type Patch, type ReleaseFinding } from '@pwb/domain';
-import type { JsonModelRunner } from '@pwb/providers';
+import { runValidatedJson, type JsonModelRunner } from '@pwb/providers';
 
 export interface ReleaseRefinerProvider {
   refine(task: AgentTask, findings: ReleaseFinding[], signal?: AbortSignal): Promise<Patch | undefined>;
@@ -84,8 +84,7 @@ export class ClaudeReleaseRefiner implements ReleaseRefinerProvider {
       `Findings: ${JSON.stringify(findings)}`,
       `This is the immutable slice you may read: ${JSON.stringify(task.documentSlice)}`,
     ].join('\n');
-    const raw = await this.runner.run({ prompt, schema: releaseJsonSchemas.FinalizationPatch, deadlineMs: task.deadlineMs }, signal);
-    const parsed = patchSchema.parse(raw);
+    const parsed = await runValidatedJson(this.runner, { prompt, schema: releaseJsonSchemas.FinalizationPatch, deadlineMs: task.deadlineMs }, (raw) => patchSchema.parse(raw), signal);
     return { ...parsed, baseVersionId: task.baseVersionId, stage: 'finalization', role: stageRoles.finalization, idempotencyKey: task.inputDigest };
   }
 }

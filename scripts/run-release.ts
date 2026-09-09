@@ -16,7 +16,7 @@
  *   PWB_EVIDENCE_DIR   where the evidence runners write their artifacts and the
  *                      release document lives (default artifacts/release/)
  *   PWB_FONTS_DIR      faces the release may self-host (default fonts/)
- *   PWB_MODEL_PROVIDER "fake" (default) or "claude-code" for the real critic sessions
+ *   PWB_MODEL_PROVIDER "fake" (default), "claude-code" or "codex" for the real critic sessions
  */
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';

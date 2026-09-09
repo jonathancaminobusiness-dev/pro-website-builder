@@ -97,8 +97,9 @@ export class FinalizationStage {
     const approvedVersion = input.approved ?? input.version;
     const approvedCompile = approvedVersion.id === version.id ? compiled : this.compile(approvedVersion.ir);
     const approved = { versionId: approvedVersion.id, irHash: approvedCompile.irHash, renderedFiles: approvedCompile.files.map((file) => [file.path, file.hash] as [string, string]) };
-    let critiques = await this.critique(input, version, compiled);
-    const escalations: string[] = [];
+    const firstCritique = await this.critique(input, version, compiled);
+    let critiques = firstCritique.critiques;
+    const escalations: string[] = [...firstCritique.failures];
     let previousFindingIds: string[] = [];
     let cycles = 0;
 
@@ -135,7 +136,9 @@ export class FinalizationStage {
       cycles += 1;
       await emit('release.refined', { cycle: cycles, versionId: version.id, findings: previousFindingIds });
       compiled = this.compile(version.ir);
-      critiques = await this.critique(input, version, compiled);
+      const nextCritique = await this.critique(input, version, compiled);
+      critiques = nextCritique.critiques;
+      escalations.push(...nextCritique.failures);
     }
 
     const parity = checkPreviewReleaseParity(renderDesign(version.ir), compiled, new Map(version.ir.pages.routes.map((page) => [page.route, page.id])), input.previewFaces);
@@ -180,7 +183,7 @@ export class FinalizationStage {
     return compileRelease(renderDesign(ir), ir, this.options.compilerOptions);
   }
 
-  private async critique(input: FinalizationStageInput, version: VersionRecord, compiled: CompiledSite): Promise<ReleaseCritique[]> {
+  private async critique(input: FinalizationStageInput, version: VersionRecord, compiled: CompiledSite): Promise<{ critiques: ReleaseCritique[]; failures: string[] }> {
     const context: CriticTaskContext = {
       runId: input.runId,
       baseVersionId: version.id,
@@ -198,13 +201,20 @@ export class FinalizationStage {
       async (task, signal) => this.options.criticProvider.critique(task, byId.get(task.id)!, signal),
       { ...(input.signal ? { signal: input.signal } : {}) },
     );
+    const failures: string[] = [];
     for (const entry of result.results) {
       if (entry.state === 'succeeded') continue;
-      await input.onEvent?.('release.critic.failed', { taskId: entry.task.id, state: entry.state, reason: entry.error instanceof Error ? entry.error.message : 'O crítico não entregou parecer.' });
+      const reason = entry.error instanceof Error ? entry.error.message : 'O crítico não entregou parecer.';
+      const dimension = byId.get(entry.task.id)?.dimension ?? entry.task.id;
+      failures.push(`O crítico de ${dimension} falhou: ${reason}`);
+      await input.onEvent?.('release.critic.failed', { taskId: entry.task.id, state: entry.state, reason });
     }
-    return result.results
-      .flatMap((entry) => (entry.state === 'succeeded' && entry.value ? [entry.value] : []))
-      .sort((a, b) => (a.dimension < b.dimension ? -1 : a.dimension > b.dimension ? 1 : 0));
+    return {
+      critiques: result.results
+        .flatMap((entry) => (entry.state === 'succeeded' && entry.value ? [entry.value] : []))
+        .sort((a, b) => (a.dimension < b.dimension ? -1 : a.dimension > b.dimension ? 1 : 0)),
+      failures,
+    };
   }
 
   private refinerTask(runId: string, version: VersionRecord, compiled: CompiledSite, findings: ReleaseFinding[], attempt: number): AgentTask {

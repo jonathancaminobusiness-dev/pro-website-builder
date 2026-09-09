@@ -19,7 +19,7 @@ Each stage stops at a captain-only gate in v1. Agents return schema-validated JS
 - `packages/renderer` is pure TypeScript and emits semantic HTML/CSS with cascade layers, custom properties, container queries, and reduced-motion handling.
 - `packages/stage-identity` owns the identity stage: the brief curator, the three opposed director seats, the divergence reducer, the read-only critics, the one-cycle refiner, the image art director and the Gate 1 record. It composes the existing `Scheduler`, `PatchGate` and `Applier` rather than adding an orchestrator of its own.
 - `packages/orchestrator` owns the fixed stage DAG, semaphores, deadlines, cancellation, patch CAS, immutable versions, and events. `RunPlanner` emits the identity to prototype to finalization edges. Every captain start request submits exactly one stage to `Scheduler.run`, together with those edges and the set of stages the captain has already approved in this run; the scheduler admits the task only when each of its dependencies is in that completed set or succeeded in the same call, and fails it with a named-dependency error otherwise, so no stage can run ahead of the gate before it. Approving a gate never spends a model call on its own; a rejection returns the stage to a re-runnable state and the next start request re-runs it under a new attempt number.
-- `packages/providers` isolates the owner's local Claude Code binary, optional Higgsfield MCP, and deterministic fakes.
+- `packages/providers` isolates the owner's local Claude Code and Codex CLI binaries, optional Higgsfield MCP, and deterministic fakes.
 - `packages/render-hub` uses Playwright Chromium to capture the full evidence matrix: 320/360/390/768/1024/1440 CSS px, every state fixture, light and dark when the identity declares one, reduced motion, screenshots, DOM and accessibility snapshots, per-node geometry, contrast and keyboard-focus samples, axe in each open state, console and network errors, and a content-addressed cache.
 - `packages/qa-deterministic` owns the Tier 0/1 gate. It is pure: evidence in, findings out. Tier 0 vetoes a revision before any model runs; Tier 1 observes without blocking.
 - `packages/stage-prototype` owns the prototype stage: the serial information architect, the parallel section composers, the four critics, the `PatchPlanner`, the refiner and the loop controller.
@@ -89,15 +89,25 @@ corepack pnpm --filter @pwb/server dev
 corepack pnpm --filter @pwb/studio dev
 ```
 
+The server command builds its workspace dependencies before starting, so it also
+works immediately after `corepack pnpm install`, when package `dist/` folders do
+not exist yet.
+
 The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:4311`, and Vite serves the Studio on `http://127.0.0.1:5173`. `PWB_PORT` and `PWB_PREVIEW_PORT` move this server's API and preview ports — the `run:fixture` and `run:prototype` CLIs bind an ephemeral preview port instead, so several checkouts can render at once — and `VITE_API_ORIGIN` and `VITE_PREVIEW_ORIGIN` point the Studio at the moved origins. That Studio origin is the only one allowed to send state-changing requests or frame the preview; `PWB_STUDIO_ORIGIN` overrides it for the Playwright run, which serves the built Studio on `4173`. The Studio copy is pt-BR; code and technical identifiers remain English.
 
-## Real local Claude Code
+## Real local model providers
 
-CI and the fixture use `FakeModelProvider`. `PWB_MODEL_PROVIDER` selects the model provider for both `corepack pnpm --filter @pwb/server dev` and `corepack pnpm run:fixture`: `fake` (the default) or `claude-code`. To exercise the real adapter, install and log in to the unmodified Claude Code binary as its owner, verify `claude --version`, then start either entry point with `PWB_MODEL_PROVIDER=claude-code`. The runner uses `execFile` with no shell, a fresh session UUID, `--no-session-persistence`, structured JSON, schema validation, deadlines, abort signals, and a denied tool list, because a worker proposes JSON and never touches the filesystem. Each `claude` invocation is capped at 7 minutes and each stage at 15 minutes (20 for finalization), so one stage can spend a first answer and a schema correction inside its budget; `PWB_STAGE_DEADLINE_MS` replaces all three stage deadlines and leaves the invocation cap alone. It never reads, stores, prints, forwards, or asks for tokens or credentials. No paid API is required by this repository.
+CI and runs without `PWB_MODEL_PROVIDER` use `FakeModelProvider`. `PWB_MODEL_PROVIDER` selects the model provider for both `corepack pnpm --filter @pwb/server dev` and `corepack pnpm run:fixture`: `fake` (the default), `claude-code`, or `codex`. To exercise the Claude adapter, install and log in to the unmodified Claude Code binary as its owner, verify `claude --version`, then start either entry point with `PWB_MODEL_PROVIDER=claude-code`. The runner uses `execFile` with no shell, a fresh session UUID, `--no-session-persistence`, structured JSON, schema validation, deadlines, abort signals, and a denied tool list, because a worker proposes JSON and never touches the filesystem. Each `claude` invocation is capped at 7 minutes and each stage at 15 minutes (20 for finalization), so one stage can spend a first answer and a schema correction inside its budget; `PWB_STAGE_DEADLINE_MS` replaces all three stage deadlines and leaves the invocation cap alone. It never reads, stores, prints, forwards, or asks for tokens or credentials. No paid API is required by this repository.
+
+The Codex adapter uses the local `codex` CLI in read-only, ephemeral mode with the exact `gpt-5.6-sol` model, `high` reasoning effort, and normal service explicitly pinned (`service_tier="standard"` plus `features.fast_mode=false`). Install Codex CLI and sign in with ChatGPT before selecting it. The adapter writes each stage schema to a temporary file, passes it to `codex exec --output-schema`, and parses the final JSONL agent message. A missing CLI or ChatGPT sign-in produces an actionable error instead of falling back to another provider. The model supports `high` reasoning effort according to [OpenAI's GPT-5.6 Sol documentation](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
+
+```bash
+PWB_MODEL_PROVIDER=codex corepack pnpm --filter @pwb/server dev
+```
 
 Observed real-Claude runs and their outcomes are recorded in [Verified runs](docs/verified-runs.md).
 
-The identity stage uses a fixture of its own, `FakeIdentityProvider`, because its workers answer with role-specific artefacts rather than the phase 0 patch. `PWB_MODEL_PROVIDER=claude-code` swaps in the same `ClaudeRunner`: the stage builds each role's prompt with that role's closed JSON schema inlined, and validates the returned artefact against it, giving one correction before escalating to human review. To exercise it manually:
+The identity stage uses a fixture of its own, `FakeIdentityProvider`, because its workers answer with role-specific artefacts rather than the phase 0 patch. `PWB_MODEL_PROVIDER=claude-code` swaps in the same `ClaudeRunner`, while `PWB_MODEL_PROVIDER=codex` uses the Codex adapter with the same role-specific prompts and closed schemas. Each path validates the returned artefact and gives one correction before escalating to human review. To exercise Claude manually:
 
 ```bash
 PWB_MODEL_PROVIDER=claude-code corepack pnpm --filter @pwb/server dev
@@ -105,6 +115,12 @@ PWB_MODEL_PROVIDER=claude-code corepack pnpm --filter @pwb/server dev
 ```
 
 That run spends up to fourteen local Claude turns — one curator, three directors, seven critics and one art director per direction whose contract admits the Higgsfield source — plus, per direction that needs the single refinement cycle, one refiner turn and the two direction critics read again so the blockers at Gate 1 describe the repaired version, and one corrective re-invocation for any worker whose artefact missed its schema; three at a time under the scheduler's `maxActiveClaude` limit. The `artifact` envelope this stage added to `AgentResult` has not been re-verified against the live binary in this phase; the phase 0 note above records the last verified contract. CI never runs the real binary; the whole journey there runs on the fakes.
+
+To run Gate 1 with Codex instead:
+
+```bash
+PWB_MODEL_PROVIDER=codex corepack pnpm --filter @pwb/server dev
+```
 
 Higgsfield is an optional asynchronous raster boundary, delivered as `HiggsfieldMcpProvider` in `packages/providers`: when its MCP is not configured, `submit` returns a `not_configured` job whose provenance records `pending provider terms` and a placeholder note, and it never requests or persists credentials. The phase 0 three-stage journey submits no raster job — `RunPlanner` emits three `claude`-lane tasks and nothing writes an asset from a `RasterJob` — so a fixture run's asset ledger is the same whether or not Higgsfield is configured. The identity stage is the one that submits imagery, and only for the approved direction; when the MCP is not configured the pipeline continues with a provenance-marked placeholder asset.
 
@@ -154,9 +170,10 @@ Each transition is written to a `prototype_runs` row together with the outcome a
 
 The review only offers what the run measured: `result.viewports` is the set of widths the evidence actually carried, so the A/B comparison cannot be opened at a width the deterministic gate never looked at.
 
-## Real local Claude Code in the prototype stage
+## Real local model providers in the prototype stage
 
-`PWB_MODEL_PROVIDER=claude-code` swaps all three prototype workers at once: `ClaudeInformationArchitect`, `ClaudeSectionComposer` and `ClaudeCritiqueRunner` replace their deterministic counterparts, for both `corepack pnpm run:prototype` and `corepack pnpm --filter @pwb/server dev`. Each is a separate session with a fresh id, `--no-session-persistence`, a closed JSON schema, a deadline, an abort signal and a denied tool list. A critic keeps `Read` so it can open the screenshots it was handed; every other worker is denied the filesystem and the network entirely. No credential is read, requested, logged or stored, and no paid API is involved. CI never runs this path: it uses the deterministic providers, which produce the same typed contracts.
+`PWB_MODEL_PROVIDER=claude-code` swaps all three prototype workers at once: `ClaudeInformationArchitect`, `ClaudeSectionComposer` and `ClaudeCritiqueRunner` replace their deterministic counterparts, for both `corepack pnpm run:prototype` and `corepack pnpm --filter @pwb/server dev`. `PWB_MODEL_PROVIDER=codex` selects the same three workers through the read-only, ephemeral Codex adapter, with the model and normal service settings documented above. Each is a separate session with a fresh id, a closed JSON schema, a deadline and an abort signal. The two adapters draw their filesystem boundary differently, and the difference is worth knowing before choosing one. A Claude session adds `--no-session-persistence` and a denied tool list: a critic keeps `Read` so it can open the screenshots it was handed, and every other Claude worker is denied the filesystem and the network entirely. A Codex session is confined by the CLI's `--sandbox read-only` and `--ephemeral` instead of a tool list, so every Codex worker — the architect and the composer, not only the critic — may read the filesystem, while none of them may write to it or reach the network. No credential is read, requested, logged or stored, and no paid API is involved. CI and runs without `PWB_MODEL_PROVIDER` use the deterministic providers, which produce the same typed contracts.
+
 ## Finalization stage and Gate 3
 
 The third stage compiles the approved document into an immutable release, has it
@@ -348,7 +365,7 @@ log and the release record keep. Only the captain publishes.
 
 ### Real critic sessions
 
-CI and the fixture use the deterministic providers. `PWB_MODEL_PROVIDER=claude-code`
+CI and runs without `PWB_MODEL_PROVIDER` use the deterministic providers. `PWB_MODEL_PROVIDER=claude-code`
 switches the five critics, the patch-refiner and the release-summarizer to the
 owner's local Claude Code binary through `ClaudeJsonRunner`, which uses the same
 boundary as `ClaudeRunner`: `execFile` with no shell, a fresh session that is
@@ -361,6 +378,13 @@ PWB_MODEL_PROVIDER=claude-code corepack pnpm run:release
 ```
 
 The same variable switches the studio's Gate 3 routes when the server starts.
+
+Set `PWB_MODEL_PROVIDER=codex` to use the same critics, refiner and summarizer
+through the Codex adapter documented above:
+
+```bash
+PWB_MODEL_PROVIDER=codex corepack pnpm run:release
+```
 
 ## Quality and security checks
 

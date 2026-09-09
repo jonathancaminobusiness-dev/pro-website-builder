@@ -1,5 +1,5 @@
 import { hashJson, type AgentTask, type DesignIR, type IdentitySpec, type Page, type PageNode, type Patch } from '@pwb/domain';
-import { ClaudeSession, type ClaudeSessionOptions } from './claude-session.js';
+import { ClaudeSession, type ClaudeSessionOptions, type StructuredSession } from './claude-session.js';
 import { ROUTE_SHELL_SLOT, routeManifestSchema, stagePrototypeContractSchemaJson, type RouteManifest, type RoutePlan } from './contracts.js';
 
 export const ARCHITECT_PROMPT_VERSION = 'prototype-architect-v1';
@@ -74,10 +74,13 @@ export class FakeInformationArchitect implements ArchitectProvider {
   }
 }
 
-/** The real architect: one local Claude Code session answering a closed JSON schema. */
+/** The real architect: one structured local-model session answering a closed JSON schema. */
 export class ClaudeInformationArchitect implements ArchitectProvider {
-  private readonly session: ClaudeSession;
-  constructor(options: ClaudeSessionOptions = {}) { this.session = new ClaudeSession({ maxTurns: 5, ...options }); }
+  private readonly session: StructuredSession;
+  constructor(options: ClaudeSessionOptions & { session?: StructuredSession } = {}) {
+    const { session, ...sessionOptions } = options;
+    this.session = session ?? new ClaudeSession({ maxTurns: 5, ...sessionOptions });
+  }
 
   async plan(task: AgentTask, signal?: AbortSignal): Promise<RouteManifest> {
     const identity = task.documentSlice['/identity'] as IdentitySpec;

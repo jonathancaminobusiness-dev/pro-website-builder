@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentTask, type DesignIR, type IdentitySpec } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
+import { CodexCliError } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import {
-  DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
+  ClaudeCritiqueRunner, CodexSession, DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
   PrototypeStage, PrototypeStageError, criticRegistry,
   type ComposerProvider, type CritiqueProvider, type CritiqueReport, type CritiqueTask, type EvidenceSource, type ProposedPatch,
   type PrototypeStageOutcome, type RouteManifest, type SectionComposition, type SectionPlan,
@@ -317,6 +318,18 @@ describe('prototype stage', () => {
     expect(outcome.reports.every((report) => report.projection.verdict === 'uncertain')).toBe(true);
     expect(setup.events.map((event) => event.type)).toContain('prototype.critic.unavailable');
     expect(outcome.gate).toBe('needs_review');
+  });
+
+  it('keeps Codex setup guidance in the unavailable critic event', async () => {
+    const setup = harness();
+    const critique = new ClaudeCritiqueRunner({
+      session: new CodexSession({
+        runner: { run: async () => { throw new CodexCliError('CODEX_AUTH_REQUIRED', 'Codex CLI is not authenticated. Run `codex login`.'); } },
+      }),
+    });
+    await stageFor(setup, new FakeSectionComposer(), critique).run({ runId: 'run-codex-auth', baseVersionId: setup.base.id });
+    const event = setup.events.find((entry) => entry.type === 'prototype.critic.unavailable');
+    expect(event?.payload.reason).toMatch(/CODEX_AUTH_REQUIRED.*codex login/i);
   });
 
   it('never lets the stage touch the approved identity', async () => {

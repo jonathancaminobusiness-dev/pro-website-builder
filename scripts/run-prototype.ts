@@ -9,18 +9,22 @@ import { RENDER_VIEWPORTS, RenderHub } from '../packages/render-hub/src/index.js
 import { renderDesign } from '../packages/renderer/src/index.js';
 import {
   ClaudeCritiqueRunner, ClaudeInformationArchitect, ClaudeSectionComposer,
+  CodexSession,
   DerivedEvidenceSource, FakeCritiqueProvider, FakeInformationArchitect, FakeSectionComposer,
   PrototypeStage, RenderHubEvidenceSource, type CritiqueProvider, type EvidenceSource,
 } from '../packages/stage-prototype/src/index.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
+import { modelProviderName } from '../apps/server/src/provider.js';
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
-const claude = process.env.PWB_MODEL_PROVIDER === 'claude-code';
 const useBrowser = process.argv.includes('--render');
 // A finalist is worth the full sweep; a revision under review is measured at the representative widths.
 const fullMatrix = process.argv.includes('--full-matrix');
 
 async function main(): Promise<void> {
+  const provider = modelProviderName(process.env.PWB_MODEL_PROVIDER);
+  const codex = provider === 'codex';
+  const model = provider !== 'fake';
   const store = new VersionStore();
   const applier = new Applier(store, new PatchGate());
   const base = applier.createRoot(createFixtureIR());
@@ -34,20 +38,20 @@ async function main(): Promise<void> {
   const evidence: EvidenceSource = useBrowser
     ? new RenderHubEvidenceSource({ hub: new RenderHub({ cacheDir }), baseUrl: `http://127.0.0.1:${port}`, previewPrefix: (versionId) => `/preview/${versionId}`, ...(fullMatrix ? { viewports: RENDER_VIEWPORTS } : {}) })
     : new DerivedEvidenceSource();
-  const critique: CritiqueProvider = claude ? new ClaudeCritiqueRunner() : new FakeCritiqueProvider();
+  const critique: CritiqueProvider = model ? new ClaudeCritiqueRunner(codex ? { session: new CodexSession() } : {}) : new FakeCritiqueProvider();
 
   try {
     const stage = new PrototypeStage({
       store, applier, scheduler: new Scheduler(),
-      architect: claude ? new ClaudeInformationArchitect() : new FakeInformationArchitect(),
-      composer: claude ? new ClaudeSectionComposer() : new FakeSectionComposer(),
+      architect: model ? new ClaudeInformationArchitect(codex ? { session: new CodexSession() } : {}) : new FakeInformationArchitect(),
+      composer: model ? new ClaudeSectionComposer(codex ? { session: new CodexSession() } : {}) : new FakeSectionComposer(),
       critique, evidence, brief: BRIEF,
       onEvent: (type, payload) => { if (process.env.PWB_VERBOSE) console.error(type, JSON.stringify(payload)); },
     });
     const outcome = await stage.run({ runId: 'cli-prototype', baseVersionId: base.id });
     console.log(JSON.stringify({
       runId: outcome.runId,
-      provider: claude ? 'claude-code' : 'fake',
+      provider,
       evidence: useBrowser ? 'render-hub' : 'derived',
       matrix: useBrowser && fullMatrix ? 'full' : 'representative',
       routes: outcome.manifest.routes.map((route) => route.route),

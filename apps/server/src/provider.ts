@@ -1,24 +1,32 @@
-import { ClaudeRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type ModelProvider, type RasterProvider } from '@pwb/providers';
+import { ClaudeRunner, CodexRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { FakeIdentityProvider } from '@pwb/stage-identity';
 
-export type ModelProviderName = 'fake' | 'claude-code';
+export type ModelProviderName = 'fake' | 'claude-code' | 'codex';
+
+/** The one place a provider name is recognised, so no entry point can silently fall back to the fakes. */
+export function modelProviderName(name: string = 'fake'): ModelProviderName {
+  if (name === 'fake' || name === 'claude-code' || name === 'codex') return name;
+  throw new Error(`Unknown model provider ${name}; use fake, claude-code, or codex.`);
+}
 
 export function createModelProvider(name: string = 'fake'): ModelProvider {
-  if (name === 'fake') return new FakeModelProvider();
-  if (name === 'claude-code') return new ClaudeRunner();
-  throw new Error(`Unknown model provider ${name}; use fake or claude-code.`);
+  const selected = modelProviderName(name);
+  if (selected === 'claude-code') return new ClaudeRunner();
+  if (selected === 'codex') return new CodexRunner();
+  return new FakeModelProvider();
 }
 
 /**
  * The identity stage asks its workers for role-specific artefacts, so its fake
  * is a different fixture from the one the phase 0 journey uses. The real
- * adapter is the same `ClaudeRunner`: the stage carries each role's closed
- * schema in the prompt it builds.
+ * adapters are `ClaudeRunner` and `CodexRunner`: the stage carries each role's
+ * closed schema in the prompt it builds.
  */
 export function createIdentityProvider(name: string = 'fake'): ModelProvider {
-  if (name === 'fake') return new FakeIdentityProvider();
-  if (name === 'claude-code') return new ClaudeRunner();
-  throw new Error(`Unknown model provider ${name}; use fake or claude-code.`);
+  const selected = modelProviderName(name);
+  if (selected === 'claude-code') return new ClaudeRunner();
+  if (selected === 'codex') return new CodexRunner();
+  return new FakeIdentityProvider();
 }
 
 /**

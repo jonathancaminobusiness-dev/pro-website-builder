@@ -14,7 +14,7 @@ export class DeadlineExceededError extends Error {
   constructor(public readonly taskId: string, public readonly deadlineMs: number) { super(`Task ${taskId} exceeded its ${deadlineMs}ms deadline.`); this.name = 'DeadlineExceededError'; }
 }
 
-/** The plan's concurrency: three simultaneous Claude sessions, one browser at a time. */
+/** The model lane's concurrency: three simultaneous sessions, one browser at a time. */
 export const DEFAULT_MAX_ACTIVE_CLAUDE = 3;
 const DEFAULT_MAX_ACTIVE_RASTER = 1;
 

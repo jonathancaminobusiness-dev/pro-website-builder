@@ -1,5 +1,6 @@
 import type { QaCheck } from '@pwb/qa-deterministic';
-import { ClaudeSession, ClaudeSessionError, CRITIC_DENIED_TOOLS, type ClaudeSessionOptions } from './claude-session.js';
+import { ClaudeSession, ClaudeSessionError, CRITIC_DENIED_TOOLS, type ClaudeSessionOptions, type StructuredSession } from './claude-session.js';
+import { CodexSessionError } from './codex-session.js';
 import type { CritiqueTask } from './critics.js';
 import { definitionFor, renderCritiquePrompt } from './critics.js';
 import { critiqueReportSchema, critiqueSchemaJson, patchablePropSchema, type CritiqueReport, type EvidenceRef, type Finding } from './critique.js';
@@ -117,15 +118,17 @@ export class FakeCritiqueProvider implements CritiqueProvider {
 }
 
 /**
- * Runs one critic as its own local Claude Code session. The session is separate from the generator's,
- * carries no history of how the composition was made, and is allowed to read only the screenshots it
- * was handed. No credential is read, requested, logged or stored.
+ * Runs one critic as its own structured local-model session. The session is separate from the
+ * generator's, carries no history of how the composition was made, and the default Claude session is
+ * allowed to read only the screenshots it was handed. No credential is read, requested, logged or
+ * stored.
  */
 export class ClaudeCritiqueRunner implements CritiqueProvider {
-  private readonly session: ClaudeSession;
+  private readonly session: StructuredSession;
 
-  constructor(options: ClaudeSessionOptions = {}) {
-    this.session = new ClaudeSession({ timeoutMs: 3 * 60_000, maxTurns: 3, deniedTools: CRITIC_DENIED_TOOLS, ...options });
+  constructor(options: ClaudeSessionOptions & { session?: StructuredSession } = {}) {
+    const { session, ...sessionOptions } = options;
+    this.session = session ?? new ClaudeSession({ timeoutMs: 3 * 60_000, maxTurns: 3, deniedTools: CRITIC_DENIED_TOOLS, ...sessionOptions });
   }
 
   async critique(task: CritiqueTask, signal?: AbortSignal): Promise<CritiqueReport> {
@@ -143,6 +146,7 @@ export class ClaudeCritiqueRunner implements CritiqueProvider {
     } catch (error) {
       if (error instanceof CritiqueUnavailableError) throw error;
       if (error instanceof ClaudeSessionError) throw new CritiqueUnavailableError(task.id, error.errorCode, `The ${task.dimension} critic could not produce a typed report (${error.errorCode}).`);
+      if (error instanceof CodexSessionError) throw new CritiqueUnavailableError(task.id, error.errorCode, error.message);
       throw error;
     }
   }

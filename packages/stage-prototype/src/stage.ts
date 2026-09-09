@@ -231,7 +231,7 @@ export class PrototypeStage {
     const reports: CritiqueReport[] = [];
     for (const entry of result.results) {
       if (entry.state === 'succeeded' && entry.value) { reports.push(entry.value); continue; }
-      const reason = entry.error instanceof CritiqueUnavailableError ? entry.error.errorCode : entry.error instanceof Error ? entry.error.message : 'unknown';
+      const reason = entry.error instanceof CritiqueUnavailableError ? `${entry.error.errorCode}: ${entry.error.message}` : entry.error instanceof Error ? entry.error.message : 'unknown';
       await this.record('prototype.critic.unavailable', { runId: input.runId, taskId: entry.task.id, reason });
       reports.push(this.uncertainReport(entry.task.id, cycle, reason));
     }
