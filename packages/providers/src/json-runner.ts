@@ -24,6 +24,7 @@ export interface JsonRunRequest {
 
 export interface JsonModelRunner {
   run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown>;
+  runValidated?<T>(request: JsonRunRequest, parse: (raw: unknown) => T, signal?: AbortSignal): Promise<T>;
 }
 
 function isSchemaFailure(error: unknown): boolean {
@@ -36,19 +37,13 @@ function isSchemaFailure(error: unknown): boolean {
 export async function runValidatedJson<T>(runner: JsonModelRunner, request: JsonRunRequest, parse: (raw: unknown) => T, signal?: AbortSignal): Promise<T> {
   let prompt = request.prompt;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    let raw: unknown;
     try {
-      raw = await runner.run({ ...request, prompt }, signal);
+      if (runner.runValidated) return await runner.runValidated({ ...request, prompt }, parse, signal);
+      return parse(await runner.run({ ...request, prompt }, signal));
     } catch (error) {
       if (!isSchemaFailure(error) || attempt > 0) throw error;
       prompt = `${request.prompt}\nCorrect the previous schema violation and return only JSON matching the supplied schema.`;
       continue;
-    }
-    try {
-      return parse(raw);
-    } catch (error) {
-      if (!isSchemaFailure(error) || attempt > 0) throw error;
-      prompt = `${request.prompt}\nCorrect the previous schema violation and return only JSON matching the supplied schema.`;
     }
   }
   throw new Error('Structured JSON validation exhausted its correction attempt.');

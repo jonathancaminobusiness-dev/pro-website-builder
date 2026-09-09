@@ -217,6 +217,18 @@ describe('Codex provider', () => {
     expect(calls).toBe(1);
   });
 
+  it('preserves authentication failure through schema validation with malformed JSON output', async () => {
+    let calls = 0;
+    const provider = new CodexRunner({
+      execute: async () => {
+        calls += 1;
+        return { stdout: '{}\n', stderr: 'Codex requires ChatGPT sign-in.' };
+      },
+    });
+    await expect(provider.propose(task)).resolves.toMatchObject({ status: 'failed', errorCode: 'CODEX_AUTH_REQUIRED' });
+    expect(calls).toBe(1);
+  });
+
   it('does not accept an earlier answer when a non-zero exit reports a terminal failure', async () => {
     const stdout = [
       { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'earlier' }) } },
