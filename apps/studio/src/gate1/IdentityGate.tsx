@@ -107,7 +107,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     ? <div className="token-form open-run" role="group">
         <span>Uma execução nova substitui <code>{replacing}</code> como a que este navegador lembra.</span>
         <button className="secondary" onClick={() => setConfirming('')} disabled={props.busy}>Manter esta execução</button>
-        <button className="primary" onClick={() => { setConfirming(''); props.onCreate(); }} disabled={props.busy}>Criar mesmo assim</button>
+        <button className="primary" onClick={() => { setConfirming(''); props.onCreate(briefing.trim()); }} disabled={props.busy}>Criar mesmo assim</button>
       </div>
     : <button className="secondary" onClick={() => setConfirming(asking)} disabled={props.busy || props.inFlight}>{offer}</button>;
 

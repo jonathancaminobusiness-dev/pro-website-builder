@@ -13,4 +13,12 @@ test('captain can replace the example with a free niche briefing', async ({ page
   await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
 
   await expect(page.locator('.gate-briefing')).toHaveText('Nicho editorial para oficinas de bairro.');
+  const initialRunId = (await page.locator('.run-id code').innerText()).trim();
+
+  await page.getByRole('button', { name: 'Nova execução' }).click();
+  await expect(page.getByText('Uma execução nova substitui')).toBeVisible();
+  await page.getByRole('button', { name: 'Criar mesmo assim' }).click();
+
+  await expect(page.locator('.run-id code')).not.toHaveText(initialRunId);
+  await expect(page.locator('.gate-briefing')).toHaveText('Nicho editorial para oficinas de bairro.');
 });
