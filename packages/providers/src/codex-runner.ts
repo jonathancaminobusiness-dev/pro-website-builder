@@ -6,7 +6,7 @@ import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, 
 import type { JsonModelRunner, JsonRunRequest } from './json-runner.js';
 import type { ModelProvider } from './model.js';
 
-const CODEX_AUTH_FAILURE = /\b(?:auth|authentication|authenticated|login|credential|unauthori[sz]ed|not logged)\b|chatgpt sign[- ]?in/i;
+const CODEX_AUTH_FAILURE = /chatgpt sign[- ]?in|unauthori[sz]ed|\bnot\s+(?:authenticated|logged(?:\s+in)?)\b|\b(?:please\s+)?run\s+codex\s+login\b|\b(?:auth(?:entication|enticated)?|login|credential(?:s)?)\b[^\n.]{0,80}\b(?:required|missing|needed|failed|failure|error|invalid|expired|denied)\b|\b(?:requires?|needs?)\s+(?:auth(?:entication|enticated)?|login|credential(?:s)?)\b/i;
 
 export const CODEX_MODEL = 'gpt-5.6-sol';
 export const CODEX_REASONING_EFFORT = 'high';

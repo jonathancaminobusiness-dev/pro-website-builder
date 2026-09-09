@@ -1,4 +1,4 @@
-import { IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
+import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
 import { renderBriefingEditor } from '@pwb/renderer/briefing-editor';
 import { createElement, useCallback, useEffect, useState, type ReactElement } from 'react';
 
@@ -47,8 +47,6 @@ export interface IdentityGateSnapshot {
 
 interface GateRecord { directionId: string; versionId: string; identityHash: string; rationale: string; overrideRationale?: string; approvedAt: string; }
 
-const EXAMPLE_BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A promessa é clareza com personalidade e a prova é o registro de cada decisão.';
-
 const axisLabels: Record<string, string> = {
   composition: 'Composição', typography: 'Tipografia', materiality: 'Materialidade',
   color: 'Cor', imagery: 'Imagem', motion: 'Movimento',
@@ -81,7 +79,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [confirming, setConfirming] = useState('');
   const [tokenPath, setTokenPath] = useState('color.accent');
   const [tokenValue, setTokenValue] = useState('#ff7a00');
-  const [briefing, setBriefing] = useState(EXAMPLE_BRIEFING);
+  const [briefing, setBriefing] = useState(IDENTITY_BRIEFING);
 
   useEffect(() => {
     if (snapshot) setBriefing(snapshot.briefing);
