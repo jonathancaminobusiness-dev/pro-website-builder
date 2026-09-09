@@ -17,7 +17,7 @@ interface ApiOptions {
   prototypes?: PrototypeRunRegistry;
 }
 
-const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' };
+const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', Vary: 'Origin' };
 const allowedOrigins = new Set<string>(STUDIO_ORIGINS);
 function allowedOrigin(origin: string | undefined): string | undefined { return origin && allowedOrigins.has(origin) ? origin : undefined; }
 

@@ -36,10 +36,12 @@ describe('configured studio origin', () => {
       });
       expect(preflight.status).toBe(204);
       expect(preflight.headers.get('access-control-allow-origin')).toBe(studioOrigin);
+      expect(preflight.headers.get('vary')).toBe('Origin');
 
       const fetched = await fetch(`${apiOrigin}/api/identity/runs/moved-studio-run`, { headers: { origin: studioOrigin } });
       expect(fetched.status).toBe(200);
       expect(fetched.headers.get('access-control-allow-origin')).toBe(studioOrigin);
+      expect(fetched.headers.get('vary')).toBe('Origin');
 
       const primaryFetched = await fetch(`${apiOrigin}/api/identity/runs/moved-studio-run`, { headers: { origin: primaryOrigin } });
       expect(primaryFetched.status).toBe(200);
