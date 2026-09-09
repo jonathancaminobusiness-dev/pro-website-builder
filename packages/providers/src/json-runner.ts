@@ -16,8 +16,9 @@ const execFileAsync = promisify(execFile);
 export interface JsonRunRequest {
   /** Everything the worker may read. The caller is responsible for keeping it immutable. */
   prompt: string;
-  /** JSON Schema handed to the binary so the answer is closed by construction. */
+  /** JSON Schema the provider may hand to its binary; every provider validates the answer on return. */
   schema: unknown;
+  strictSchema?: boolean;
   deadlineMs: number;
 }
 

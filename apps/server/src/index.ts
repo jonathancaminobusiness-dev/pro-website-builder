@@ -32,7 +32,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // second instance would decide Gate 1 from a ledger the first has already
   // moved on from.
   const identityLoading = new Map<string, Promise<IdentityRun | undefined>>();
-  const newIdentityRun = (id: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir });
+  const newIdentityRun = (id: string, briefing?: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir, ...(briefing !== undefined ? { briefing } : {}) });
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
@@ -94,11 +94,11 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     },
     identity: {
       runs: identityRuns,
-      createRun: async (id) => {
+      createRun: async (id, briefing) => {
         if (identityRuns.has(id) || identityClaimed.has(id)) throw new RunConflictError(id);
         identityClaimed.add(id);
         try {
-          const run = newIdentityRun(id);
+          const run = newIdentityRun(id, briefing);
           await run.initialize();
           identityRuns.set(id, run);
           return run;

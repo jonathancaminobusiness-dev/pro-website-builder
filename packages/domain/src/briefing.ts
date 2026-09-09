@@ -1,0 +1,1 @@
+export const IDENTITY_BRIEFING_MAX_LENGTH = 8000;

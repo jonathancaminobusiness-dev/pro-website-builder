@@ -1,4 +1,5 @@
-import { useCallback, useState, type ReactElement } from 'react';
+import { IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 
 export interface IdentityDirectionView {
   directionId: string;
@@ -45,6 +46,8 @@ export interface IdentityGateSnapshot {
 
 interface GateRecord { directionId: string; versionId: string; identityHash: string; rationale: string; overrideRationale?: string; approvedAt: string; }
 
+const EXAMPLE_BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A promessa é clareza com personalidade e a prova é o registro de cada decisão.';
+
 const axisLabels: Record<string, string> = {
   composition: 'Composição', typography: 'Tipografia', materiality: 'Materialidade',
   color: 'Cor', imagery: 'Imagem', motion: 'Movimento',
@@ -54,7 +57,7 @@ export interface IdentityGateProps {
   snapshot: IdentityGateSnapshot | null;
   busy: boolean;
   error: string;
-  onCreate: () => void;
+  onCreate: (briefing?: string) => void;
   onOpen: (runId: string) => void;
   /** A remembered run the last read could not reach; the screen holds it rather than offering a fresh start. */
   unreachableRunId: string;
@@ -77,6 +80,11 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [confirming, setConfirming] = useState('');
   const [tokenPath, setTokenPath] = useState('color.accent');
   const [tokenValue, setTokenValue] = useState('#ff7a00');
+  const [briefing, setBriefing] = useState(EXAMPLE_BRIEFING);
+
+  useEffect(() => {
+    if (snapshot) setBriefing(snapshot.briefing);
+  }, [snapshot?.runId, snapshot?.briefing]);
 
   const openRunForm = (label: string): ReactElement => <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
     <label htmlFor="gate1-open-run">{label}</label>
@@ -103,9 +111,22 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     ? <div className="token-form open-run" role="group">
         <span>Uma execução nova substitui <code>{replacing}</code> como a que este navegador lembra.</span>
         <button className="secondary" onClick={() => setConfirming('')} disabled={props.busy}>Manter esta execução</button>
-        <button className="primary" onClick={() => { setConfirming(''); props.onCreate(); }} disabled={props.busy}>Criar mesmo assim</button>
+        <button className="primary" onClick={() => { setConfirming(''); props.onCreate(briefing.trim()); }} disabled={props.busy}>Criar mesmo assim</button>
       </div>
     : <button className="secondary" onClick={() => setConfirming(asking)} disabled={props.busy || props.inFlight}>{offer}</button>;
+
+  const briefingEditor = <div className="briefing-editor">
+    <label htmlFor="gate1-briefing">Briefing do projeto</label>
+    <textarea
+      id="gate1-briefing"
+      value={briefing}
+      maxLength={IDENTITY_BRIEFING_MAX_LENGTH}
+      rows={7}
+      onChange={(event) => setBriefing(event.target.value)}
+      placeholder="Ex.: somos uma oficina de cerâmica autoral; queremos atrair pessoas que valorizam o feito à mão…"
+    />
+    <div className="briefing-meta"><small>Exemplo editável: conte o nicho, a promessa, as provas e o que a identidade deve evitar.</small><span aria-live="polite">{briefing.length}/{IDENTITY_BRIEFING_MAX_LENGTH} caracteres</span></div>
+  </div>;
 
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),
@@ -144,7 +165,8 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     {!snapshot && !props.unreachableRunId && <div className="empty-state">
       <span>◎</span>
       <p>Nenhuma execução de identidade aberta. Criar a execução não gasta nenhuma chamada de modelo.</p>
-      <button className="primary" onClick={props.onCreate} disabled={props.busy}>Criar execução de identidade</button>
+      {briefingEditor}
+      <button className="primary" onClick={() => props.onCreate(briefing.trim())} disabled={props.busy || briefing.trim() === ''}>Criar execução de identidade</button>
       {openRunForm('Abrir execução existente')}
     </div>}
 
@@ -153,7 +175,6 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       <p>A execução <code>{props.unreachableRunId}</code> não pôde ser lida agora. Ela continua registrada no servidor; a decisão e as versões dela não se perderam.</p>
       <button className="primary" onClick={props.onRetry} disabled={props.busy}>{props.busy ? 'Lendo…' : 'Tentar novamente'}</button>
       {openRunForm('Abrir outra execução')}
-      {createConfirm(props.unreachableRunId, 'Criar execução nova')}
     </div>}
 
     {snapshot && <>

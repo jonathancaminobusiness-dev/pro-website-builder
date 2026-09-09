@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { lintDesign } from '@pwb/linter';
-import type { ModelProvider } from '@pwb/providers';
+import { CodexRunner, type ModelProvider } from '@pwb/providers';
 import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
@@ -31,6 +31,25 @@ function newRun(runId = 'identity-test'): IdentityRun {
 }
 
 describe('identity run', () => {
+  it('passes the exact execution briefing to the curator and exposes it in the snapshot', async () => {
+    const briefing = 'Nicho de cerâmica autoral para oficinas de bairro.';
+    const inner = new FakeIdentityProvider();
+    let curatorPrompt = '';
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-curator') curatorPrompt = task.brief;
+        return inner.propose(task, signal);
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-custom-briefing', repository: new ProjectRepository(database), provider, briefing });
+    await run.initialize();
+
+    const snapshot = await run.start();
+
+    expect(snapshot.briefing).toBe(briefing);
+    expect(curatorPrompt).toContain(briefing);
+  });
+
   it('spends no model turn until the captain starts it', async () => {
     const run = newRun();
     await run.initialize();
@@ -39,6 +58,63 @@ describe('identity run', () => {
     const started = await run.start();
     expect(started.status).toBe('needs_review');
     expect(started.directions).toHaveLength(3);
+  });
+
+  it('exposes actionable Codex startup failures in the identity snapshot', async () => {
+    const provider = new CodexRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
+    const run = new IdentityRun({ runId: 'identity-codex-failure', repository: new ProjectRepository(database), provider });
+    await run.initialize();
+
+    const snapshot = await run.start();
+
+    expect(snapshot.status).toBe('failed');
+    expect(snapshot.error).toMatch(/Install Codex CLI/);
+    expect(snapshot.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'identity-curator', reason: expect.stringMatching(/Install Codex CLI/) }),
+    ]));
+  });
+
+  it('restores task failure details after a failed identity run restarts', async () => {
+    const repository = new ProjectRepository(database);
+    const provider = new CodexRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
+    const run = new IdentityRun({ runId: 'identity-codex-restore', repository, provider });
+    await run.initialize();
+    await run.start();
+
+    const restored = new IdentityRun({ runId: 'identity-codex-restore', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+
+    expect(restored.snapshot().failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'identity-curator', reason: expect.stringMatching(/Install Codex CLI/) }),
+    ]));
+  });
+
+  it('clears restored task failures before retrying an interrupted run', async () => {
+    const repository = new ProjectRepository(database);
+    const runId = 'identity-codex-interrupted-retry';
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    await run.initialize();
+    await repository.appendEvent({ id: 'identity-stage-started', runId, type: 'identity.stage.started', payload: {} });
+    await repository.appendEvent({ id: 'identity-task-failed', runId, type: 'identity.task.failed', payload: { taskId: 'identity-curator', reason: 'previous provider failure' } });
+
+    const currentProvider: ModelProvider = {
+      async propose(task) {
+        return { taskId: task.id, status: 'failed', summary: 'current provider failure', errorCode: 'CURRENT_FAILURE' };
+      },
+    };
+    const restored = new IdentityRun({ runId, repository, provider: currentProvider });
+    expect(await restored.restore()).toBe(true);
+    expect(restored.snapshot().failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'previous provider failure' }),
+    ]));
+
+    const retried = await restored.start();
+
+    expect(retried.status).toBe('failed');
+    expect(retried.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ taskId: 'identity-curator', reason: expect.stringMatching(/current provider failure/) }),
+    ]));
+    expect(retried.failures.every((failure) => !failure.reason.includes('previous provider failure'))).toBe(true);
   });
 
   it('persists every candidate version and the events behind the fan-out', async () => {
@@ -402,7 +478,7 @@ describe('identity run', () => {
     const now = new Date().toISOString();
     seeding.sqlite.prepare('INSERT INTO projects VALUES (?, ?, ?)').run('fixture-project', 'Fixture', now);
     seeding.sqlite.prepare('INSERT INTO versions VALUES (?, ?, ?, ?, ?, ?)').run('v-legacy', 'fixture-project', null, 'hash-legacy', JSON.stringify(legacy), now);
-    seeding.sqlite.prepare('INSERT INTO runs VALUES (?, ?, ?)').run('identity-legacy', 'fixture-project', now);
+    seeding.sqlite.prepare('INSERT INTO runs (id, project_id, created_at) VALUES (?, ?, ?)').run('identity-legacy', 'fixture-project', now);
     seeding.sqlite.pragma('user_version = 2');
     seeding.sqlite.close();
 
