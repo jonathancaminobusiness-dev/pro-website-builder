@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding } from '@pwb/domain';
 import { compileRelease } from '@pwb/export';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
+import { CodexJsonRunner, type CodexExecutor } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import {
   aggregateVetoes, checkPreviewReleaseParity, ClaudeReleaseCriticProvider, createReleaseHarness, criticTasks, DeterministicReleaseSummarizer,
@@ -222,6 +223,25 @@ describe('five read-only release critics', () => {
     const critique = await provider.critique(tasks[0]!.task, definition);
     expect(critique.taskId).toBe(tasks[0]!.task.id);
     expect(critique.dimension).toBe('accessibility');
+  });
+
+  it('corrects one malformed Codex response before validating the finalization result', async () => {
+    const { tasks } = context();
+    const entry = tasks.find((candidate) => candidate.definition.dimension === 'accessibility')!;
+    const prompts: string[] = [];
+    const runner = new CodexJsonRunner({
+      execute: async (_executable, args) => {
+        prompts.push(args.at(-1)!);
+        const text = prompts.length === 1
+          ? 'not-json'
+          : JSON.stringify({ taskId: entry.task.id, dimension: entry.definition.dimension, verdict: 'pass', rubricScore: 4, summary: 'ok', findings: [] });
+        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } })}\n`, stderr: '' };
+      },
+    });
+    const critique = await new ClaudeReleaseCriticProvider(runner).critique(entry.task, entry.definition);
+    expect(critique).toMatchObject({ taskId: entry.task.id, dimension: 'accessibility', verdict: 'pass' });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('Correct the previous schema violation');
   });
 
   it('reports what the evidence shows and stays silent about what it does not', async () => {
@@ -490,6 +510,27 @@ describe('the finalization stage end to end with the deterministic providers', (
     expect(result.report.parity.matched).toBe(true);
     expect(result.report.summary?.gateAuthority).toBe('none');
     expect(result.report.escalations).toEqual([]);
+  });
+
+  it('keeps missing Codex setup errors actionable in the finalization report', async () => {
+    const failures: Array<{ runId: string; expected: RegExp; execute: CodexExecutor }> = [
+      {
+        runId: 'run-codex-missing',
+        expected: /Codex CLI was not found.*codex login/i,
+        execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); },
+      },
+      {
+        runId: 'run-codex-auth',
+        expected: /Codex CLI is not authenticated.*codex login/i,
+        execute: async () => ({ stdout: `${JSON.stringify({ type: 'turn.failed', error: { message: 'Please run codex login.' } })}\n`, stderr: '' }),
+      },
+    ];
+    for (const failure of failures) {
+      const runner = new CodexJsonRunner({ execute: failure.execute });
+      const { stage, applier, version, evidence } = stageFor([], undefined, new ClaudeReleaseCriticProvider(runner));
+      const result = await stage.run({ runId: failure.runId, version, evidence, applier });
+      expect(result.report.escalations.join(' ')).toMatch(failure.expected);
+    }
   });
 
   it('refines once, refuses a third attempt at the same finding, and blocks on the evidence veto', async () => {

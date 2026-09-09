@@ -1,5 +1,5 @@
 import { releaseCritiqueSchema, releaseJsonSchemas, type AgentTask, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding } from '@pwb/domain';
-import type { JsonModelRunner } from '@pwb/providers';
+import { runValidatedJson, type JsonModelRunner } from '@pwb/providers';
 import type { CriticDefinition } from './critics.js';
 
 export interface ReleaseCriticProvider {
@@ -124,8 +124,7 @@ export class ClaudeReleaseCriticProvider implements ReleaseCriticProvider {
       'Every finding must name the evidence artifact it comes from, the cause, and one minimal suggestion. Answer "uncertain" instead of inventing precision the evidence does not support.',
       `This is the immutable slice you may read: ${JSON.stringify(task.documentSlice)}`,
     ].join('\n');
-    const raw = await this.runner.run({ prompt, schema: releaseJsonSchemas.ReleaseCritique, deadlineMs: task.deadlineMs }, signal);
-    const parsed = releaseCritiqueSchema.parse(raw);
+    const parsed = await runValidatedJson(this.runner, { prompt, schema: releaseJsonSchemas.ReleaseCritique, deadlineMs: task.deadlineMs }, (raw) => releaseCritiqueSchema.parse(raw), signal);
     return { ...parsed, taskId: task.id, dimension: definition.dimension };
   }
 }

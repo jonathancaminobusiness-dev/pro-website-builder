@@ -75,6 +75,7 @@ async function main(): Promise<void> {
     evidenceCount: report.evidence.length,
     summary: report.summary,
     events: events.map((entry) => entry.type),
+    eventDetails: events,
     ...(published ? { bundle: published.directory } : {}),
   }, null, 2));
   if (!publishable) process.exitCode = 1;

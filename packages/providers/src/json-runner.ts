@@ -25,6 +25,34 @@ export interface JsonModelRunner {
   run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown>;
 }
 
+function isSchemaFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'ZodError') return true;
+  const code = (error as { code?: unknown }).code;
+  return code === 'SCHEMA_INVALID';
+}
+
+export async function runValidatedJson<T>(runner: JsonModelRunner, request: JsonRunRequest, parse: (raw: unknown) => T, signal?: AbortSignal): Promise<T> {
+  let prompt = request.prompt;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let raw: unknown;
+    try {
+      raw = await runner.run({ ...request, prompt }, signal);
+    } catch (error) {
+      if (!isSchemaFailure(error) || attempt > 0) throw error;
+      prompt = `${request.prompt}\nCorrect the previous schema violation and return only JSON matching the supplied schema.`;
+      continue;
+    }
+    try {
+      return parse(raw);
+    } catch (error) {
+      if (!isSchemaFailure(error) || attempt > 0) throw error;
+      prompt = `${request.prompt}\nCorrect the previous schema violation and return only JSON matching the supplied schema.`;
+    }
+  }
+  throw new Error('Structured JSON validation exhausted its correction attempt.');
+}
+
 export class JsonRunnerError extends Error {
   constructor(message: string, public readonly code: string) { super(message); this.name = 'JsonRunnerError'; }
 }
