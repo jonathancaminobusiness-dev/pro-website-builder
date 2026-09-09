@@ -159,6 +159,14 @@ describe('Codex provider', () => {
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
   });
 
+  it('rejects a valid-looking answer when Codex exits non-zero without a terminal event', async () => {
+    const stdout = `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'partial' }) } })}\n`;
+    const runner = new CodexJsonRunner({
+      execute: async () => { throw Object.assign(new Error('Command failed'), { code: 1, signal: null, killed: false, stdout, stderr: '' }); },
+    });
+    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
+  });
+
   it('does not blame a missing CLI for a model the account cannot use', async () => {
     const runner = new CodexJsonRunner({
       execute: async () => ({ stdout: `${JSON.stringify({ type: 'turn.failed', error: { message: "model 'gpt-5.6-sol' not found" } })}\n`, stderr: '' }),

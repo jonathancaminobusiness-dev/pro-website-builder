@@ -214,7 +214,11 @@ export class CodexJsonRunner implements JsonModelRunner {
       const stdout = (error as { stdout?: unknown }).stdout;
       if (typeof stdout === 'string' && stdout.trim()) {
         const stderr = (error as { stderr?: unknown }).stderr;
-        return { output: parseCodexOutput(stdout), stderr: typeof stderr === 'string' ? stderr : '' };
+        // A non-zero exit is still a failed turn even when stdout contains a
+        // parseable answer. Parse it only to preserve a more specific stream
+        // diagnostic (for example, a schema or terminal failure), never to
+        // turn a failed process into a successful response.
+        parseCodexOutput(stdout);
       }
       throw processError;
     }
