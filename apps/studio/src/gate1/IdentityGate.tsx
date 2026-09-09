@@ -1,5 +1,5 @@
 import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
-import { renderBriefingEditor } from '@pwb/renderer/briefing-editor';
+import { renderBriefingCreateButton, renderBriefingEditor, renderBriefingReplacementConfirmation, renderBriefingReplacementOffer, type BriefingEditorElementFactory } from '@pwb/renderer/briefing-editor';
 import { createElement, useCallback, useEffect, useState, type ReactElement } from 'react';
 
 export interface IdentityDirectionView {
@@ -50,6 +50,10 @@ interface GateRecord { directionId: string; versionId: string; identityHash: str
 const axisLabels: Record<string, string> = {
   composition: 'Composição', typography: 'Tipografia', materiality: 'Materialidade',
   color: 'Cor', imagery: 'Imagem', motion: 'Movimento',
+};
+
+const briefingElementFactory: BriefingEditorElementFactory<ReactElement> = {
+  createElement: (type, props, ...children) => createElement(type, props, ...children),
 };
 
 export interface IdentityGateProps {
@@ -107,16 +111,16 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
    * there is no second yes to give — the stop is the only way out of it.
    */
   const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !props.inFlight
-    ? <div className="token-form open-run" role="group">
-        <span>Uma execução nova substitui <code>{replacing}</code> como a que este navegador lembra.</span>
-        <button className="secondary" onClick={() => setConfirming('')} disabled={props.busy}>Manter esta execução</button>
-        <button className="primary" onClick={() => { setConfirming(''); props.onCreate(briefing.trim()); }} disabled={props.busy}>Criar mesmo assim</button>
-      </div>
-    : <button className="secondary" onClick={() => setConfirming(asking)} disabled={props.busy || props.inFlight}>{offer}</button>;
+    ? renderBriefingReplacementConfirmation(briefingElementFactory, {
+        replacing,
+        disabled: props.busy,
+        onKeep: () => setConfirming(''),
+        onCreate: () => { setConfirming(''); props.onCreate(briefing.trim()); },
+      })
+    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || props.inFlight, onOpen: () => setConfirming(asking) });
 
-  const briefingEditor = renderBriefingEditor<ReactElement>({
-    createElement: (type, props, ...children) => createElement(type, props, ...children),
-  }, { value: briefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setBriefing });
+  const briefingEditor = renderBriefingEditor(briefingElementFactory, { value: briefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setBriefing });
+  const briefingCreateButton = renderBriefingCreateButton(briefingElementFactory, { disabled: props.busy || briefing.trim() === '', onCreate: () => props.onCreate(briefing.trim()) });
 
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
     ...direction.lintErrors.map((finding) => `${finding.id} · ${finding.message}`),
@@ -156,7 +160,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
       <span>◎</span>
       <p>Nenhuma execução de identidade aberta. Criar a execução não gasta nenhuma chamada de modelo.</p>
       {briefingEditor}
-      <button className="primary" onClick={() => props.onCreate(briefing.trim())} disabled={props.busy || briefing.trim() === ''}>Criar execução de identidade</button>
+      {briefingCreateButton}
       {openRunForm('Abrir execução existente')}
     </div>}
 
