@@ -93,7 +93,17 @@ The server command builds its workspace dependencies before starting, so it also
 works immediately after `corepack pnpm install`, when package `dist/` folders do
 not exist yet.
 
-The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:4311`, and Vite serves the Studio on `http://127.0.0.1:5173`. `PWB_PORT` and `PWB_PREVIEW_PORT` move this server's API and preview ports — the `run:fixture` and `run:prototype` CLIs bind an ephemeral preview port instead, so several checkouts can render at once — and `VITE_API_ORIGIN` and `VITE_PREVIEW_ORIGIN` point the Studio at the moved origins. That Studio origin is the only one allowed to send state-changing requests or frame the preview; `PWB_STUDIO_ORIGIN` overrides it for the Playwright run, which serves the built Studio on `4173`. The Studio copy is pt-BR; code and technical identifiers remain English.
+The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:4311`, and Vite serves the Studio on `http://127.0.0.1:5173`. `PWB_PORT` and `PWB_PREVIEW_PORT` move this server's API and preview ports — the `run:fixture` and `run:prototype` CLIs bind an ephemeral preview port instead, so several checkouts can render at once — and `VITE_API_ORIGIN` and `VITE_PREVIEW_ORIGIN` point the Studio at the moved origins. That Studio origin is the only one allowed to send state-changing requests or frame the preview; `PWB_STUDIO_ORIGIN` overrides it for the Playwright run, which serves the built Studio on `4173`. For a manually moved Studio, restart the API with the exact Studio origin and point Vite at the moved API:
+
+```bash
+# API terminal
+PWB_PORT=4520 PWB_STUDIO_ORIGIN=http://127.0.0.1:5273 corepack pnpm --filter @pwb/server dev
+
+# Studio terminal
+VITE_API_ORIGIN=http://127.0.0.1:4520 VITE_PREVIEW_ORIGIN=http://127.0.0.1:4311 corepack pnpm --filter @pwb/studio dev --host 127.0.0.1 --port 5273 --strictPort
+```
+
+When a diagnostic needs more than one local Studio origin, `PWB_STUDIO_ORIGINS` accepts a comma-separated list of exact origins; requests from every other origin remain blocked. The Studio copy is pt-BR; code and technical identifiers remain English.
 
 ## Real local model providers
 

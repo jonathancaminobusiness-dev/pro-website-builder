@@ -5,7 +5,7 @@ import { handleIdentityRequest, type IdentityApiOptions } from './identity-api.j
 import type { PrototypeRunRegistry } from './prototype-api.js';
 import { handlePrototypeRequest } from './prototype-routes.js';
 import { RunConflictError } from './run-conflict.js';
-import { STUDIO_ORIGIN } from './security.js';
+import { STUDIO_ORIGIN, STUDIO_ORIGINS } from './security.js';
 
 export { RunConflictError };
 
@@ -18,7 +18,7 @@ interface ApiOptions {
 }
 
 const corsHeaders = { 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' };
-const allowedOrigins = new Set<string>([STUDIO_ORIGIN]);
+const allowedOrigins = new Set<string>(STUDIO_ORIGINS);
 function allowedOrigin(origin: string | undefined): string { return origin && allowedOrigins.has(origin) ? origin : STUDIO_ORIGIN; }
 
 function send(response: ServerResponse, status: number, body: unknown): void { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...corsHeaders }); response.end(JSON.stringify(body)); }
