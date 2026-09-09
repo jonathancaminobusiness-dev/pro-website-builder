@@ -1,14 +1,8 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { ZodError } from 'zod';
 import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { JsonModelRunner, JsonRunRequest } from './json-runner.js';
 import type { ModelProvider } from './model.js';
-
-const execFileAsync = promisify(execFile);
 
 const CODEX_AUTH_FAILURE = /\b(?:auth|authentication|authenticated|login|credential|unauthori[sz]ed|not logged)\b|chatgpt sign[- ]?in/i;
 
@@ -131,15 +125,31 @@ function classifyProcessError(error: unknown): CodexCliError {
 }
 
 async function executeCodex(executable: string, args: string[], options: CodexExecutorOptions): Promise<{ stdout: string; stderr: string }> {
-  const result = await execFileAsync(executable, args, {
-    cwd: options.cwd,
-    shell: false,
-    timeout: options.timeoutMs,
-    windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024,
-    ...(options.signal ? { signal: options.signal } : {}),
+  return await new Promise((resolve, reject) => {
+    const child = execFile(executable, args, {
+      cwd: options.cwd,
+      shell: false,
+      timeout: options.timeoutMs,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+      ...(options.signal ? { signal: options.signal } : {}),
+    }, (error, stdout, stderr) => {
+      if (error) {
+        // Preserve the captured streams for classifyProcessError. In
+        // particular, Codex reports schema and login failures through its
+        // JSONL stdout while the child process still exits non-zero.
+        Object.assign(error, { stdout, stderr });
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+
+    // Codex reads stdin as an optional second prompt. This runner supplies the
+    // prompt as an argument, so close the unused stream immediately; otherwise
+    // the CLI waits for EOF until the stage deadline expires.
+    child.stdin?.end();
   });
-  return { stdout: result.stdout, stderr: result.stderr };
 }
 
 export class CodexJsonRunner implements JsonModelRunner {
@@ -156,14 +166,12 @@ export class CodexJsonRunner implements JsonModelRunner {
   }
 
   async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
-    const schemaDir = await mkdtemp(join(tmpdir(), 'pwb-codex-schema-'));
-    const schemaPath = join(schemaDir, 'output-schema.json');
     try {
-      await writeFile(schemaPath, JSON.stringify(request.schema), 'utf8');
+      const prompt = `${request.prompt}\n\nReturn JSON matching this schema:\n${JSON.stringify(request.schema)}`;
       const args = [
         'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
         '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false',
-        '--output-schema', schemaPath, '--json', '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, request.prompt,
+        '--json', '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, prompt,
       ];
       const result = await this.execute(this.executable, args, { cwd: this.cwd, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
       try {
@@ -179,8 +187,6 @@ export class CodexJsonRunner implements JsonModelRunner {
       if (details.code === 'ABORT_ERR' || details.name === 'AbortError') throw error;
       if (error instanceof CodexCliError) throw error;
       throw classifyProcessError(error);
-    } finally {
-      await rm(schemaDir, { recursive: true, force: true });
     }
   }
 }
@@ -188,6 +194,7 @@ export class CodexJsonRunner implements JsonModelRunner {
 function codexPrompt(task: AgentTask, correction: boolean): string {
   return [
     task.brief,
+    'Return exactly one AgentResult JSON object with the required taskId, status and summary fields. Set taskId to the task id above and status to succeeded when you have an answer. For read-only roles, put the typed answer in artifact and omit proposal; for patch roles, put the patch in proposal and any typed companion answer in artifact.',
     `Answer as the ${task.role} of the ${task.stage} stage for taskId ${task.id}.`,
     `A proposal must set baseVersionId to ${task.baseVersionId} and may only touch these paths: ${task.allowedPaths.join(', ')}.`,
     `A page node may only declare these props: ${[...visualPropKeys].join(', ')} and text.`,

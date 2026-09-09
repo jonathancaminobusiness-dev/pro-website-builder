@@ -53,7 +53,7 @@ Changing a token afterwards is checked before anything is committed: the token k
 corepack pnpm --filter @pwb/server dev   # then, in the Studio, open the "Gate 1 · identidade" tab
 ```
 
-Creating an identity run costs nothing. `POST /api/identity/runs/<id>/start` is the only route that spends a model turn, and every state-changing identity route is captain-only and accepted from the Studio origin alone.
+Creating an identity run costs nothing. `POST /api/identity/runs/<id>/start` is the only route that spends a model turn, and every state-changing identity route is captain-only and accepted only from an exact configured Studio origin.
 
 The renderer refuses raw visual values. Colors, dimensions, font settings, radii, shadows, and motion must resolve through tokens, with no exception path in Fase 0. A page node's `semantic` is the tag it renders as, drawn from a closed vocabulary, so the schema refuses a landmark the renderer would silently drop; `body` carries the query container and `main` is the element the breakpoint restyles. Preview is served on port `4311`, separate from the Studio/API origin, and the Studio iframe uses `sandbox` without `allow-same-origin`.
 
@@ -93,13 +93,23 @@ The server command builds its workspace dependencies before starting, so it also
 works immediately after `corepack pnpm install`, when package `dist/` folders do
 not exist yet.
 
-The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:4311`, and Vite serves the Studio on `http://127.0.0.1:5173`. `PWB_PORT` and `PWB_PREVIEW_PORT` move this server's API and preview ports — the `run:fixture` and `run:prototype` CLIs bind an ephemeral preview port instead, so several checkouts can render at once — and `VITE_API_ORIGIN` and `VITE_PREVIEW_ORIGIN` point the Studio at the moved origins. That Studio origin is the only one allowed to send state-changing requests or frame the preview; `PWB_STUDIO_ORIGIN` overrides it for the Playwright run, which serves the built Studio on `4173`. The Studio copy is pt-BR; code and technical identifiers remain English.
+The API is `http://127.0.0.1:4310`, the isolated preview is `http://127.0.0.1:4311`, and Vite serves the Studio on `http://127.0.0.1:5173`. `PWB_PORT` and `PWB_PREVIEW_PORT` move this server's API and preview ports — the `run:fixture` and `run:prototype` CLIs bind an ephemeral preview port instead, so several checkouts can render at once — and `VITE_API_ORIGIN` and `VITE_PREVIEW_ORIGIN` point the Studio at the moved origins. Only exact configured Studio origins may send state-changing requests or frame the preview; `PWB_STUDIO_ORIGIN` overrides the primary for the Playwright run, which serves the built Studio on `4173`. For a manually moved Studio, restart the API with the exact Studio origin and point Vite at the moved API:
+
+```bash
+# API terminal
+PWB_PORT=4520 PWB_STUDIO_ORIGIN=http://127.0.0.1:5273 corepack pnpm --filter @pwb/server dev
+
+# Studio terminal
+VITE_API_ORIGIN=http://127.0.0.1:4520 VITE_PREVIEW_ORIGIN=http://127.0.0.1:4311 corepack pnpm --filter @pwb/studio dev --host 127.0.0.1 --port 5273 --strictPort
+```
+
+When a diagnostic needs more than one local Studio origin, `PWB_STUDIO_ORIGINS` adds a comma-separated list of exact origins to the primary; requests from every other origin remain blocked. The Studio copy is pt-BR; code and technical identifiers remain English.
 
 ## Real local model providers
 
 CI and runs without `PWB_MODEL_PROVIDER` use `FakeModelProvider`. `PWB_MODEL_PROVIDER` selects the model provider for both `corepack pnpm --filter @pwb/server dev` and `corepack pnpm run:fixture`: `fake` (the default), `claude-code`, or `codex`. To exercise the Claude adapter, install and log in to the unmodified Claude Code binary as its owner, verify `claude --version`, then start either entry point with `PWB_MODEL_PROVIDER=claude-code`. The runner uses `execFile` with no shell, a fresh session UUID, `--no-session-persistence`, structured JSON, schema validation, deadlines, abort signals, and a denied tool list, because a worker proposes JSON and never touches the filesystem. Each `claude` invocation is capped at 7 minutes and each stage at 15 minutes (20 for finalization), so one stage can spend a first answer and a schema correction inside its budget; `PWB_STAGE_DEADLINE_MS` replaces all three stage deadlines and leaves the invocation cap alone. It never reads, stores, prints, forwards, or asks for tokens or credentials. No paid API is required by this repository.
 
-The Codex adapter uses the local `codex` CLI in read-only, ephemeral mode with the exact `gpt-5.6-sol` model, `high` reasoning effort, and normal service explicitly pinned (`service_tier="standard"` plus `features.fast_mode=false`). Install Codex CLI and sign in with ChatGPT before selecting it. The adapter writes each stage schema to a temporary file, passes it to `codex exec --output-schema`, and parses the final JSONL agent message. A missing CLI or ChatGPT sign-in produces an actionable error instead of falling back to another provider. The model supports `high` reasoning effort according to [OpenAI's GPT-5.6 Sol documentation](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
+The Codex adapter uses the local `codex` CLI in read-only, ephemeral mode with the exact `gpt-5.6-sol` model, `high` reasoning effort, and normal service explicitly pinned (`service_tier="standard"` plus `features.fast_mode=false`). Install Codex CLI and sign in with ChatGPT before selecting it. The adapter supplies the required AgentResult envelope in the prompt, closes the unused stdin stream, and validates the final JSONL agent message against the stage schema after it returns. Codex's strict response-schema validator rejects the stage envelope because read-only artifacts are intentionally open JSON records, so the adapter does not pass `--output-schema`; one schema correction is still retried through the provider's Zod validation. A missing CLI or ChatGPT sign-in produces an actionable error instead of falling back to another provider. The model supports `high` reasoning effort according to [OpenAI's GPT-5.6 Sol documentation](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
 
 ```bash
 PWB_MODEL_PROVIDER=codex corepack pnpm --filter @pwb/server dev

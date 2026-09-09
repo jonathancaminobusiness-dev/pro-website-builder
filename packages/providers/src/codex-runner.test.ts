@@ -1,4 +1,6 @@
-import { access, readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentTask } from '@pwb/domain';
 import { CODEX_MODEL, CODEX_REASONING_EFFORT, CodexJsonRunner, CodexRunner } from './index.js';
@@ -21,12 +23,9 @@ const result = {
 describe('Codex provider', () => {
   it('pins the requested model and normal service and parses the final JSONL message', async () => {
     const calls: { executable: string; args: string[]; cwd: string }[] = [];
-    let schemaPath = '';
     const provider = new CodexRunner({
       execute: async (executable, args, options) => {
         calls.push({ executable, args, cwd: options.cwd });
-        schemaPath = args[args.indexOf('--output-schema') + 1]!;
-        expect(JSON.parse(await readFile(schemaPath, 'utf8'))).toBeTruthy();
         return {
           stdout: `${JSON.stringify({ type: 'thread.started', thread_id: 'fixture' })}\n${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(result) } })}\n`,
           stderr: '',
@@ -40,9 +39,37 @@ describe('Codex provider', () => {
     expect(args).toEqual(expect.arrayContaining(['exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`, '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false', '--sandbox', 'read-only', '--ephemeral', '--json']));
     expect(args).toEqual(expect.arrayContaining(['-m', 'gpt-5.6-sol', '-c', 'model_reasoning_effort=high', '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false']));
     expect(args).not.toContain('features.fast_mode=true');
-    expect(args).toContain('--output-schema');
+    expect(args).not.toContain('--output-schema');
     expect(args).not.toContain('--api-key');
-    await expect(access(schemaPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('describes the AgentResult envelope when Codex is not given a provider schema', async () => {
+    let prompt = '';
+    const provider = new CodexRunner({
+      execute: async (_executable, args) => {
+        prompt = args.at(-1)!;
+        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(result) } })}\n`, stderr: '' };
+      },
+    });
+
+    await provider.propose({ ...task, role: 'curator' });
+    expect(prompt).toContain('Return exactly one AgentResult JSON object');
+    expect(prompt).toContain('taskId');
+    expect(prompt).toContain('artifact');
+  });
+
+  it('includes the supplied JSON schema in the Codex CLI prompt', async () => {
+    let prompt = '';
+    const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] };
+    const runner = new CodexJsonRunner({
+      execute: async (_executable, args) => {
+        prompt = args.at(-1)!;
+        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'ok' }) } })}\n`, stderr: '' };
+      },
+    });
+
+    await expect(runner.run({ prompt: 'fixture', schema, deadlineMs: 1000 })).resolves.toEqual({ answer: 'ok' });
+    expect(prompt).toContain(JSON.stringify(schema));
   });
 
   it('reports an actionable error when the Codex CLI is unavailable', async () => {
@@ -133,5 +160,22 @@ describe('Codex provider', () => {
     // Exercise the parser through the runner contract without invoking a process.
     const runner = new CodexJsonRunner({ execute: async () => ({ stdout, stderr: '' }) });
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'SCHEMA_INVALID' });
+  });
+
+  it('closes Codex stdin so the CLI can finish when invoked through execFile', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pwb-codex-stdin-'));
+    const script = join(directory, 'wait-for-stdin.mjs');
+    const executable = join(directory, 'codex-fixture');
+    await writeFile(script, [
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => console.log(JSON.stringify({type: 'item.completed', item: {type: 'agent_message', text: JSON.stringify({ok: true})}})));",
+    ].join('\n'), 'utf8');
+    await writeFile(executable, `#!/bin/sh\nexec ${process.execPath} ${script} "$@"\n`, 'utf8');
+    await chmod(executable, 0o755);
+    try {
+      await expect(new CodexJsonRunner({ executable, timeoutMs: 1000 }).run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).resolves.toEqual({ ok: true });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
