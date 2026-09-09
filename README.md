@@ -270,7 +270,7 @@ move the digest between the gate and the runners meant to measure the gate's
 bundle. A `manifest.json` already there is left untouched — the faces an owner
 put in their own project are theirs — and a checkout installed with
 `--ignore-scripts` simply has no face, which is the default this repository
-The observed parity counts are recorded in [Verified runs](docs/verified-runs.md).
+shipped before. The observed parity counts are recorded in [Verified runs](docs/verified-runs.md).
 
 **Release vetoes.** Eight objective stop conditions, catalogued in
 `packages/stage-finalization/src/veto-catalog.ts`: a secret in the bundle, an
@@ -308,7 +308,7 @@ have, so a run never inherits an earlier run's evidence in silence. An artifact
 that measured the same bytes from a different document is credited and the
 difference is named, because that is what the refiner recording a finding does.
 
-The observed release-engine evidence is recorded in [Verified runs](docs/verified-runs.md).
+The observed release-engine evidence is recorded in [Verified runs](docs/verified-runs.md). Publishing over an open escalation takes a written
 reason from the captain, recorded in the run's log as `release.published` and in
 the release record beside the bundle. The manifest inside the bundle is a pure
 function of the compiled bytes and the toolchain — it names no document, no
