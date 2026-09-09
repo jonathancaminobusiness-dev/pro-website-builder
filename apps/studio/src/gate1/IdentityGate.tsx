@@ -1,4 +1,5 @@
-import { useCallback, useState, type ReactElement } from 'react';
+import { IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 
 export interface IdentityDirectionView {
   directionId: string;
@@ -45,7 +46,6 @@ export interface IdentityGateSnapshot {
 
 interface GateRecord { directionId: string; versionId: string; identityHash: string; rationale: string; overrideRationale?: string; approvedAt: string; }
 
-const BRIEFING_MAX_LENGTH = 8000;
 const EXAMPLE_BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A promessa é clareza com personalidade e a prova é o registro de cada decisão.';
 
 const axisLabels: Record<string, string> = {
@@ -82,6 +82,10 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [tokenValue, setTokenValue] = useState('#ff7a00');
   const [briefing, setBriefing] = useState(EXAMPLE_BRIEFING);
 
+  useEffect(() => {
+    if (snapshot) setBriefing(snapshot.briefing);
+  }, [snapshot?.runId, snapshot?.briefing]);
+
   const openRunForm = (label: string): ReactElement => <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
     <label htmlFor="gate1-open-run">{label}</label>
     <input id="gate1-open-run" value={openRunId} placeholder="identity-…" onChange={(event) => setOpenRunId(event.target.value)} />
@@ -116,12 +120,12 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     <textarea
       id="gate1-briefing"
       value={briefing}
-      maxLength={BRIEFING_MAX_LENGTH}
+      maxLength={IDENTITY_BRIEFING_MAX_LENGTH}
       rows={7}
       onChange={(event) => setBriefing(event.target.value)}
       placeholder="Ex.: somos uma oficina de cerâmica autoral; queremos atrair pessoas que valorizam o feito à mão…"
     />
-    <div className="briefing-meta"><small>Exemplo editável: conte o nicho, a promessa, as provas e o que a identidade deve evitar.</small><span aria-live="polite">{briefing.length}/{BRIEFING_MAX_LENGTH} caracteres</span></div>
+    <div className="briefing-meta"><small>Exemplo editável: conte o nicho, a promessa, as provas e o que a identidade deve evitar.</small><span aria-live="polite">{briefing.length}/{IDENTITY_BRIEFING_MAX_LENGTH} caracteres</span></div>
   </div>;
 
   const blockersOf = useCallback((direction: IdentityDirectionView): string[] => [
