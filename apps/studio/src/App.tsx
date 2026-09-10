@@ -84,6 +84,7 @@ export default function App() {
   const [startRecoveryRunId, setStartRecoveryRunId] = useState('');
   const startEpoch = useRef(0);
   const identityGeneration = useRef(0);
+  const recoveryAttempts = useRef({ runId: '', count: 0 });
   const pendingStart = useRef<{ runId: string; epoch: number } | null>(null);
   const latestIdentity = useRef<IdentityGateSnapshot | null>(null);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
@@ -190,13 +191,32 @@ export default function App() {
     if (!identity || !following || spent >= POLL_MAX_FAILURES) return;
     // A reading of a run the screen has left cannot rewrite what is on it now.
     let dropped = false;
+    const runId = identity.runId;
+    const source: IdentityReadSource = { generation: identityGeneration.current, epoch: startEpoch.current, kind: 'read' };
     const timer = setTimeout(() => {
-      const runId = identity.runId;
-      const source: IdentityReadSource = { generation: identityGeneration.current, epoch: startEpoch.current, kind: 'read' };
+      if (source.generation !== identityGeneration.current) return;
+      let recoveryAttempt = 0;
+      if (startRecoveryPending) {
+        recoveryAttempt = recoveryAttempts.current.runId === runId ? recoveryAttempts.current.count + 1 : 1;
+        recoveryAttempts.current = { runId, count: recoveryAttempt };
+      }
       void identityGet(runId).then(
         (next) => {
           if (dropped) return;
-          if (!acceptIdentityRun(next, source) && source.generation === identityGeneration.current) setPollTick((current) => current + 1);
+          const previousIdentity = latestIdentity.current;
+          const unchangedRecovery = startRecoveryPending && previousIdentity?.runId === runId && previousIdentity.status === next.status && (next.status === 'queued' || next.status === 'failed' || next.status === 'interrupted');
+          if (!acceptIdentityRun(next, source)) {
+            if (source.generation === identityGeneration.current) setPollTick((current) => current + 1);
+            return;
+          }
+          if (startRecoveryPending) {
+            if (unchangedRecovery && recoveryAttempt >= POLL_MAX_FAILURES) {
+              setStartRecoveryRunId((current) => current === runId ? '' : current);
+              setIdentityError('Não foi possível confirmar o início. Tente novamente ou recarregue para ler o estado atual.');
+            } else if (!unchangedRecovery) {
+              recoveryAttempts.current = { runId, count: 0 };
+            }
+          }
         },
         (cause: unknown) => {
           if (dropped) return;
@@ -209,13 +229,22 @@ export default function App() {
               startEpoch.current += 1;
               setStartingRun(false);
             }
+            recoveryAttempts.current = { runId, count: 0 };
             setPollFailures({ runId, count: POLL_MAX_FAILURES });
             setIdentityError('Esta execução não está mais no servidor.');
             return;
           }
           const count = spent + 1;
           setPollFailures({ runId, count });
-          if (count >= POLL_MAX_FAILURES) setIdentityError('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.');
+          if (count >= POLL_MAX_FAILURES) {
+            if (startRecoveryPending) {
+              recoveryAttempts.current = { runId, count: POLL_MAX_FAILURES };
+              setStartRecoveryRunId((current) => current === runId ? '' : current);
+              setIdentityError('Não foi possível confirmar o início. Tente novamente ou recarregue para ler o estado atual.');
+            } else {
+              setIdentityError('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.');
+            }
+          }
         },
       );
     }, 1500);
@@ -234,6 +263,7 @@ export default function App() {
     const epoch = startEpoch.current + 1;
     startEpoch.current = epoch;
     pendingStart.current = { runId, epoch };
+    recoveryAttempts.current = { runId, count: 0 };
     setStartRecoveryRunId('');
     setPollFailures({ runId, count: 0 });
     setStartingRun(true);

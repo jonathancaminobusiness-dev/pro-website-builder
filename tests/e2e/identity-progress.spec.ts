@@ -95,6 +95,41 @@ test('Gate 1 follows running progress and keeps the completed result after refre
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toHaveCount(0);
 });
 
+test('a poll timer keeps the generation of the run it was scheduled for', async ({ page }) => {
+  await page.clock.install();
+  const otherRunId = 'identity-progress-other-run';
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('running')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${otherRunId}`) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByLabel('Abrir outra execução').fill(otherRunId);
+  await page.locator('.gate-actions').getByRole('button', { name: 'Abrir' }).click();
+  await expect(page.getByText('O servidor local não respondeu.', { exact: true })).toBeVisible();
+
+  await page.clock.fastForward(1_500);
+  await expect(page.getByText('pronto para executar', { exact: true })).toBeVisible();
+  await expect(page.getByText('executando', { exact: true })).toHaveCount(0);
+});
+
 test('a stale poll cannot replace a newly opened run or erase its pointer', async ({ page }) => {
   await page.clock.install();
   const otherRunId = 'identity-progress-other-run';
@@ -853,4 +888,44 @@ test('retry recovery stays pending across an unchanged terminal snapshot', async
   await expect.poll(() => reads).toBe(2);
   await expect(page.getByText('executando', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
+});
+
+test('ambiguous start recovery exits after bounded unchanged terminal reads', async ({ page }) => {
+  await page.clock.install();
+  let reads = 0;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      await route.abort();
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      reads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Tentar novamente' }).click();
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toBeVisible();
+
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    await page.clock.fastForward(1_500);
+    await expect.poll(() => reads).toBe(attempt);
+  }
+
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Tentar novamente' })).toBeEnabled();
+  await expect(page.getByText('Não foi possível confirmar o início. Tente novamente ou recarregue para ler o estado atual.', { exact: true })).toBeVisible();
 });
