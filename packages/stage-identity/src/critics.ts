@@ -72,3 +72,5 @@ export const identityCritics: readonly IdentityCriticDefinition[] = [
     ],
   },
 ];
+
+export type IdentityCriticId = (typeof identityCritics)[number]['id'];

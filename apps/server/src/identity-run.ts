@@ -3,7 +3,7 @@ import { createFixtureIR, flattenTokens, type Approval, type TokenValue } from '
 import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
-import { approvalOf, identityHash, identityLint, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageResult } from '@pwb/stage-identity';
+import { approvalOf, identityHash, identityLint, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 import { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -118,7 +118,7 @@ export class IdentityRun {
   private abort: AbortController | undefined;
   private briefing: string;
 
-  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string }) {
+  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines> }) {
     this.briefing = options.briefing ?? IDENTITY_BRIEFING;
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
@@ -140,6 +140,7 @@ export class IdentityRun {
       provider: this.options.provider,
       store: this.store,
       ...(this.options.scheduler ? { scheduler: this.options.scheduler } : {}),
+      ...(this.options.deadlines ? { deadlines: this.options.deadlines } : {}),
       raster: this.options.raster ?? new HiggsfieldMcpProvider({ configured: false }),
       onEvent: (type, payload) => ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type, payload })),
     });
