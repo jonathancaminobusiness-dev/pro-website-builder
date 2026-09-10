@@ -66,8 +66,9 @@ export interface IdentityGateProps {
   unreachableRunId: string;
   onRetry: () => void;
   onStart: () => void;
-  /** The stage or the raster lane is working right now, which is the only time a run can be stopped. */
+  /** A start request or the stage/raster lane is in flight; pending starts keep cancellation available until the next server snapshot. */
   inFlight: boolean;
+  startRecoveryPending: boolean;
   onCancel: () => void;
   onApprove: (directionId: string, rationale: string, overrideRationale?: string) => void;
   onReject: (directionId: string, rationale: string) => void;
@@ -101,23 +102,28 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
    * asked for — because the run started working, or because the screen now
    * offers a different run — is dropped rather than carried somewhere else.
    */
+  const snapshotRunning = snapshot?.status === 'running';
+  const assetInFlight = snapshot?.assets.some((asset) => asset.status === 'generating') === true;
+  const executionInFlight = snapshotRunning || assetInFlight || props.inFlight;
+  const actionsBlocked = props.inFlight || props.startRecoveryPending;
   const asking = snapshot ? `run:${snapshot.runId}` : `recovery:${props.unreachableRunId}`;
-  if (confirming !== '' && (props.inFlight || confirming !== asking)) setConfirming('');
+  if (confirming !== '' && (actionsBlocked || confirming !== asking)) setConfirming('');
 
   /**
    * Creating a run costs the one pointer this browser keeps, so it is never a
    * single click while another run is reachable: the id about to be replaced is
    * named and the captain says yes twice. While the run on screen is working
-   * there is no second yes to give — the stop is the only way out of it.
+   * there is no second yes to give — the stop is the only way out of it. The
+   * server snapshot is the source of truth for that working state.
    */
-  const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !props.inFlight
+  const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !actionsBlocked
     ? renderBriefingReplacementConfirmation(briefingElementFactory, {
         replacing,
         disabled: props.busy,
         onKeep: () => setConfirming(''),
         onCreate: () => { setConfirming(''); props.onCreate(briefing.trim()); },
       })
-    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || props.inFlight, onOpen: () => setConfirming(asking) });
+    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => setConfirming(asking) });
 
   const briefingEditor = renderBriefingEditor(briefingElementFactory, { value: briefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setBriefing });
   const briefingCreateButton = renderBriefingCreateButton(briefingElementFactory, { disabled: props.busy || briefing.trim() === '', onCreate: () => props.onCreate(briefing.trim()) });
@@ -136,7 +142,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // its approve button while returning a card is off everywhere: the decision
   // those controls would answer is already made.
   const stopped = snapshot?.status === 'cancelled';
-  const running = snapshot?.status === 'running';
+  const running = snapshotRunning;
   const failed = snapshot?.status === 'failed';
   const closed = snapshot?.gate.state === 'closed';
   const reopened = snapshot?.gate.state === 'reopened';
@@ -174,11 +180,11 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     {snapshot && <>
       <p className="gate-briefing">{snapshot.briefing}</p>
       <div className="actions gate-actions">
-        {!props.inFlight && openRunForm('Abrir outra execução')}
+        {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
-        {props.inFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
-        <button className="primary" onClick={props.onStart} disabled={props.busy || running || stopped || snapshot.directions.length > 0}>
-          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.busy ? 'Executando…' : failed ? 'Tentar novamente' : 'Executar etapa de identidade'}
+        {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
+        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
+          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 
