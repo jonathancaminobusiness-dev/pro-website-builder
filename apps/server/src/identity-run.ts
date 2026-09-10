@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createFixtureIR, flattenTokens, type Approval, type TokenValue } from '@pwb/domain';
-import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
+import { Applier, PatchGate, Scheduler, stageDeadlinesMs, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { approvalOf, identityHash, identityLint, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
@@ -44,6 +44,11 @@ function mergeFailures(...groups: Array<Array<{ taskId: string; reason: string }
 }
 
 const INTERRUPTED = 'The server restarted while the identity stage was running, so that fan-out was lost. Start the stage again.';
+
+function identityStageDeadlineMs(): number {
+  const override = Number(process.env.PWB_STAGE_DEADLINE_MS);
+  return Number.isFinite(override) && override > 0 ? override : stageDeadlinesMs.identity;
+}
 
 /** What the Gate 1 screen reads: three directions side by side, with everything the captain needs to decide. */
 export interface IdentityDirectionView {
@@ -118,7 +123,7 @@ export class IdentityRun {
   private abort: AbortController | undefined;
   private briefing: string;
 
-  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines> }) {
+  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
     this.briefing = options.briefing ?? IDENTITY_BRIEFING;
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
@@ -233,7 +238,7 @@ export class IdentityRun {
     this.status = 'running';
     this.abort = new AbortController();
     this.failure = undefined;
-    this.inFlight = this.stage.run(this.abort.signal).then(async (result) => {
+    this.inFlight = this.runStage(this.abort.signal).then(async (result) => {
       this.result = result;
       await this.persistCandidates(result);
       this.status = 'needs_review';
@@ -245,6 +250,22 @@ export class IdentityRun {
     });
     await this.inFlight;
     return this.snapshot();
+  }
+
+  private async runStage(signal: AbortSignal): Promise<IdentityStageResult> {
+    const deadlineMs = this.options.stageDeadlineMs ?? identityStageDeadlineMs();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        this.abort?.abort();
+        reject(new Error(`The identity stage exceeded its ${deadlineMs}ms deadline.`));
+      }, deadlineMs);
+    });
+    try {
+      return await Promise.race([this.stage.run(signal), deadline]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**

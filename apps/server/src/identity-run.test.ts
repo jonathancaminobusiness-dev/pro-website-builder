@@ -10,7 +10,7 @@ import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
-import { IdentityRun } from './identity-run.js';
+import { IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
 import { STUDIO_ORIGIN } from './security.js';
 
 let directory: string;
@@ -89,6 +89,38 @@ describe('identity run', () => {
     expect(snapshot.failures).toEqual(expect.arrayContaining([
       expect.objectContaining({ taskId: 'identity-curator', reason: expect.stringMatching(/Install Codex CLI/) }),
     ]));
+  });
+
+  it('surfaces a stage deadline when a Codex turn never settles', async () => {
+    let executorStarted = false;
+    let aborted = false;
+    const provider = new CodexRunner({ execute: async (_executable, _args, { signal }) => {
+      executorStarted = true;
+      return new Promise<never>((_resolve, reject) => {
+        const onAbort = (): void => {
+          aborted = true;
+          reject(new DOMException('The Codex turn was aborted.', 'AbortError'));
+        };
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    } });
+    const run = new IdentityRun({
+      runId: 'identity-codex-stage-deadline',
+      repository: new ProjectRepository(database),
+      provider,
+      stageDeadlineMs: 25,
+    });
+    await run.initialize();
+
+    const result = await Promise.race([
+      run.start(),
+      new Promise<IdentityRunSnapshot>((resolve) => setTimeout(() => resolve(run.snapshot()), 100)),
+    ]);
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toMatch(/identity stage exceeded its 25ms deadline/i);
+    if (executorStarted) expect(aborted).toBe(true);
   });
 
   it('restores task failure details after a failed identity run restarts', async () => {
