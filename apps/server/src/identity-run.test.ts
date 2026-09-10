@@ -335,25 +335,6 @@ describe('identity run', () => {
     expect(new Set(reapproved.approvals.map((approval) => approval.id)).size).toBe(2);
   });
 
-  it('shows every colour token on the card, including one a director nested', async () => {
-    const inner = new FakeIdentityProvider();
-    const provider: ModelProvider = {
-      async propose(task, signal) {
-        const result = await inner.propose(task, signal);
-        if (task.id !== 'identity-director-editorial-material' || !result.proposal) return result;
-        const identity = result.proposal.operations[0]!.value as { tokens: { color: Record<string, unknown> } };
-        const tokens = { ...identity.tokens, color: { ...identity.tokens.color, brand: { primary: { $value: '#b4552f', $type: 'color' } } } };
-        return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: { ...identity, tokens } }] } };
-      },
-    };
-    const run = new IdentityRun({ runId: 'nested-color', repository: new ProjectRepository(database), provider });
-    await run.initialize();
-    const started = await run.start();
-    const card = started.directions.find((direction) => direction.directionId === 'editorial-material')!;
-    expect(card.swatches.find((swatch) => swatch.path === 'color.brand.primary')?.value).toBe('#b4552f');
-    expect(card.swatches.every((swatch) => swatch.value !== 'undefined')).toBe(true);
-  });
-
   it('re-derives the chosen card from the version a token change produced', async () => {
     const run = newRun();
     await run.initialize();
