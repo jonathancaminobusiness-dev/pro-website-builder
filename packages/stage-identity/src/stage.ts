@@ -187,6 +187,23 @@ export interface IdentityApproval {
 /** A refusal the caller can fix: a bad value, a decision the gate does not allow, a direction that is not in the run. */
 export class StageError extends Error {}
 
+/**
+ * A stage deadline is different from a captain's stop. The latter deliberately
+ * keeps the work that is already useful for review; the former must prevent
+ * the stage from crossing into a later phase after its caller has failed it.
+ * The server passes this code through AbortSignal.reason without coupling the
+ * stage to the server's error class.
+ */
+export const IDENTITY_STAGE_DEADLINE_CODE = 'PWB_IDENTITY_STAGE_DEADLINE';
+
+function throwIfIdentityStageDeadline(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason as { code?: unknown; error?: unknown } | undefined;
+  if (reason?.code !== IDENTITY_STAGE_DEADLINE_CODE) return;
+  if (reason.error instanceof Error) throw reason.error;
+  throw new StageError('The identity stage exceeded its deadline.');
+}
+
 /** One critic seat: the critic that was asked and the subject it was asked about. */
 function criticSeat(report: CritiqueReport): string {
   return `${report.criticId}|${report.subject.kind === 'direction' ? report.subject.directionId : 'matrix'}`;
@@ -262,15 +279,22 @@ export class IdentityStage {
   async run(signal?: AbortSignal): Promise<IdentityStageResult> {
     await this.record('identity.stage.started', { runId: this.options.runId, baseVersionId: this.options.baseVersionId, promptVersion: IDENTITY_PROMPT_VERSION });
     this.brief = await this.curate(signal);
+    throwIfIdentityStageDeadline(signal);
     this.candidates = await this.direct(this.brief, signal);
+    throwIfIdentityStageDeadline(signal);
     this.divergence = this.measureDivergence();
     this.critiques = await this.critique(this.brief, signal);
+    throwIfIdentityStageDeadline(signal);
     this.applyCritiqueToCandidates();
     this.candidates = await this.refine(this.brief, signal);
+    throwIfIdentityStageDeadline(signal);
     await this.syncMatrix();
+    throwIfIdentityStageDeadline(signal);
     this.divergence = this.measureDivergence();
     await this.recritiqueRefined(this.brief, signal);
+    throwIfIdentityStageDeadline(signal);
     await this.planImagery(this.brief, signal);
+    throwIfIdentityStageDeadline(signal);
     await this.record('identity.stage.gate_opened', { runId: this.options.runId, directions: this.candidates.map((candidate) => candidate.directionId), divergencePassed: this.divergence.passed });
     return this.snapshot();
   }
@@ -547,6 +571,7 @@ export class IdentityStage {
       }
     }
     const results = await this.dispatch(tasks, signal, (task) => critiqueReportSchemaFor(seatOf.get(task.id)!.dimension));
+    throwIfIdentityStageDeadline(signal);
     const reports: CritiqueReport[] = [];
     for (const result of results) {
       if (result.proposal) {
@@ -577,6 +602,7 @@ export class IdentityStage {
         await this.record('identity.critic.rejected', { taskId: result.taskId, reason });
       }
     }
+    throwIfIdentityStageDeadline(signal);
     await this.record('identity.critique.completed', { reports: reports.length, abstained: reports.filter((report) => report.abstain).length });
     return reports;
   }
@@ -666,6 +692,7 @@ export class IdentityStage {
         brief: identityRefinerPrompt({ brief, directionId: candidate.directionId, baseVersionId: base.id, allowedPaths: IDENTITY_ALLOWED_PATHS, identity: base.ir.identity, findings: { critique: candidate.blocking, rubric: this.rubricFindingsFor(candidate.directionId), lint: ownLintFindings(candidate.lint) } }),
       });
       const [result] = await this.dispatch([task], signal);
+      throwIfIdentityStageDeadline(signal);
       if (!result?.proposal) { this.failures.push({ taskId: task.id, reason: 'The refiner produced no proposal; the candidate keeps its findings for the captain.' }); continue; }
       let version: VersionRecord;
       try {
@@ -759,6 +786,7 @@ export class IdentityStage {
     // direction is a schema violation and gets the one corrective re-invocation.
     const seatOfTask = (taskId: string) => taskId.replace('identity-art-director-', '') as IdentityAxisBriefId;
     const results = await this.dispatch(tasks, signal, (task) => imagePromptPlanSchemaFor(seatOfTask(task.id)));
+    throwIfIdentityStageDeadline(signal);
     for (const result of results) {
       const directionId = seatOfTask(result.taskId);
       const index = this.candidates.findIndex((candidate) => candidate.directionId === directionId);
@@ -773,6 +801,7 @@ export class IdentityStage {
         await this.record('identity.imagery.rejected', { directionId, reason });
       }
     }
+    throwIfIdentityStageDeadline(signal);
     await this.record('identity.imagery.planned', { plans: this.candidates.filter((candidate) => candidate.imagePlan).length, skipped: this.candidates.length - planning.length, generated: 0 });
   }
 
