@@ -1083,3 +1083,44 @@ test('a queued snapshot cannot regress an observed running run', async ({ page }
   await expect(observer.getByText('pronto para executar', { exact: true })).toHaveCount(0);
   await observer.close();
 });
+
+test('a poll started before cancellation cannot replace the current run state', async ({ page }) => {
+  await page.clock.install();
+  let releasePoll = (): void => {};
+  const pollHeld = new Promise<void>((resolve) => { releasePoll = resolve; });
+  let pollStarted = false;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('running')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/cancel`) {
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Cancellation failed.' }) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      pollStarted = true;
+      await pollHeld;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => pollStarted).toBe(true);
+
+  await page.getByRole('button', { name: 'Cancelar execução' }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  releasePoll();
+
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+  await expect(page.getByText('aguarda gate', { exact: true })).toHaveCount(0);
+});

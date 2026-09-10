@@ -127,7 +127,11 @@ export default function App() {
   }, []);
 
   const identityAct = useCallback(async (action: () => Promise<IdentityGateSnapshot>, options: IdentityActOptions = {}): Promise<IdentityGateSnapshot | undefined> => {
-    const source: IdentityReadSource = options.source ?? { generation: identityGeneration.current, epoch: startEpoch.current, kind: 'action' };
+    const source: IdentityReadSource = options.source ?? (() => {
+      const epoch = startEpoch.current + 1;
+      startEpoch.current = epoch;
+      return { generation: identityGeneration.current, epoch, kind: 'action' as const };
+    })();
     const manageBusy = options.manageBusy !== false;
     if (manageBusy) setBusy(true);
     setIdentityError('');
