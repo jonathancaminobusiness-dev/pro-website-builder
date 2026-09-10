@@ -65,6 +65,20 @@ describe('identity run', () => {
     expect(run.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
   });
 
+  it('persists a normalized briefing when restoring a legacy run', async () => {
+    const repository = new ProjectRepository(database);
+    const runId = 'identity-normalized-restore';
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
+    await run.initialize();
+    database.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run('  Nicho de cerâmica autoral.  ', runId);
+
+    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+
+    expect((await repository.getRun(runId))?.briefing).toBe('Nicho de cerâmica autoral.');
+    expect(restored.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
+  });
+
   it('passes per-critic deadlines through to the identity stage', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({

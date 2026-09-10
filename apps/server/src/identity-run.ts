@@ -170,7 +170,9 @@ export class IdentityRun {
   async restore(): Promise<boolean> {
     const run = await this.options.repository.getRun(this.options.runId);
     if (!run) return false;
-    this.briefing = normalizeIdentityBriefing(run.briefing, run.briefing !== undefined);
+    const briefing = normalizeIdentityBriefing(run.briefing, run.briefing !== undefined);
+    if (briefing !== run.briefing) await this.options.repository.updateRunBriefing(this.options.runId, briefing);
+    this.briefing = briefing;
     this.stage = this.newStage();
     for (const version of await this.options.repository.listVersions(run.projectId)) {
       if (this.store.get(version.id)) continue;
