@@ -26,9 +26,9 @@ const direction = {
   imageryViolations: [],
 };
 
-function snapshot(status: 'queued' | 'running' | 'needs_review' | 'cancelled') {
+function snapshot(status: 'queued' | 'running' | 'needs_review' | 'cancelled' | 'failed' | 'interrupted', snapshotRunId = runId) {
   return {
-    runId,
+    runId: snapshotRunId,
     status,
     baseVersionId: 'version-root',
     briefing: 'A deterministic briefing for the Gate 1 interface.',
@@ -434,4 +434,43 @@ test('a terminal poll does not unlock decisions during cancellation', async ({ p
   releaseCancel();
   await expect(page.getByText('cancelada', { exact: true })).toBeVisible();
   releaseStart();
+});
+
+test('a retry blocks Gate 1 replacement actions while start is pending', async ({ page }) => {
+  await page.clock.install();
+  let releaseStart = (): void => {};
+  const startHeld = new Promise<void>((resolve) => { releaseStart = resolve; });
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      await startHeld;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Tentar novamente' }).click();
+
+  await expect(page.getByText('falhou', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Tentar novamente' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Nova execução' })).toBeDisabled();
+  await expect(page.getByLabel('Abrir outra execução')).toHaveCount(0);
+
+  releaseStart();
+  await expect(page.getByText('aguarda gate', { exact: true })).toBeVisible();
 });

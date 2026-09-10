@@ -109,7 +109,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // wins and the final Gate 1 result remains visible.
   const startPending = props.inFlight && snapshot?.status === 'queued';
   const executionInFlight = snapshotRunning || assetInFlight || startPending;
-  const actionsBlocked = executionInFlight || props.startRecoveryPending;
+  const actionsBlocked = props.inFlight || props.startRecoveryPending;
   const visibleStatus = startPending ? 'running' : snapshot?.status;
   const asking = snapshot ? `run:${snapshot.runId}` : `recovery:${props.unreachableRunId}`;
   if (confirming !== '' && (actionsBlocked || confirming !== asking)) setConfirming('');
@@ -188,7 +188,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
         {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
-        <button className="primary" onClick={props.onStart} disabled={props.busy || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
+        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
           {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : failed ? 'Tentar novamente' : props.startRecoveryPending ? 'Verificando execução…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>

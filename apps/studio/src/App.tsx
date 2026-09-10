@@ -223,7 +223,7 @@ export default function App() {
     void identityAct(() => identityPost(`/api/identity/runs/${runId}/start`), {
       manageBusy: false,
       source: { epoch, kind: 'action' },
-      shouldAccept: (next) => (pendingStart.current?.runId === runId && pendingStart.current.epoch === epoch)
+      shouldAccept: (next) => (pendingStart.current?.runId === runId && pendingStart.current.epoch === epoch && latestIdentity.current?.runId === runId)
         || (latestIdentity.current?.runId === runId && latestIdentity.current.status === 'running' && next.status !== 'queued'),
       onFailure: (cause) => {
         if (pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
