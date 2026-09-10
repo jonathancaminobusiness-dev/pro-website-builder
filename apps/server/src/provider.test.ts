@@ -2,10 +2,19 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createFixtureIR, type AgentTask } from '@pwb/domain';
 import { ClaudeRunner, CodexRunner, FakeModelProvider } from '@pwb/providers';
 import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
 
 const request = { id: 'asset-job', digest: 'digest', prompt: 'papel impresso em duas tintas', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' };
+
+const identityTask: AgentTask = {
+  id: 'identity-provider', attempt: 1, stage: 'identity', role: 'critic', state: 'queued', lane: 'claude',
+  baseVersionId: 'v0', inputDigest: 'brief', promptVersion: '1', modelAlias: 'claude-local', deadlineMs: 600_000,
+  allowedPaths: [], documentSlice: { '/identity': createFixtureIR().identity }, brief: 'fixture',
+};
+
+const identityResult = { taskId: identityTask.id, status: 'succeeded' as const, summary: 'fixture' };
 
 let directory: string | undefined;
 afterEach(async () => {
@@ -21,6 +30,30 @@ describe('model provider selection', () => {
     expect(createModelProvider('codex')).toBeInstanceOf(CodexRunner);
     expect(createIdentityProvider('codex')).toBeInstanceOf(CodexRunner);
     expect(() => createModelProvider('openai')).toThrow(/fake, claude-code, or codex/i);
+  });
+
+  it('passes an extended identity critic deadline to both local provider adapters', async () => {
+    let claudeTimeoutMs = 0;
+    const claude = createIdentityProvider('claude-code', {
+      timeoutMs: 600_000,
+      execute: async (_executable, _args, options) => {
+        claudeTimeoutMs = options.timeoutMs;
+        return { stdout: JSON.stringify(identityResult), stderr: '' };
+      },
+    });
+    await expect(claude.propose(identityTask)).resolves.toEqual(identityResult);
+    expect(claudeTimeoutMs).toBe(600_000);
+
+    let codexTimeoutMs = 0;
+    const codex = createIdentityProvider('codex', {
+      timeoutMs: 600_000,
+      execute: async (_executable, _args, options) => {
+        codexTimeoutMs = options.timeoutMs;
+        return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(identityResult) } })}\n`, stderr: '' };
+      },
+    });
+    await expect(codex.propose(identityTask)).resolves.toEqual(identityResult);
+    expect(codexTimeoutMs).toBe(600_000);
   });
 });
 

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { RenderHub } from '@pwb/render-hub';
 import { renderDesign } from '@pwb/renderer';
 import { RenderHubEvidenceSource } from '@pwb/stage-prototype';
+import type { IdentityStageDeadlines } from '@pwb/stage-identity';
 import { createApiServer, RunConflictError } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
@@ -11,15 +12,17 @@ import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
 import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
+import { identityDeadlinesFromEnvironment, identityProviderTimeoutMs } from './identity-deadlines.js';
 
-export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
+export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string; identityDeadlines?: Partial<IdentityStageDeadlines> } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
   const root = process.cwd();
   const dbPath = options.dbPath ?? process.env.PWB_DB_PATH ?? join(root, '.treehouse', 'pro-website-builder.sqlite');
   const renderCacheDir = options.renderCacheDir ?? process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
   await mkdir(join(dbPath, '..'), { recursive: true });
   await mkdir(renderCacheDir, { recursive: true });
   const provider = createModelProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
-  const identityProvider = createIdentityProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
+  const identityDeadlines = options.identityDeadlines ?? identityDeadlinesFromEnvironment();
+  const identityProvider = createIdentityProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER, { timeoutMs: identityProviderTimeoutMs(identityDeadlines) });
   const raster = createRasterProvider();
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
@@ -32,7 +35,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // second instance would decide Gate 1 from a ledger the first has already
   // moved on from.
   const identityLoading = new Map<string, Promise<IdentityRun | undefined>>();
-  const newIdentityRun = (id: string, briefing?: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir, ...(briefing !== undefined ? { briefing } : {}) });
+  const newIdentityRun = (id: string, briefing?: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir, ...(briefing !== undefined ? { briefing } : {}), ...(identityDeadlines ? { deadlines: identityDeadlines } : {}) });
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {

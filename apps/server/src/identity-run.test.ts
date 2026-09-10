@@ -50,6 +50,23 @@ describe('identity run', () => {
     expect(curatorPrompt).toContain(briefing);
   });
 
+  it('passes per-critic deadlines through to the identity stage', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({
+      runId: 'identity-deadlines',
+      repository,
+      provider: new FakeIdentityProvider(),
+      deadlines: { critic: 1_000, criticById: { 'system-a11y-critic': 2_000 } },
+    });
+    await run.initialize();
+    await run.start();
+
+    const queued = (await repository.listEvents('identity-deadlines')).filter((event) => event.type === 'identity.task.queued');
+    const deadlineOf = (taskId: string): unknown => queued.find((event) => event.payload.taskId === taskId)?.payload.deadlineMs;
+    expect(deadlineOf('identity-critic-brand-fit-critic-editorial-material')).toBe(1_000);
+    expect(deadlineOf('identity-critic-system-a11y-critic-editorial-material')).toBe(2_000);
+  });
+
   it('spends no model turn until the captain starts it', async () => {
     const run = newRun();
     await run.initialize();

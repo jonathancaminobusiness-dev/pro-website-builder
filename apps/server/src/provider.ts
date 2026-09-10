@@ -1,4 +1,4 @@
-import { ClaudeRunner, CodexRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type ModelProvider, type RasterProvider } from '@pwb/providers';
+import { ClaudeRunner, CodexRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type ClaudeRunnerOptions, type CodexJsonRunnerOptions, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { FakeIdentityProvider } from '@pwb/stage-identity';
 
 export type ModelProviderName = 'fake' | 'claude-code' | 'codex';
@@ -22,10 +22,13 @@ export function createModelProvider(name: string = 'fake'): ModelProvider {
  * adapters are `ClaudeRunner` and `CodexRunner`: the stage carries each role's
  * closed schema in the prompt it builds.
  */
-export function createIdentityProvider(name: string = 'fake'): ModelProvider {
+export function createIdentityProvider(name: 'claude-code', options?: ClaudeRunnerOptions): ModelProvider;
+export function createIdentityProvider(name: 'codex', options?: CodexJsonRunnerOptions): ModelProvider;
+export function createIdentityProvider(name?: string, options?: ClaudeRunnerOptions | CodexJsonRunnerOptions): ModelProvider;
+export function createIdentityProvider(name: string = 'fake', options: ClaudeRunnerOptions | CodexJsonRunnerOptions = {}): ModelProvider {
   const selected = modelProviderName(name);
-  if (selected === 'claude-code') return new ClaudeRunner();
-  if (selected === 'codex') return new CodexRunner();
+  if (selected === 'claude-code') return new ClaudeRunner(options as ClaudeRunnerOptions);
+  if (selected === 'codex') return new CodexRunner(options as CodexJsonRunnerOptions);
   return new FakeIdentityProvider();
 }
 

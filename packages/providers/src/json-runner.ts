@@ -56,9 +56,9 @@ export class JsonRunnerError extends Error {
 const DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 
 export class ClaudeJsonRunner implements JsonModelRunner {
-  private readonly options: Required<Omit<ClaudeRunnerOptions, 'timeoutMs'>>;
+  private readonly options: Required<Omit<ClaudeRunnerOptions, 'timeoutMs' | 'execute'>>;
 
-  constructor(options: Omit<ClaudeRunnerOptions, 'timeoutMs'> = {}) {
+  constructor(options: Omit<ClaudeRunnerOptions, 'timeoutMs' | 'execute'> = {}) {
     this.options = { executable: 'claude', maxTurns: 4, ...options };
   }
 

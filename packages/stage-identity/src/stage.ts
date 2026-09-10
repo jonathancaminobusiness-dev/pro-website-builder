@@ -48,7 +48,7 @@ import {
   type DirectionVectorDraft,
   type ImagePromptPlan,
 } from './contracts.js';
-import { identityCritics } from './critics.js';
+import { identityCritics, type IdentityCriticId } from './critics.js';
 import { evaluateIdentityGate, handoffOf, identityHash, type IdentityGateRecord, type IdentityGateState, type IdentityHandoff } from './gate.js';
 import { briefCuratorPrompt, criticPrompt, documentSliceOf, identityDirectorPrompt, identityRefinerPrompt, imageArtDirectorPrompt } from './prompts.js';
 
@@ -64,7 +64,16 @@ export const IDENTITY_READABLE_PATHS = ['/identity', '/pages', '/assets', '/revi
 /** The identity stage's write scope, pinned to the stage and role the foundation assigns it. */
 export const IDENTITY_TASK_SCOPE: TaskScope = { allowedPaths: IDENTITY_ALLOWED_PATHS, stage: 'identity', role: stageRoles.identity };
 
-export interface IdentityStageDeadlines { curator: number; director: number; critic: number; refiner: number; artDirector: number; raster: number; }
+export interface IdentityStageDeadlines {
+  curator: number;
+  director: number;
+  critic: number;
+  /** Optional per-critic deadlines; absent entries keep the role default above. */
+  criticById?: Partial<Record<IdentityCriticId, number>>;
+  refiner: number;
+  artDirector: number;
+  raster: number;
+}
 export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 7 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000, raster: 5 * 60_000 };
 
 export interface IdentityStageOptions {
@@ -222,7 +231,14 @@ export class IdentityStage {
   constructor(private readonly options: IdentityStageOptions) {
     this.scheduler = options.scheduler ?? new Scheduler();
     this.branches = new CandidateBranchStore(options.store);
-    this.deadlines = { ...defaultIdentityDeadlines, ...options.deadlines };
+    this.deadlines = {
+      ...defaultIdentityDeadlines,
+      ...options.deadlines,
+      ...(options.deadlines?.criticById ? { criticById: { ...defaultIdentityDeadlines.criticById, ...options.deadlines.criticById } } : {}),
+    };
+    for (const [criticId, deadline] of Object.entries(this.deadlines.criticById ?? {})) {
+      if (deadline === undefined || !Number.isSafeInteger(deadline) || deadline <= 0) throw new StageError(`Identity critic ${criticId} deadline must be a positive integer in milliseconds.`);
+    }
     this.modelAlias = options.modelAlias ?? 'claude-local';
     this.now = options.now ?? (() => new Date().toISOString());
   }
@@ -485,7 +501,7 @@ export class IdentityStage {
         tasks.push(this.task({
           id: `identity-critic-${critic.id}`,
           role: 'critic',
-          deadlineMs: this.deadlines.critic,
+          deadlineMs: this.criticDeadline(critic.id),
           allowedPaths: [],
           ir: this.branches.version(first.versionId).ir,
           brief: criticPrompt({ criticId: critic.id, dimension: critic.dimension, brief, subject: { kind: 'matrix' }, rubric: critic.rubric, vetoes: critic.vetoes, document: { matrix: this.candidates.map((candidate) => candidate.vector), constants: first.identity.direction.divergence?.constants ?? [], comparisons: this.divergence.pairs } }),
@@ -497,7 +513,7 @@ export class IdentityStage {
         tasks.push(this.task({
           id: `identity-critic-${critic.id}-${candidate.directionId}`,
           role: 'critic',
-          deadlineMs: this.deadlines.critic,
+          deadlineMs: this.criticDeadline(critic.id),
           allowedPaths: [],
           ir: this.branches.version(candidate.versionId).ir,
           brief: criticPrompt({ criticId: critic.id, dimension: critic.dimension, brief, subject: { kind: 'direction', directionId: candidate.directionId }, rubric: critic.rubric, vetoes: critic.vetoes, document: candidate.identity }),
@@ -537,6 +553,10 @@ export class IdentityStage {
     }
     await this.record('identity.critique.completed', { reports: reports.length, abstained: reports.filter((report) => report.abstain).length });
     return reports;
+  }
+
+  private criticDeadline(criticId: IdentityCriticId): number {
+    return this.deadlines.criticById?.[criticId] ?? this.deadlines.critic;
   }
 
   /**

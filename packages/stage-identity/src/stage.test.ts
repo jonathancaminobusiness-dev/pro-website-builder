@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createFixtureIR, flattenTokens, type AgentResult, type AgentTask } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
-import { defaultIdentityDeadlines, IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
+import { IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
 import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
@@ -11,7 +11,7 @@ import { generateImageAsset, imageryPolicyViolations, plannedImagery } from './a
 import { directionVectorDraftSchemaFor, type ImagePromptPlan } from './contracts.js';
 import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
-import { IdentityStage } from './stage.js';
+import { defaultIdentityDeadlines, IdentityStage, type IdentityStageDeadlines } from './stage.js';
 import { stageRoles } from '@pwb/domain';
 
 const BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A prova é o registro de cada decisão.';
@@ -24,7 +24,7 @@ function seedStore(): { store: VersionStore; baseVersionId: string } {
 
 interface StageHarness { stage: IdentityStage; store: VersionStore; baseVersionId: string; events: Array<{ type: string; payload: Record<string, unknown> }>; }
 
-function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; raster?: ConstructorParameters<typeof HiggsfieldMcpProvider>[0]; onEvent?: (type: string, payload: Record<string, unknown>) => void } = {}): StageHarness {
+function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; deadlines?: Partial<IdentityStageDeadlines>; raster?: ConstructorParameters<typeof HiggsfieldMcpProvider>[0]; onEvent?: (type: string, payload: Record<string, unknown>) => void } = {}): StageHarness {
   const { store, baseVersionId } = seedStore();
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
   const stage = new IdentityStage({
@@ -34,6 +34,7 @@ function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; ras
     provider: options.provider ?? new FakeIdentityProvider(),
     store,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+    ...(options.deadlines ? { deadlines: options.deadlines } : {}),
     raster: new HiggsfieldMcpProvider(options.raster ?? { configured: false }),
     onEvent: (type, payload) => { events.push({ type, payload }); options.onEvent?.(type, payload); },
     now: () => '2026-09-07T12:00:00.000Z',
@@ -42,6 +43,10 @@ function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; ras
 }
 
 describe('identity stage fan-out', () => {
+  it('keeps the three-minute critic deadline as the default', () => {
+    expect(defaultIdentityDeadlines.critic).toBe(3 * 60_000);
+  });
+
   it('turns one briefing into three sibling directions that never merge', async () => {
     const { stage, store, baseVersionId } = harness();
     const result = await stage.run();
@@ -197,6 +202,48 @@ describe('identity stage fan-out', () => {
     await stage.run();
     expect(peak).toBeLessThanOrEqual(2);
     expect(peak).toBeGreaterThan(1);
+  });
+
+  it('records a critic that exceeds its configured default deadline', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-critic-system-a11y-critic-editorial-material') {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 20);
+            signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('critic cancelled')); }, { once: true });
+          });
+        }
+        return inner.propose(task, signal);
+      },
+    };
+    const { stage } = harness({ provider, deadlines: { critic: 5 } });
+
+    const result = await stage.run();
+
+    expect(result.failures.some((failure) => failure.taskId === 'identity-critic-system-a11y-critic-editorial-material' && /deadline/i.test(failure.reason))).toBe(true);
+    expect(result.candidates.find((candidate) => candidate.directionId === 'editorial-material')?.unscoredDimensions).toContain('system-accessibility');
+  });
+
+  it('uses a per-critic deadline override when a critic needs more time', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-critic-system-a11y-critic-editorial-material') {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, 20);
+            signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('critic cancelled')); }, { once: true });
+          });
+        }
+        return inner.propose(task, signal);
+      },
+    };
+    const { stage } = harness({ provider, deadlines: { critic: 5, criticById: { 'system-a11y-critic': 50 } } });
+
+    const result = await stage.run();
+
+    expect(result.failures.some((failure) => failure.taskId === 'identity-critic-system-a11y-critic-editorial-material')).toBe(false);
+    expect(result.candidates.find((candidate) => candidate.directionId === 'editorial-material')?.scores).toContainEqual({ criticId: 'system-a11y-critic', dimension: 'system-accessibility', score: 4 });
   });
 
   it('records the brief the curator extracted, with its evidence ids', async () => {
