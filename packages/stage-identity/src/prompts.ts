@@ -1,4 +1,4 @@
-import { documentPathSchemas, documentRules, governedContractFields, imagerySourceSchema, RASTER_IMAGERY_SOURCE, stageRoles, visualPropKeys, type DesignIR, type IdentitySpec } from '@pwb/domain';
+import { documentPathSchemas, documentRules, flattenTokens, governedContractFields, imagerySourceSchema, RASTER_IMAGERY_SOURCE, stageRoles, visualPropKeys, type DesignIR, type IdentitySpec } from '@pwb/domain';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { identityAxisBrief, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
 import { briefSpecSchema, critiqueReportSchema, directionVectorDraftSchemaFor, imagePromptPlanSchemaFor, IDENTITY_PROMPT_VERSION, RUBRIC_MINIMUM, type BriefSpec, type CritiqueReport } from './contracts.js';
@@ -35,6 +35,16 @@ function negatives(forbidden: IdentitySpec['forbiddenDefaults'] | BriefSpec['for
   ].join('\n');
 }
 
+function tokenContract(identity: IdentitySpec): string {
+  const roles = Object.entries(identity.tokenRoles).map(([role, path]) => `${role}=${path}`).join(', ');
+  const paths = [...flattenTokens(identity.tokens).keys()].sort().join(', ');
+  return [
+    `The identity token contract is closed for this stage. Keep exactly these token paths: ${paths}. Change token values only; do not add, remove or rename token paths.`,
+    `The \`tokenRoles\` object is closed and has exactly these supported role names and paths: ${roles}. Keep this exact set; do not add, remove or rename roles.`,
+    'Never invent role fields such as focusIndicator, stateSurface, stateText, secondaryText or signal. If a finding names one of those unsupported roles, repair it by reusing one of the supported role paths above or leave that finding open for the captain; never expand the schema.',
+  ].join('\n');
+}
+
 export function briefCuratorPrompt(briefing: string): string {
   return [
     'You are the brief curator of the identity stage. You do not design anything.',
@@ -62,6 +72,7 @@ export function identityDirectorPrompt(input: { brief: BriefSpec; axisBriefId: I
     negatives(input.brief.forbiddenDefaults),
     `The brief, with the evidence ids you must cite:\n${JSON.stringify(input.brief)}`,
     `The identity contract currently in the document, which you are replacing wholesale. Keep the same token paths so the existing pages keep resolving; change what the tokens mean, not what they are called:\n${JSON.stringify(input.currentIdentity)}`,
+    tokenContract(input.currentIdentity),
     `Every token you define and every one of these governed contract fields needs exactly one entry in \`decisions\`: ${governedContractFields.join(', ')}. A decision carries an axis, at least one evidence id, and a rationale that says what the choice does to hierarchy or use.`,
     `Answer with an AgentResult that carries both a \`proposal\` and an \`artifact\`; an answer missing either one is discarded. The \`proposal\` is a patch: it must set baseVersionId to ${input.baseVersionId}, declare stage "identity" and role "${stageRoles.identity}", touch only ${input.allowedPaths.join(', ')}, and contain exactly one operation: replace /identity with the complete IdentitySpec.`,
     `The \`artifact\` is the DirectionVectorDraft for your seat: \`directionId\` is "${input.axisBriefId}" and nothing else, \`label\` names this direction in one phrase, \`descriptors\` says in one sentence per axis what your choice on that axis means, \`constants\` lists what must hold across the whole fan-out, and \`incompatibilities\` names the pairs of moves this direction refuses to combine. The axis keys and the palette are measured from the document you propose, so the draft describes what you built; it cannot claim divergence the document does not carry.`,
@@ -96,6 +107,7 @@ export function criticPrompt(input: CriticPromptInput): string {
       : `You are reviewing the direction ${input.subject.directionId} and no other. Report with \`subject\` set to { "kind": "direction", "directionId": "${input.subject.directionId}" }, using that exact id and not the direction's label.`,
     HOUSE_RULES,
     'Report perception first (what the document literally declares), then comprehension (what that means for the audience and the promise), then findings. Never answer "rewrite the identity": each finding names one cause, its evidence, and the smallest repair that fixes it.',
+    'Every finding and suggested repair must use paths and fields already present in the supplied identity contract. Do not propose a new tokenRoles key, token path or schema field to represent a missing capability; reuse the existing contract or report the limitation as a finding for the captain.',
     'If you cannot decide, set `abstain` to true and say why. That escalates to the captain, which is a better answer than invented precision.',
     `The brief and its evidence ids:\n${JSON.stringify(input.brief)}`,
     `The document under review:\n${JSON.stringify(input.document)}`,
@@ -113,6 +125,8 @@ export function identityRefinerPrompt(input: { brief: BriefSpec; directionId: st
     `A \`rubric\` entry is a finding like any other: the named dimension scored below ${RUBRIC_MINIMUM} and the repair has to raise it in the document, never by arguing with the score.`,
     `The brief and its evidence ids:\n${JSON.stringify(input.brief)}`,
     `The identity to repair:\n${JSON.stringify(input.identity)}`,
+    tokenContract(input.identity),
+    `The repaired \`/identity\` value must match this IdentitySpec schema exactly:\n${JSON.stringify(documentPathSchemas['/identity'])}`,
     `Answer with an AgentResult whose \`proposal\` is a patch. It must set baseVersionId to ${input.baseVersionId}, declare stage "identity" and role "${stageRoles.identity}", touch only ${input.allowedPaths.join(', ')}, and contain exactly one operation: replace /identity with the repaired IdentitySpec.`,
   ].join('\n\n');
 }

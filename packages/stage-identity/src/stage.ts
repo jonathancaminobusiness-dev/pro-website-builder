@@ -373,7 +373,7 @@ export class IdentityStage {
       const seatId = seatOfDirector(result.taskId);
       try {
         const draft = requireArtifact(directionVectorDraftSchemaFor(seatId), result.artifact, result.taskId, 'DirectionVectorDraft');
-        drafts.push({ seatId, draft, identity: this.identityFromProposal(result.taskId, result.proposal), task: tasks.find((entry) => entry.id === result.taskId)! });
+        drafts.push({ seatId, draft, identity: this.identityFromProposal(result.taskId, result.proposal, base.ir.identity), task: tasks.find((entry) => entry.id === result.taskId)! });
       } catch (error) {
         const reason = error instanceof Error ? error.message : 'The director answer did not validate.';
         this.failures.push({ taskId: result.taskId, reason });
@@ -433,12 +433,23 @@ export class IdentityStage {
     return candidates;
   }
 
-  private identityFromProposal(taskId: string, proposal: Patch | undefined): IdentitySpec {
+  private identityFromProposal(taskId: string, proposal: Patch | undefined, before: IdentitySpec): IdentitySpec {
     if (!proposal) throw new StageError(`Director ${taskId} returned no proposal.`);
     if (proposal.operations.length !== 1) throw new StageError(`Director ${taskId} proposed ${proposal.operations.length} operations; the identity stage accepts exactly one replace of /identity.`);
     const [operation] = proposal.operations;
     if (!operation || operation.op !== 'replace' || operation.path !== '/identity') throw new StageError(`Director ${taskId} proposed ${operation?.op ?? 'nothing'} at ${operation?.path ?? 'no path'}; the identity stage accepts exactly one replace of /identity.`);
-    return identitySpecSchema.parse(operation.value);
+    const proposed = identitySpecSchema.parse(operation.value);
+    const pathsBefore = [...flattenTokens(before.tokens)].map(([path]) => path).sort();
+    const pathsAfter = [...flattenTokens(proposed.tokens)].map(([path]) => path).sort();
+    if (pathsBefore.join('|') !== pathsAfter.join('|')) {
+      throw new StageError(`Identity proposal ${taskId} changed the token vocabulary; a direction may change what a token means, not which tokens exist.`);
+    }
+    const rolesBefore = Object.entries(before.tokenRoles).sort(([a], [b]) => a.localeCompare(b)).map(([role, path]) => `${role}=${path}`);
+    const rolesAfter = Object.entries(proposed.tokenRoles).sort(([a], [b]) => a.localeCompare(b)).map(([role, path]) => `${role}=${path}`);
+    if (rolesBefore.join('|') !== rolesAfter.join('|')) {
+      throw new StageError(`Identity proposal ${taskId} changed the token role mapping; a direction may change token values, not which supported role points at which path.`);
+    }
+    return proposed;
   }
 
   /**
@@ -685,12 +696,7 @@ export class IdentityStage {
    * against has to survive the repair intact.
    */
   private repairedIdentity(taskId: string, proposal: Patch, before: IdentitySpec): IdentitySpec {
-    const proposed = this.identityFromProposal(taskId, proposal);
-    const pathsBefore = [...flattenTokens(before.tokens).keys()].sort();
-    const pathsAfter = [...flattenTokens(proposed.tokens).keys()].sort();
-    if (pathsBefore.join('|') !== pathsAfter.join('|')) {
-      throw new StageError(`Refiner ${taskId} changed the token vocabulary; a repair may change what a token means, not which tokens exist.`);
-    }
+    const proposed = this.identityFromProposal(taskId, proposal, before);
     return identitySpecSchema.parse({
       ...proposed,
       direction: { ...proposed.direction, ...(before.direction.divergence ? { divergence: before.direction.divergence } : {}), rejectedAlternatives: before.direction.rejectedAlternatives },

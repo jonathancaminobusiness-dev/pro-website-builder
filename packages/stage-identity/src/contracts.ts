@@ -2,7 +2,7 @@ import { divergenceAxisSchema, evidenceSchema } from '@pwb/domain';
 import { z } from 'zod';
 import type { IdentityAxisBriefId } from './axes.js';
 
-export const IDENTITY_PROMPT_VERSION = 'identity-v1';
+export const IDENTITY_PROMPT_VERSION = 'identity-v2';
 
 /**
  * The brief curator extracts before it creates: facts, unknowns and explicit

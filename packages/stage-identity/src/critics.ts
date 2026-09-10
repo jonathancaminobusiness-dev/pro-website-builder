@@ -59,10 +59,10 @@ export const identityCritics: readonly IdentityCriticDefinition[] = [
     scope: 'direction',
     rubric: [
       'The token system cannot produce a readable page: text and surface do not separate.',
-      'Only the primary text pair is usable; secondary and accent roles fail.',
-      'The main pairs are usable, but the system offers no answer for focus, state or reduced motion.',
-      'The system supports text, secondary text, focus and state, and declares a reduced-motion position.',
-      'The system supports all of that and its typographic scale and spacing rhythm still work at 200% zoom and in a long-content fixture.',
+      'Only the primary text pair is usable; the existing muted or accent token paths cannot provide readable secondary or signal treatments.',
+      'The main pairs are usable, but focus, state or reduced motion is not explained through the existing token roles and contract fields.',
+      'The supported token roles — surface, text, bodyTypeface, baseSpacing and sectionSpacing — support text, secondary text, focus and state without adding roles, and declare a reduced-motion position.',
+      'The same supported role set works at 200% zoom and in a long-content fixture while preserving the declared focus, state and reduced-motion treatments.',
     ],
     vetoes: [
       'A text and surface pair that cannot reach WCAG 2.2 AA contrast.',
