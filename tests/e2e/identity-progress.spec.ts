@@ -95,6 +95,61 @@ test('Gate 1 follows running progress and keeps the completed result after refre
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toHaveCount(0);
 });
 
+test('a stale poll cannot replace a newly opened run or erase its pointer', async ({ page }) => {
+  await page.clock.install();
+  const otherRunId = 'identity-progress-other-run';
+  let releaseFirstRead = (): void => {};
+  const firstReadHeld = new Promise<void>((resolve) => { releaseFirstRead = resolve; });
+  let firstReadStarted = false;
+  let firstReadCompleted = false;
+
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('identity-generation-test-initialized') === '1') return;
+    localStorage.clear();
+    sessionStorage.setItem('identity-generation-test-initialized', '1');
+  });
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      firstReadStarted = true;
+      await firstReadHeld;
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Identity run not found.' }) });
+      firstReadCompleted = true;
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${otherRunId}`) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('running', otherRunId)) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => firstReadStarted).toBe(true);
+
+  await page.getByLabel('Abrir outra execução').fill(otherRunId);
+  await page.locator('.gate-actions').getByRole('button', { name: 'Abrir' }).click();
+  await expect(page.locator('.run-id code')).toHaveText(otherRunId);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+
+  releaseFirstRead();
+  await expect.poll(() => firstReadCompleted).toBe(true);
+  await expect(page.locator('.run-id code')).toHaveText(otherRunId);
+
+  await page.reload();
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await expect(page.locator('.run-id code')).toHaveText(otherRunId);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+});
+
 test('an opened queued run follows a start from another tab', async ({ page }) => {
   const observer = await page.context().newPage();
   let phase: 'queued' | 'running' | 'needs_review' = 'queued';
@@ -258,6 +313,7 @@ test('queued polling failures do not consume the start recovery budget', async (
     await expect.poll(() => reads).toBe(attempt + 1);
   }
 
+  await expect(page.getByText('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
   await expect(page.getByRole('button', { name: 'Verificando execução…' })).toBeVisible();
   await page.clock.fastForward(1_500);

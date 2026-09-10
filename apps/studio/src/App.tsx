@@ -49,6 +49,7 @@ const GATE2_ROUTE = '#/gate-2';
 const POLL_MAX_FAILURES = 10;
 
 interface IdentityReadSource {
+  generation: number;
   epoch: number;
   kind: 'read' | 'action';
 }
@@ -82,6 +83,7 @@ export default function App() {
   const [startingRun, setStartingRun] = useState(false);
   const [startRecoveryRunId, setStartRecoveryRunId] = useState('');
   const startEpoch = useRef(0);
+  const identityGeneration = useRef(0);
   const pendingStart = useRef<{ runId: string; epoch: number } | null>(null);
   const latestIdentity = useRef<IdentityGateSnapshot | null>(null);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
@@ -99,7 +101,8 @@ export default function App() {
 
   const create = () => act(async () => (await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) })).snapshot);
 
-  const acceptIdentityRun = useCallback((next: IdentityGateSnapshot, source: IdentityReadSource = { epoch: startEpoch.current, kind: 'action' }): boolean => {
+  const acceptIdentityRun = useCallback((next: IdentityGateSnapshot, source: IdentityReadSource = { generation: identityGeneration.current, epoch: startEpoch.current, kind: 'action' }): boolean => {
+    if (source.generation !== identityGeneration.current) return false;
     if (source.kind === 'read' && source.epoch < startEpoch.current) return false;
     const localStart = pendingStart.current;
     const previousIdentity = latestIdentity.current;
@@ -120,25 +123,27 @@ export default function App() {
   }, []);
 
   const identityAct = useCallback(async (action: () => Promise<IdentityGateSnapshot>, options: IdentityActOptions = {}): Promise<IdentityGateSnapshot | undefined> => {
+    const source: IdentityReadSource = options.source ?? { generation: identityGeneration.current, epoch: startEpoch.current, kind: 'action' };
     const manageBusy = options.manageBusy !== false;
     if (manageBusy) setBusy(true);
     setIdentityError('');
     try {
       const next = await action();
       if (options.shouldAccept?.(next) ?? true) {
-        rememberIdentityRun(next.runId);
-        acceptIdentityRun(next, options.source);
+        if (acceptIdentityRun(next, source)) rememberIdentityRun(next.runId);
       }
       return next;
     } catch (cause) {
-      if (options.source?.kind !== 'action' || options.source.epoch === startEpoch.current) setIdentityError(failureMessage(cause));
+      if (source.generation === identityGeneration.current && (source.kind !== 'action' || source.epoch === startEpoch.current)) setIdentityError(failureMessage(cause));
       options.onFailure?.(cause);
       return undefined;
-    } finally { if (manageBusy) setBusy(false); }
+    } finally { if (manageBusy && source.generation === identityGeneration.current) setBusy(false); }
   }, [acceptIdentityRun]);
   const identityGet = useCallback((runId: string) => request<IdentityGateSnapshot>(`/api/identity/runs/${encodeURIComponent(runId)}`), []);
   const openIdentityRun = useCallback((runId: string) => {
-    const source: IdentityReadSource = { epoch: startEpoch.current, kind: 'read' };
+    const generation = identityGeneration.current + 1;
+    identityGeneration.current = generation;
+    const source: IdentityReadSource = { generation, epoch: startEpoch.current, kind: 'read' };
     void identityAct(() => identityGet(runId), { source });
   }, [identityAct, identityGet]);
 
@@ -149,16 +154,19 @@ export default function App() {
   const readRememberedRun = useCallback((): void => {
     const remembered = rememberedIdentityRun();
     if (!remembered) { setUnreachableRunId(''); return; }
+    const generation = identityGeneration.current + 1;
+    identityGeneration.current = generation;
     setBusy(true); setIdentityError('');
-    const source: IdentityReadSource = { epoch: startEpoch.current, kind: 'read' };
+    const source: IdentityReadSource = { generation, epoch: startEpoch.current, kind: 'read' };
     void identityGet(remembered).then(
       (next) => { acceptIdentityRun(next, source); },
       (cause: unknown) => {
+        if (source.generation !== identityGeneration.current) return;
         if (isMissing(cause)) { forgetIdentityRun(); setUnreachableRunId(''); return; }
         setUnreachableRunId(remembered);
         setIdentityError(failureMessage(cause));
       },
-    ).finally(() => setBusy(false));
+    ).finally(() => { if (source.generation === identityGeneration.current) setBusy(false); });
   }, [acceptIdentityRun, identityGet]);
 
   useEffect(() => { readRememberedRun(); }, [readRememberedRun]);
@@ -184,14 +192,15 @@ export default function App() {
     let dropped = false;
     const timer = setTimeout(() => {
       const runId = identity.runId;
-      const source: IdentityReadSource = { epoch: startEpoch.current, kind: 'read' };
+      const source: IdentityReadSource = { generation: identityGeneration.current, epoch: startEpoch.current, kind: 'read' };
       void identityGet(runId).then(
         (next) => {
           if (dropped) return;
-          if (!acceptIdentityRun(next, source)) setPollTick((current) => current + 1);
+          if (!acceptIdentityRun(next, source) && source.generation === identityGeneration.current) setPollTick((current) => current + 1);
         },
         (cause: unknown) => {
           if (dropped) return;
+          if (source.generation !== identityGeneration.current) return;
           if (isMissing(cause)) {
             forgetIdentityRun();
             setStartRecoveryRunId((current) => current === runId ? '' : current);
@@ -204,20 +213,24 @@ export default function App() {
             setIdentityError('Esta execução não está mais no servidor.');
             return;
           }
-          const count = startingRun || startRecoveryPending || !queued ? spent + 1 : 0;
+          const count = spent + 1;
           setPollFailures({ runId, count });
           if (count >= POLL_MAX_FAILURES) setIdentityError('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.');
-          if (count === 0) setPollTick((current) => current + 1);
         },
       );
     }, 1500);
     return () => { dropped = true; clearTimeout(timer); };
   }, [acceptIdentityRun, following, identity, identityGet, pollTick, queued, running, spent, startRecoveryPending, startingRun]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
-  const createIdentityRun = (briefing?: string) => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...(briefing === undefined ? {} : { briefing }) }));
+  const createIdentityRun = (briefing?: string) => {
+    const generation = identityGeneration.current + 1;
+    identityGeneration.current = generation;
+    return identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...(briefing === undefined ? {} : { briefing }) }), { source: { generation, epoch: startEpoch.current, kind: 'action' } });
+  };
   const startIdentityRun = (): void => {
     if (!identity) return;
     const runId = identity.runId;
+    const generation = identityGeneration.current;
     const epoch = startEpoch.current + 1;
     startEpoch.current = epoch;
     pendingStart.current = { runId, epoch };
@@ -226,17 +239,17 @@ export default function App() {
     setStartingRun(true);
     void identityAct(() => identityPost(`/api/identity/runs/${runId}/start`), {
       manageBusy: false,
-      source: { epoch, kind: 'action' },
-      shouldAccept: (next) => pendingStart.current?.runId === runId && pendingStart.current.epoch === epoch && latestIdentity.current?.runId === runId,
+      source: { generation, epoch, kind: 'action' },
+      shouldAccept: (next) => identityGeneration.current === generation && pendingStart.current?.runId === runId && pendingStart.current.epoch === epoch && latestIdentity.current?.runId === runId,
       onFailure: (cause) => {
-        if (pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
+        if (identityGeneration.current !== generation || pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
         if (!(cause instanceof RequestError) || cause.status === undefined) {
           setPollFailures({ runId, count: 0 });
           setStartRecoveryRunId(runId);
         }
       },
     }).then(() => {
-      if (pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
+      if (identityGeneration.current !== generation || pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
       pendingStart.current = null;
       startEpoch.current += 1;
       setStartingRun(false);
