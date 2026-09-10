@@ -94,8 +94,14 @@ describe('identity run', () => {
   it('surfaces a stage deadline when a Codex turn never settles', async () => {
     let aborted = false;
     const provider = new CodexRunner({ execute: async (_executable, _args, { signal }) => {
-      signal?.addEventListener('abort', () => { aborted = true; }, { once: true });
-      return new Promise<never>(() => {});
+      return new Promise<never>((_resolve, reject) => {
+        const onAbort = (): void => {
+          aborted = true;
+          reject(new DOMException('The Codex turn was aborted.', 'AbortError'));
+        };
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
     } });
     const run = new IdentityRun({
       runId: 'identity-codex-stage-deadline',
