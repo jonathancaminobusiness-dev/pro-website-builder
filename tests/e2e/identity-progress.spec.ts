@@ -98,6 +98,9 @@ test('Gate 1 follows running progress and keeps the completed result after refre
 test('a poll timer keeps the generation of the run it was scheduled for', async ({ page }) => {
   await page.clock.install();
   const otherRunId = 'identity-progress-other-run';
+  let otherReadStarted = false;
+  let releaseOtherRead = (): void => {};
+  const otherReadHeld = new Promise<void>((resolve) => { releaseOtherRead = resolve; });
 
   await page.addInitScript(() => localStorage.clear());
   await page.route('**/api/identity/runs**', async (route) => {
@@ -112,6 +115,8 @@ test('a poll timer keeps the generation of the run it was scheduled for', async 
       return;
     }
     if (request.method() === 'GET' && pathname === `/api/identity/runs/${otherRunId}`) {
+      otherReadStarted = true;
+      await otherReadHeld;
       await route.abort();
       return;
     }
@@ -123,11 +128,14 @@ test('a poll timer keeps the generation of the run it was scheduled for', async 
   await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
   await page.getByLabel('Abrir outra execução').fill(otherRunId);
   await page.locator('.gate-actions').getByRole('button', { name: 'Abrir' }).click();
-  await expect(page.getByText('O servidor local não respondeu.', { exact: true })).toBeVisible();
 
+  await expect.poll(() => otherReadStarted).toBe(true);
   await page.clock.fastForward(1_500);
   await expect(page.getByText('pronto para executar', { exact: true })).toBeVisible();
   await expect(page.getByText('executando', { exact: true })).toHaveCount(0);
+
+  releaseOtherRead();
+  await expect(page.getByText('O servidor local não respondeu.', { exact: true })).toBeVisible();
 });
 
 test('a stale poll cannot replace a newly opened run or erase its pointer', async ({ page }) => {
@@ -928,4 +936,150 @@ test('ambiguous start recovery exits after bounded unchanged terminal reads', as
   await expect(page.getByRole('button', { name: 'Verificando execução…' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Tentar novamente' })).toBeEnabled();
   await expect(page.getByText('Não foi possível confirmar o início. Tente novamente ou recarregue para ler o estado atual.', { exact: true })).toBeVisible();
+});
+
+test('a failed run switch re-arms polling for the previous run', async ({ page }) => {
+  await page.clock.install();
+  const otherRunId = 'identity-progress-other-run';
+  let phase: 'queued' | 'running' = 'queued';
+  let previousReads = 0;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      previousReads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot(phase)) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${otherRunId}`) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByLabel('Abrir outra execução').fill(otherRunId);
+  await page.locator('.gate-actions').getByRole('button', { name: 'Abrir' }).click();
+  await expect(page.getByText('O servidor local não respondeu.', { exact: true })).toBeVisible();
+
+  phase = 'running';
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => previousReads).toBe(1);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+});
+
+test('exhausted queued recovery waits for an explicit retry', async ({ page }) => {
+  await page.clock.install();
+  let reads = 0;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      await route.abort();
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      reads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toBeVisible();
+
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    await page.clock.fastForward(1_500);
+    await expect.poll(() => reads).toBe(attempt);
+  }
+
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Executar etapa de identidade' })).toBeEnabled();
+  await expect(page.getByText('Não foi possível confirmar o início. Tente novamente ou recarregue para ler o estado atual.', { exact: true })).toBeVisible();
+  const readsAtExhaustion = reads;
+
+  await page.clock.fastForward(3_000);
+  expect(reads).toBe(readsAtExhaustion);
+
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toBeVisible();
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => reads).toBe(readsAtExhaustion + 1);
+});
+
+test('a queued snapshot cannot regress an observed running run', async ({ page }) => {
+  await page.clock.install();
+  const observer = await page.context().newPage();
+  await observer.clock.install();
+  let phase: 'queued' | 'running' = 'queued';
+  let reads = 0;
+  let queuedReadStarted = false;
+  let releaseQueuedRead = (): void => {};
+  const queuedReadHeld = new Promise<void>((resolve) => { releaseQueuedRead = resolve; });
+
+  await page.addInitScript(() => localStorage.clear());
+  await observer.addInitScript(() => localStorage.clear());
+  await page.context().route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      phase = 'running';
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('running')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      reads += 1;
+      if (reads === 1) {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot(phase)) });
+        return;
+      }
+      queuedReadStarted = true;
+      await queuedReadHeld;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+
+  await observer.goto('/');
+  await observer.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await observer.getByLabel('Abrir execução existente').fill(runId);
+  await observer.locator('.open-run').getByRole('button', { name: 'Abrir' }).click();
+  await expect(observer.getByText('executando', { exact: true })).toBeVisible();
+  await observer.clock.fastForward(1_500);
+  await expect.poll(() => queuedReadStarted).toBe(true);
+
+  releaseQueuedRead();
+  await expect(observer.getByText('executando', { exact: true })).toBeVisible();
+  await expect(observer.getByText('pronto para executar', { exact: true })).toHaveCount(0);
+  await observer.close();
 });
