@@ -1,4 +1,5 @@
 import { identityCritics, type IdentityCriticId, type IdentityStageDeadlines } from '@pwb/stage-identity';
+import { CLAUDE_RUNNER_TIMEOUT_MS, CODEX_RUNNER_TIMEOUT_MS } from '@pwb/providers';
 
 const GLOBAL_CRITIC_DEADLINE = 'PWB_IDENTITY_CRITIC_DEADLINE_MS';
 
@@ -26,4 +27,9 @@ export function identityDeadlinesFromEnvironment(env: NodeJS.ProcessEnv = proces
     ...(critic !== undefined ? { critic } : {}),
     ...(Object.keys(criticById).length > 0 ? { criticById } : {}),
   };
+}
+
+export function identityProviderTimeoutMs(deadlines: Partial<IdentityStageDeadlines> | undefined): number {
+  const configured = [deadlines?.critic, ...Object.values(deadlines?.criticById ?? {})].filter((deadline): deadline is number => typeof deadline === 'number');
+  return Math.max(CLAUDE_RUNNER_TIMEOUT_MS, CODEX_RUNNER_TIMEOUT_MS, ...configured);
 }

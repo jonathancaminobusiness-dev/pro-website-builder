@@ -3,17 +3,28 @@ import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
 import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
-import type { ClaudeRunnerOptions, ModelProvider } from './model.js';
+import type { ClaudeExecutor, ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
 const deniedTools = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 export const CLAUDE_RUNNER_TIMEOUT_MS = 7 * 60_000;
 
+const executeClaude: ClaudeExecutor = async (executable, args, options) => {
+  const { stdout, stderr } = await execFileAsync(executable, args, {
+    shell: false,
+    timeout: options.timeoutMs,
+    ...(options.signal ? { signal: options.signal } : {}),
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  return { stdout, stderr };
+};
+
 export class ClaudeRunner implements ModelProvider {
   private readonly options: Required<ClaudeRunnerOptions>;
 
   constructor(options: ClaudeRunnerOptions = {}) {
-    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, ...options };
+    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, execute: executeClaude, ...options };
   }
 
   async propose(task: AgentTask, signal?: AbortSignal): Promise<AgentResult> {
@@ -30,11 +41,11 @@ export class ClaudeRunner implements ModelProvider {
           `This is the immutable slice of the current document you may read; the identity contract is read-only: ${JSON.stringify(task.documentSlice)}`,
           correction ? 'Correct the previous schema violation and return only JSON matching the supplied schema.' : '',
         ].filter(Boolean).join('\n');
-        const { stdout } = await execFileAsync(this.options.executable, [
+        const { stdout } = await this.options.execute(this.options.executable, [
           '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(stageResultJsonSchemas[task.stage]),
           '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.options.maxTurns),
           '--disallowed-tools', deniedTools,
-        ], { shell: false, timeout: this.options.timeoutMs, signal, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+        ], { timeoutMs: this.options.timeoutMs, ...(signal ? { signal } : {}) });
         const raw: unknown = JSON.parse(stdout);
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
         const result = agentResultSchema.parse(structured);

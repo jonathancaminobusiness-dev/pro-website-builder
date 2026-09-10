@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createFixtureIR, flattenTokens, type AgentResult, type AgentTask } from '@pwb/domain';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
-import { defaultIdentityDeadlines, IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
+import { IDENTITY_ALLOWED_PATHS, IDENTITY_TASK_SCOPE } from './stage.js';
 import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';

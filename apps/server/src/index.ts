@@ -12,7 +12,7 @@ import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
 import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
-import { identityDeadlinesFromEnvironment } from './identity-deadlines.js';
+import { identityDeadlinesFromEnvironment, identityProviderTimeoutMs } from './identity-deadlines.js';
 
 export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string; identityDeadlines?: Partial<IdentityStageDeadlines> } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
   const root = process.cwd();
@@ -21,8 +21,8 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   await mkdir(join(dbPath, '..'), { recursive: true });
   await mkdir(renderCacheDir, { recursive: true });
   const provider = createModelProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
-  const identityProvider = createIdentityProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
   const identityDeadlines = options.identityDeadlines ?? identityDeadlinesFromEnvironment();
+  const identityProvider = createIdentityProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER, { timeoutMs: identityProviderTimeoutMs(identityDeadlines) });
   const raster = createRasterProvider();
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
