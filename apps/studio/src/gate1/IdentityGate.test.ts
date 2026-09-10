@@ -99,7 +99,7 @@ describe('Gate 1 execution progress', () => {
     expect(markup).toContain('status-queued');
     expect(markup).toContain('pronto para executar');
     expect(markup).toContain('Iniciando…');
-    expect(markup).not.toContain('Cancelar execução');
+    expect(markup).toContain('Cancelar execução');
   });
 
   it('keeps the completed Gate 1 result visible after progress settles', () => {

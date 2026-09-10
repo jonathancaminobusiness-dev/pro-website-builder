@@ -104,7 +104,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
    */
   const snapshotRunning = snapshot?.status === 'running';
   const assetInFlight = snapshot?.assets.some((asset) => asset.status === 'generating') === true;
-  const executionInFlight = snapshotRunning || assetInFlight;
+  const executionInFlight = snapshotRunning || assetInFlight || props.inFlight;
   const actionsBlocked = props.inFlight || props.startRecoveryPending;
   const asking = snapshot ? `run:${snapshot.runId}` : `recovery:${props.unreachableRunId}`;
   if (confirming !== '' && (actionsBlocked || confirming !== asking)) setConfirming('');

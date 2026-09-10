@@ -77,7 +77,7 @@ test('Gate 1 follows running progress and keeps the completed result after refre
 
   await expect(page.getByText('pronto para executar', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Iniciando…' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Cancelar execução' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
   await expect(page.getByText('executando', { exact: true })).toBeVisible({ timeout: 4_000 });
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
   await expect(page.getByText('pronto para executar', { exact: true })).toHaveCount(0);
@@ -399,7 +399,7 @@ test('a terminal poll does not unlock decisions during cancellation', async ({ p
   let releaseCancel = (): void => {};
   const startHeld = new Promise<void>((resolve) => { releaseStart = resolve; });
   const cancelHeld = new Promise<void>((resolve) => { releaseCancel = resolve; });
-  let phase: 'queued' | 'running' | 'needs_review' | 'cancelled' = 'queued';
+  let phase: 'queued' | 'needs_review' | 'cancelled' = 'queued';
 
   await page.addInitScript(() => localStorage.clear());
   await page.route('**/api/identity/runs**', async (route) => {
@@ -410,7 +410,6 @@ test('a terminal poll does not unlock decisions during cancellation', async ({ p
       return;
     }
     if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
-      phase = 'running';
       await startHeld;
       phase = 'needs_review';
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
@@ -434,8 +433,6 @@ test('a terminal poll does not unlock decisions during cancellation', async ({ p
   await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
   await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
   await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
-  await page.clock.fastForward(1_500);
-  await expect(page.getByText('executando', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Cancelar execução' }).click();
   await page.clock.fastForward(1_500);
 
@@ -759,4 +756,45 @@ test('a stale start failure does not cover a later gate result with an error', a
   await expect.poll(() => firstStartAborted).toBe(true);
   await expect(page.getByText('aguarda gate', { exact: true })).toBeVisible();
   await expect(page.getByText('O servidor local não respondeu.', { exact: true })).toHaveCount(0);
+});
+
+test('retry recovery stays pending across an unchanged terminal snapshot', async ({ page }) => {
+  await page.clock.install();
+  let reads = 0;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      await route.abort();
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      reads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot(reads === 1 ? 'failed' : 'running')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Tentar novamente' }).click();
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toBeVisible();
+
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => reads).toBe(1);
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Tentar novamente' })).toHaveCount(0);
+
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => reads).toBe(2);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
 });

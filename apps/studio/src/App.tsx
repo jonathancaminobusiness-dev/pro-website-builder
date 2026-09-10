@@ -102,6 +102,8 @@ export default function App() {
   const acceptIdentityRun = useCallback((next: IdentityGateSnapshot, source: IdentityReadSource = { epoch: startEpoch.current, kind: 'action' }): boolean => {
     if (source.kind === 'read' && source.epoch < startEpoch.current) return false;
     const localStart = pendingStart.current;
+    const previousIdentity = latestIdentity.current;
+    const unchangedRecoveryTerminal = source.kind === 'read' && previousIdentity?.runId === next.runId && previousIdentity.status === next.status && (next.status === 'failed' || next.status === 'interrupted');
     if (source.kind === 'read' && localStart?.runId === next.runId && localStart.epoch === source.epoch && latestIdentity.current?.runId === next.runId && latestIdentity.current.status === next.status) return false;
     if (localStart?.runId === next.runId && next.status !== 'queued') {
       pendingStart.current = null;
@@ -110,7 +112,7 @@ export default function App() {
     }
     setUnreachableRunId('');
     setPollFailures({ runId: next.runId, count: 0 });
-    setStartRecoveryRunId((current) => current === next.runId && (next.status !== 'queued' || source.kind === 'action') ? '' : current);
+    setStartRecoveryRunId((current) => current === next.runId && !unchangedRecoveryTerminal && (next.status !== 'queued' || source.kind === 'action') ? '' : current);
     setIdentityError('');
     latestIdentity.current = next;
     setIdentity(next);
