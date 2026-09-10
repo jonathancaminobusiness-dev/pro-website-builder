@@ -43,10 +43,10 @@ function snapshot(status: IdentityGateSnapshot['status'], withResult = false): I
   };
 }
 
-function renderGate(next: IdentityGateSnapshot): string {
+function renderGate(next: IdentityGateSnapshot, busy = false): string {
   return renderToStaticMarkup(createElement(IdentityGate, {
     snapshot: next,
-    busy: false,
+    busy,
     error: '',
     onCreate: () => undefined,
     onOpen: () => undefined,
@@ -82,6 +82,14 @@ describe('Gate 1 execution progress', () => {
 
     expect(markup).toContain('Cancelar execução');
     expect(markup).not.toContain('pronto para executar');
+  });
+
+  it('keeps a failed server status visible while the start request is busy', () => {
+    const markup = renderGate(snapshot('failed'), true);
+
+    expect(markup).toContain('falhou');
+    expect(markup).toContain('Tentar novamente');
+    expect(markup).not.toContain('Executando…');
   });
 
   it('keeps the completed Gate 1 result visible after progress settles', () => {

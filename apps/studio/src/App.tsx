@@ -154,7 +154,7 @@ export default function App() {
           }
           const count = spent + 1;
           setPollFailures({ runId, count });
-          if (count >= POLL_MAX_FAILURES) setIdentityError(`Não foi possível acompanhar ${running ? 'a etapa' : 'as imagens'} desta execução. Recarregue para ler o estado atual.`);
+          if (count >= POLL_MAX_FAILURES) setIdentityError('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.');
         },
       );
     }, 1500);

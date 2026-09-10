@@ -91,3 +91,44 @@ test('Gate 1 follows running progress and keeps the completed result after refre
   await expect(page.getByRole('button', { name: 'Aprovar esta direção' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toHaveCount(0);
 });
+
+test('Gate 1 names a pending stage when polling fails during start', async ({ page }) => {
+  let releaseStart = (): void => {};
+  const startHeld = new Promise<void>((resolve) => { releaseStart = resolve; });
+  let failedReads = 0;
+
+  await page.addInitScript(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      await startHeld;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      failedReads += 1;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'temporary outage' }) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+
+  await expect.poll(() => failedReads, { timeout: 20_000 }).toBe(10);
+  await expect(page.getByText('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.', { exact: true })).toBeVisible();
+
+  releaseStart();
+  await expect(page.getByText('aguarda gate', { exact: true })).toBeVisible();
+});
