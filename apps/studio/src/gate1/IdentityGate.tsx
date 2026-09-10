@@ -66,7 +66,7 @@ export interface IdentityGateProps {
   unreachableRunId: string;
   onRetry: () => void;
   onStart: () => void;
-  /** The stage or the raster lane is working right now, which is the only time a run can be stopped. */
+  /** A start request is pending; it is only a temporary guard until the next server snapshot. */
   inFlight: boolean;
   onCancel: () => void;
   onApprove: (directionId: string, rationale: string, overrideRationale?: string) => void;
@@ -101,23 +101,32 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
    * asked for — because the run started working, or because the screen now
    * offers a different run — is dropped rather than carried somewhere else.
    */
+  const snapshotRunning = snapshot?.status === 'running';
+  const assetInFlight = snapshot?.assets.some((asset) => asset.status === 'generating') === true;
+  // The local request flag only bridges the interval before the server's first
+  // `running` read. Once a snapshot says anything else, that authoritative state
+  // wins and the final Gate 1 result remains visible.
+  const startPending = props.inFlight && snapshot?.status === 'queued';
+  const executionInFlight = snapshotRunning || assetInFlight || startPending;
+  const visibleStatus = startPending ? 'running' : snapshot?.status;
   const asking = snapshot ? `run:${snapshot.runId}` : `recovery:${props.unreachableRunId}`;
-  if (confirming !== '' && (props.inFlight || confirming !== asking)) setConfirming('');
+  if (confirming !== '' && (executionInFlight || confirming !== asking)) setConfirming('');
 
   /**
    * Creating a run costs the one pointer this browser keeps, so it is never a
    * single click while another run is reachable: the id about to be replaced is
    * named and the captain says yes twice. While the run on screen is working
-   * there is no second yes to give — the stop is the only way out of it.
+   * there is no second yes to give — the stop is the only way out of it. The
+   * server snapshot is the source of truth for that working state.
    */
-  const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !props.inFlight
+  const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !executionInFlight
     ? renderBriefingReplacementConfirmation(briefingElementFactory, {
         replacing,
         disabled: props.busy,
         onKeep: () => setConfirming(''),
         onCreate: () => { setConfirming(''); props.onCreate(briefing.trim()); },
       })
-    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || props.inFlight, onOpen: () => setConfirming(asking) });
+    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || executionInFlight, onOpen: () => setConfirming(asking) });
 
   const briefingEditor = renderBriefingEditor(briefingElementFactory, { value: briefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setBriefing });
   const briefingCreateButton = renderBriefingCreateButton(briefingElementFactory, { disabled: props.busy || briefing.trim() === '', onCreate: () => props.onCreate(briefing.trim()) });
@@ -136,7 +145,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // its approve button while returning a card is off everywhere: the decision
   // those controls would answer is already made.
   const stopped = snapshot?.status === 'cancelled';
-  const running = snapshot?.status === 'running';
+  const running = visibleStatus === 'running';
   const failed = snapshot?.status === 'failed';
   const closed = snapshot?.gate.state === 'closed';
   const reopened = snapshot?.gate.state === 'reopened';
@@ -153,7 +162,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         <h2 id="gate1-title">Três direções do mesmo briefing</h2>
         {snapshot && <p className="run-id">Execução <code>{snapshot.runId}</code></p>}
       </div>
-      <span className={`status status-${snapshot?.status ?? 'queued'}`}>{statusLabel(snapshot?.status)}</span>
+      <span className={`status status-${visibleStatus ?? 'queued'}`}>{statusLabel(visibleStatus)}</span>
     </div>
 
     {!snapshot && !props.unreachableRunId && <div className="empty-state">
@@ -174,9 +183,9 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     {snapshot && <>
       <p className="gate-briefing">{snapshot.briefing}</p>
       <div className="actions gate-actions">
-        {!props.inFlight && openRunForm('Abrir outra execução')}
+        {!executionInFlight && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
-        {props.inFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
+        {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
         <button className="primary" onClick={props.onStart} disabled={props.busy || running || stopped || snapshot.directions.length > 0}>
           {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.busy ? 'Executando…' : failed ? 'Tentar novamente' : 'Executar etapa de identidade'}
         </button>
