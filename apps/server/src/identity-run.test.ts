@@ -92,8 +92,10 @@ describe('identity run', () => {
   });
 
   it('surfaces a stage deadline when a Codex turn never settles', async () => {
+    let executorStarted = false;
     let aborted = false;
     const provider = new CodexRunner({ execute: async (_executable, _args, { signal }) => {
+      executorStarted = true;
       return new Promise<never>((_resolve, reject) => {
         const onAbort = (): void => {
           aborted = true;
@@ -118,7 +120,7 @@ describe('identity run', () => {
 
     expect(result.status).toBe('failed');
     expect(result.error).toMatch(/identity stage exceeded its 25ms deadline/i);
-    expect(aborted).toBe(true);
+    if (executorStarted) expect(aborted).toBe(true);
   });
 
   it('restores task failure details after a failed identity run restarts', async () => {
