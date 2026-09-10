@@ -26,7 +26,7 @@ const direction = {
   imageryViolations: [],
 };
 
-function snapshot(status: 'queued' | 'running' | 'needs_review') {
+function snapshot(status: 'queued' | 'running' | 'needs_review' | 'cancelled') {
   return {
     runId,
     status,
@@ -387,4 +387,51 @@ test('a queued read from before start cannot clear recovery', async ({ page }) =
   await page.clock.fastForward(1_500);
   await expect(page.getByText('executando', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
+});
+
+test('a terminal poll does not unlock decisions during cancellation', async ({ page }) => {
+  await page.clock.install();
+  let releaseStart = (): void => {};
+  let releaseCancel = (): void => {};
+  const startHeld = new Promise<void>((resolve) => { releaseStart = resolve; });
+  const cancelHeld = new Promise<void>((resolve) => { releaseCancel = resolve; });
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      await startHeld;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/cancel`) {
+      await cancelHeld;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('cancelled')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await page.getByRole('button', { name: 'Cancelar execução' }).click();
+  await page.clock.fastForward(1_500);
+
+  await expect(page.getByText('aguarda gate', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Aprovar esta direção' })).toBeDisabled();
+
+  releaseCancel();
+  await expect(page.getByText('cancelada', { exact: true })).toBeVisible();
+  releaseStart();
 });

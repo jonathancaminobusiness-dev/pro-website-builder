@@ -54,6 +54,7 @@ interface IdentityReadSource {
 }
 
 interface IdentityActOptions {
+  manageBusy?: boolean;
   source?: IdentityReadSource;
   shouldAccept?: (next: IdentityGateSnapshot) => boolean;
   onFailure?: (cause: unknown) => void;
@@ -105,7 +106,6 @@ export default function App() {
       pendingStart.current = null;
       startEpoch.current += 1;
       setStartingRun(false);
-      setBusy(false);
     }
     setUnreachableRunId('');
     setPollFailures({ runId: next.runId, count: 0 });
@@ -116,7 +116,9 @@ export default function App() {
   }, []);
 
   const identityAct = useCallback(async (action: () => Promise<IdentityGateSnapshot>, options: IdentityActOptions = {}): Promise<IdentityGateSnapshot | undefined> => {
-    setBusy(true); setIdentityError('');
+    const manageBusy = options.manageBusy !== false;
+    if (manageBusy) setBusy(true);
+    setIdentityError('');
     try {
       const next = await action();
       if (options.shouldAccept?.(next) ?? true) {
@@ -128,7 +130,7 @@ export default function App() {
       setIdentityError(failureMessage(cause));
       options.onFailure?.(cause);
       return undefined;
-    } finally { setBusy(false); }
+    } finally { if (manageBusy) setBusy(false); }
   }, [acceptIdentityRun]);
   const identityGet = useCallback((runId: string) => request<IdentityGateSnapshot>(`/api/identity/runs/${encodeURIComponent(runId)}`), []);
   const openIdentityRun = useCallback((runId: string) => {
@@ -193,7 +195,6 @@ export default function App() {
               pendingStart.current = null;
               startEpoch.current += 1;
               setStartingRun(false);
-              setBusy(false);
             }
             setPollFailures({ runId, count: POLL_MAX_FAILURES });
             setIdentityError('Esta execução não está mais no servidor.');
@@ -220,6 +221,7 @@ export default function App() {
     setPollFailures({ runId, count: 0 });
     setStartingRun(true);
     void identityAct(() => identityPost(`/api/identity/runs/${runId}/start`), {
+      manageBusy: false,
       source: { epoch, kind: 'action' },
       shouldAccept: (next) => (pendingStart.current?.runId === runId && pendingStart.current.epoch === epoch)
         || (latestIdentity.current?.runId === runId && latestIdentity.current.status === 'running' && next.status !== 'queued'),
