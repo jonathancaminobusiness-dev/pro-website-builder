@@ -7,67 +7,14 @@ import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
 import { identityAxisBriefs } from './axes.js';
-import { identityCritics } from './critics.js';
 import { generateImageAsset, imageryPolicyViolations, plannedImagery } from './art-director.js';
 import { directionVectorDraftSchemaFor, type ImagePromptPlan } from './contracts.js';
-import { FakeIdentityProvider, fakeBriefSpec, fakeIdentityFor } from './fake-identity-provider.js';
+import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
 import { defaultIdentityDeadlines, IdentityStage, type IdentityStageDeadlines } from './stage.js';
 import { stageRoles } from '@pwb/domain';
-import { criticPrompt, identityDirectorPrompt, identityRefinerPrompt } from './prompts.js';
 
 const BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A prova é o registro de cada decisão.';
-
-describe('identity worker prompts', () => {
-  it('gives refiners the closed token role contract and identity schema', () => {
-    const identity = fakeIdentityFor('editorial-material');
-    const prompt = identityRefinerPrompt({
-      brief: fakeBriefSpec,
-      directionId: 'editorial-material',
-      baseVersionId: 'v-base',
-      allowedPaths: ['/identity', '/reviewRecord'],
-      identity,
-      findings: {},
-    });
-
-    for (const [role, path] of Object.entries(identity.tokenRoles)) expect(prompt).toContain(`${role}=${path}`);
-    expect(prompt).toContain('The `tokenRoles` object is closed');
-    expect(prompt).toContain('focusIndicator');
-    expect(prompt).toContain('stateSurface');
-    expect(prompt).toContain('stateText');
-    expect(prompt).toContain('additionalProperties');
-
-    const directorPrompt = identityDirectorPrompt({
-      brief: fakeBriefSpec,
-      axisBriefId: 'modular-technical',
-      baseVersionId: 'v-base',
-      allowedPaths: ['/identity', '/reviewRecord'],
-      currentIdentity: fakeIdentityFor('modular-technical'),
-    });
-    expect(directorPrompt).toContain('The identity token contract is closed');
-    expect(directorPrompt).toContain('do not add, remove or rename token paths');
-  });
-
-  it('makes the accessibility rubric reuse supported roles instead of requiring new fields', () => {
-    const critic = identityCritics.find((entry) => entry.id === 'system-a11y-critic')!;
-    const prompt = criticPrompt({
-      criticId: critic.id,
-      dimension: critic.dimension,
-      brief: fakeBriefSpec,
-      subject: { kind: 'direction', directionId: 'modular-technical' },
-      rubric: critic.rubric,
-      vetoes: critic.vetoes,
-      document: fakeIdentityFor('modular-technical'),
-    });
-
-    expect(prompt).toContain('without adding roles');
-    expect(prompt).toContain('surface');
-    expect(prompt).toContain('text');
-    expect(prompt).toContain('bodyTypeface');
-    expect(prompt).toContain('baseSpacing');
-    expect(prompt).toContain('sectionSpacing');
-  });
-});
 
 function seedStore(): { store: VersionStore; baseVersionId: string } {
   const store = new VersionStore();
@@ -338,6 +285,35 @@ describe('identity stage fan-out', () => {
     const result = await stage.run();
     expect(result.candidates.map((candidate) => candidate.directionId)).toEqual(['editorial-material', 'typographic-low-chroma']);
     expect(result.failures.some((failure) => failure.taskId === 'identity-director-modular-technical')).toBe(true);
+  });
+
+  it('rejects a director that adds a token path outside the base contract', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id !== 'identity-director-modular-technical' || !result.proposal) return result;
+        const operation = result.proposal.operations[0]!;
+        const identity = operation.value as Record<string, unknown>;
+        const tokens = identity.tokens as Record<string, unknown>;
+        const colors = tokens.color as Record<string, unknown>;
+        return {
+          ...result,
+          proposal: {
+            ...result.proposal,
+            operations: [{ ...operation, value: { ...identity, tokens: { ...tokens, color: { ...colors, focusIndicator: { $value: '#00ff00', $type: 'color' } } } } }],
+          },
+        };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+
+    expect(result.candidates.map((candidate) => candidate.directionId)).toEqual(['editorial-material', 'typographic-low-chroma']);
+    expect(result.failures).toContainEqual(expect.objectContaining({
+      taskId: 'identity-director-modular-technical',
+      reason: expect.stringMatching(/token vocabulary/),
+    }));
   });
 
   it('records a non-succeeded provider result as a task failure', async () => {
@@ -706,6 +682,47 @@ describe('identity stage fan-out', () => {
     expect(repaired.versionId).not.toBe(repaired.refinedFromVersionId);
     // The refinement is a child of the candidate branch, not a new sibling of the base.
     expect(store.get(repaired.versionId)!.parentId).toBe(repaired.refinedFromVersionId);
+  });
+
+  it('rejects a refiner that remaps a supported token role', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        const result = await inner.propose(task, signal);
+        if (task.id === 'identity-critic-brand-fit-critic-editorial-material') {
+          const report = result.artifact as Record<string, unknown>;
+          return {
+            ...result,
+            artifact: {
+              ...report,
+              scores: [{ dimension: 'brand-fit', score: 2, evidence: 'A prova não aparece antes da dobra.' }],
+              findings: [{ id: 'bf-1', dimension: 'brand-fit', severity: 'error', path: '/identity/direction/thesis', observation: 'A tese não cita a prova.', why: 'O público avalia processo, não promessa.', evidenceIds: ['ev-proof'], confidence: 0.7 }],
+            },
+          };
+        }
+        if (task.id !== 'identity-refiner-editorial-material' || !result.proposal) return result;
+        const operation = result.proposal.operations[0]!;
+        const identity = operation.value as Record<string, unknown>;
+        const tokenRoles = identity.tokenRoles as Record<string, unknown>;
+        return {
+          ...result,
+          proposal: {
+            ...result.proposal,
+            operations: [{ ...operation, value: { ...identity, tokenRoles: { ...tokenRoles, text: 'color.accent' } } }],
+          },
+        };
+      },
+    };
+    const { stage } = harness({ provider });
+    const result = await stage.run();
+    const editorial = result.candidates.find((candidate) => candidate.directionId === 'editorial-material')!;
+
+    expect(editorial.refinedFromVersionId).toBeUndefined();
+    expect(editorial.identity.tokenRoles.text).toBe('color.ink');
+    expect(result.failures).toContainEqual(expect.objectContaining({
+      taskId: 'identity-refiner-editorial-material',
+      reason: expect.stringMatching(/token role mapping/),
+    }));
   });
 
   it('sends a rubric gap through the one refinement cycle, and the re-scored repair clears it', async () => {
