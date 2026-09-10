@@ -541,3 +541,59 @@ test('a retry ignores stale reads, clears recovery errors, and shows verificatio
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
   await expect(page.getByText('O servidor local não respondeu.', { exact: true })).toHaveCount(0);
 });
+
+test('a retry does not accept an unchanged read dispatched after start', async ({ page }) => {
+  await page.clock.install();
+  let releaseRetryStart = (): void => {};
+  let releaseRetryRead = (): void => {};
+  const retryStartHeld = new Promise<void>((resolve) => { releaseRetryStart = resolve; });
+  const retryReadHeld = new Promise<void>((resolve) => { releaseRetryRead = resolve; });
+  let startCalls = 0;
+  let retryReadStarted = false;
+  let retryReadCompleted = false;
+  let allowRunning = false;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      startCalls += 1;
+      await retryStartHeld;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('running')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      if (!retryReadStarted) {
+        retryReadStarted = true;
+        await retryReadHeld;
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+        retryReadCompleted = true;
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot(allowRunning ? 'running' : 'failed')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Tentar novamente' }).click();
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => retryReadStarted).toBe(true);
+
+  releaseRetryRead();
+  await expect.poll(() => retryReadCompleted).toBe(true);
+  allowRunning = true;
+  await page.clock.fastForward(1_500);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
+
+  releaseRetryStart();
+});

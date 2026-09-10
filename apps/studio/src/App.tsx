@@ -102,6 +102,7 @@ export default function App() {
   const acceptIdentityRun = useCallback((next: IdentityGateSnapshot, source: IdentityReadSource = { epoch: startEpoch.current, kind: 'action' }): boolean => {
     if (source.kind === 'read' && source.epoch < startEpoch.current) return false;
     const localStart = pendingStart.current;
+    if (source.kind === 'read' && localStart?.runId === next.runId && localStart.epoch === source.epoch && latestIdentity.current?.runId === next.runId && latestIdentity.current.status === next.status) return false;
     if (localStart?.runId === next.runId && next.status !== 'queued') {
       pendingStart.current = null;
       startEpoch.current += 1;
@@ -236,6 +237,7 @@ export default function App() {
     }).then(() => {
       if (pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
       pendingStart.current = null;
+      startEpoch.current += 1;
       setStartingRun(false);
     });
   };
