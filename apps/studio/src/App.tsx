@@ -45,7 +45,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const GATE2_ROUTE = '#/gate-2';
 
-/** How many readings in a row may fail before the screen stops following the run — the stage while it works, then the raster lane. */
+/** How many consecutive reads may fail before the screen stops following a queued, recovering, or working run. */
 const POLL_MAX_FAILURES = 10;
 
 interface IdentityReadSource {
@@ -75,10 +75,11 @@ export default function App() {
   const [pollFailures, setPollFailures] = useState({ runId: '', count: 0 });
   const [pollTick, setPollTick] = useState(0);
   /**
-   * The tab that issued the start knows the stage is working before the server
-   * can say so: its own snapshot is still the one from before the request. The
-   * server's `running` answers for every other tab, including this one after a
-   * reload, so the stop is offered wherever the work is visible.
+   * The tab that issued the start keeps a local pending guard while its own
+   * snapshot is still the one from before the request. It does not change the
+   * server-derived badge; it keeps cancellation available until the server
+   * confirms the next state. A `running` snapshot offers the same stop in every
+   * tab, including this one after a reload.
    */
   const [startingRun, setStartingRun] = useState(false);
   const [startRecoveryRunId, setStartRecoveryRunId] = useState('');
@@ -187,12 +188,12 @@ export default function App() {
 
   useEffect(() => { readRememberedRun(); }, [readRememberedRun]);
 
-  // The screen follows a run for as long as the server says it is working: the
-  // fan-out while the stage runs, then the raster lane until every asset has
-  // settled. A reading that failed is retried, because the server may be
-  // restarting mid-shoot, but only so many times: a run that is gone, or a
-  // server that never comes back, ends the loop and says so rather than being
-  // polled in silence for the rest of the session.
+  // The screen follows queued or working runs: the fan-out while the stage
+  // runs, then the raster lane until every asset has settled. An ambiguous
+  // start also gets bounded recovery reads. A read that failed is retried,
+  // because the server may be restarting mid-shoot, but only so many times: a
+  // run that is gone, or a server that never comes back, ends the loop and says
+  // so rather than being polled in silence for the rest of the session.
   const generating = identity?.assets.some((asset) => asset.status === 'generating') ?? false;
   const running = identity?.status === 'running';
   const queued = identity?.status === 'queued';

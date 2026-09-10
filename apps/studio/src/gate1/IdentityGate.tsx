@@ -66,7 +66,7 @@ export interface IdentityGateProps {
   unreachableRunId: string;
   onRetry: () => void;
   onStart: () => void;
-  /** A start request is pending; it is only a temporary guard until the next server snapshot. */
+  /** A start request or the stage/raster lane is in flight; pending starts keep cancellation available until the next server snapshot. */
   inFlight: boolean;
   startRecoveryPending: boolean;
   onCancel: () => void;
