@@ -54,6 +54,7 @@ function renderGate(next: IdentityGateSnapshot, busy = false): string {
     onRetry: () => undefined,
     onStart: () => undefined,
     onCancel: () => undefined,
+    startRecoveryPending: false,
     onApprove: () => undefined,
     onReject: () => undefined,
     onChangeToken: () => undefined,

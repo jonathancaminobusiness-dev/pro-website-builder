@@ -68,6 +68,7 @@ export interface IdentityGateProps {
   onStart: () => void;
   /** A start request is pending; it is only a temporary guard until the next server snapshot. */
   inFlight: boolean;
+  startRecoveryPending: boolean;
   onCancel: () => void;
   onApprove: (directionId: string, rationale: string, overrideRationale?: string) => void;
   onReject: (directionId: string, rationale: string) => void;
@@ -108,9 +109,10 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // wins and the final Gate 1 result remains visible.
   const startPending = props.inFlight && snapshot?.status === 'queued';
   const executionInFlight = snapshotRunning || assetInFlight || startPending;
+  const actionsBlocked = executionInFlight || props.startRecoveryPending;
   const visibleStatus = startPending ? 'running' : snapshot?.status;
   const asking = snapshot ? `run:${snapshot.runId}` : `recovery:${props.unreachableRunId}`;
-  if (confirming !== '' && (executionInFlight || confirming !== asking)) setConfirming('');
+  if (confirming !== '' && (actionsBlocked || confirming !== asking)) setConfirming('');
 
   /**
    * Creating a run costs the one pointer this browser keeps, so it is never a
@@ -119,14 +121,14 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
    * there is no second yes to give — the stop is the only way out of it. The
    * server snapshot is the source of truth for that working state.
    */
-  const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !executionInFlight
+  const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !actionsBlocked
     ? renderBriefingReplacementConfirmation(briefingElementFactory, {
         replacing,
         disabled: props.busy,
         onKeep: () => setConfirming(''),
         onCreate: () => { setConfirming(''); props.onCreate(briefing.trim()); },
       })
-    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || executionInFlight, onOpen: () => setConfirming(asking) });
+    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => setConfirming(asking) });
 
   const briefingEditor = renderBriefingEditor(briefingElementFactory, { value: briefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setBriefing });
   const briefingCreateButton = renderBriefingCreateButton(briefingElementFactory, { disabled: props.busy || briefing.trim() === '', onCreate: () => props.onCreate(briefing.trim()) });
@@ -183,11 +185,11 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     {snapshot && <>
       <p className="gate-briefing">{snapshot.briefing}</p>
       <div className="actions gate-actions">
-        {!executionInFlight && openRunForm('Abrir outra execução')}
+        {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
         {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
-        <button className="primary" onClick={props.onStart} disabled={props.busy || running || stopped || snapshot.directions.length > 0}>
-          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : failed ? 'Tentar novamente' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+        <button className="primary" onClick={props.onStart} disabled={props.busy || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
+          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : failed ? 'Tentar novamente' : props.startRecoveryPending ? 'Verificando execução…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 
