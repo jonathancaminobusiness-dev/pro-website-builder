@@ -100,7 +100,7 @@ export default function App() {
   const create = () => act(async () => (await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) })).snapshot);
 
   const acceptIdentityRun = useCallback((next: IdentityGateSnapshot, source: IdentityReadSource = { epoch: startEpoch.current, kind: 'action' }): boolean => {
-    if (source.kind === 'read' && next.status === 'queued' && source.epoch < startEpoch.current) return false;
+    if (source.kind === 'read' && source.epoch < startEpoch.current) return false;
     const localStart = pendingStart.current;
     if (localStart?.runId === next.runId && next.status !== 'queued') {
       pendingStart.current = null;
@@ -110,6 +110,7 @@ export default function App() {
     setUnreachableRunId('');
     setPollFailures({ runId: next.runId, count: 0 });
     setStartRecoveryRunId((current) => current === next.runId && (next.status !== 'queued' || source.kind === 'action' || source.epoch >= startEpoch.current) ? '' : current);
+    setIdentityError('');
     latestIdentity.current = next;
     setIdentity(next);
     return true;

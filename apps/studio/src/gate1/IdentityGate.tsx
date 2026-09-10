@@ -189,7 +189,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         {createConfirm(snapshot.runId, 'Nova execução')}
         {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
         <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
-          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : failed ? 'Tentar novamente' : props.startRecoveryPending ? 'Verificando execução…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : failed ? 'Tentar novamente' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 
