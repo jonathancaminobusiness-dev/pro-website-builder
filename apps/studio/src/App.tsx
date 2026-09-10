@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Gate2 from './Gate2.js';
 import Gate3Panel from './Gate3Panel.js';
 import IdentityGate, { type IdentityGateSnapshot } from './gate1/IdentityGate.js';
-import { failureMessage, isMissing, requestJson } from './request.js';
+import { failureMessage, isMissing, RequestError, requestJson } from './request.js';
 
 interface Snapshot {
   runId: string;
@@ -48,6 +48,17 @@ const GATE2_ROUTE = '#/gate-2';
 /** How many readings in a row may fail before the screen stops following the run — the stage while it works, then the raster lane. */
 const POLL_MAX_FAILURES = 10;
 
+interface IdentityReadSource {
+  epoch: number;
+  kind: 'read' | 'action';
+}
+
+interface IdentityActOptions {
+  source?: IdentityReadSource;
+  shouldAccept?: (next: IdentityGateSnapshot) => boolean;
+  onFailure?: (cause: unknown) => void;
+}
+
 export default function App() {
   const [hash, setHash] = useState(() => window.location.hash);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -60,6 +71,7 @@ export default function App() {
   /** The remembered run the screen is holding because the last read of it did not answer. */
   const [unreachableRunId, setUnreachableRunId] = useState('');
   const [pollFailures, setPollFailures] = useState({ runId: '', count: 0 });
+  const [pollTick, setPollTick] = useState(0);
   /**
    * The tab that issued the start knows the stage is working before the server
    * can say so: its own snapshot is still the one from before the request. The
@@ -68,6 +80,9 @@ export default function App() {
    */
   const [startingRun, setStartingRun] = useState(false);
   const [startRecoveryRunId, setStartRecoveryRunId] = useState('');
+  const startEpoch = useRef(0);
+  const pendingStart = useRef<{ runId: string; epoch: number } | null>(null);
+  const latestIdentity = useRef<IdentityGateSnapshot | null>(null);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
 
   useEffect(() => {
@@ -83,25 +98,43 @@ export default function App() {
 
   const create = () => act(async () => (await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) })).snapshot);
 
-  /**
-   * One snapshot the server answered with, and the one place that records what
-   * reading it proved: the run is reachable. The recovery state and the poll's
-   * failure budget both exist because a run could not be read, so any reading
-   * that succeeds clears them, whichever route produced it.
-   */
-  const acceptIdentityRun = useCallback((next: IdentityGateSnapshot): void => {
+  const acceptIdentityRun = useCallback((next: IdentityGateSnapshot, source: IdentityReadSource = { epoch: startEpoch.current, kind: 'action' }): boolean => {
+    if (source.kind === 'read' && next.status === 'queued' && source.epoch < startEpoch.current) return false;
+    const localStart = pendingStart.current;
+    if (localStart?.runId === next.runId && next.status !== 'queued') {
+      pendingStart.current = null;
+      startEpoch.current += 1;
+      setStartingRun(false);
+      setBusy(false);
+    }
     setUnreachableRunId('');
     setPollFailures({ runId: next.runId, count: 0 });
-    setStartRecoveryRunId((current) => current === next.runId ? '' : current);
+    setStartRecoveryRunId((current) => current === next.runId && (next.status !== 'queued' || source.kind === 'action' || source.epoch >= startEpoch.current) ? '' : current);
+    latestIdentity.current = next;
     setIdentity(next);
+    return true;
   }, []);
 
-  const identityAct = useCallback(async (action: () => Promise<IdentityGateSnapshot>): Promise<IdentityGateSnapshot | undefined> => {
+  const identityAct = useCallback(async (action: () => Promise<IdentityGateSnapshot>, options: IdentityActOptions = {}): Promise<IdentityGateSnapshot | undefined> => {
     setBusy(true); setIdentityError('');
-    try { const next = await action(); rememberIdentityRun(next.runId); acceptIdentityRun(next); return next; } catch (cause) { setIdentityError(failureMessage(cause)); return undefined; } finally { setBusy(false); }
+    try {
+      const next = await action();
+      if (options.shouldAccept?.(next) ?? true) {
+        rememberIdentityRun(next.runId);
+        acceptIdentityRun(next, options.source);
+      }
+      return next;
+    } catch (cause) {
+      setIdentityError(failureMessage(cause));
+      options.onFailure?.(cause);
+      return undefined;
+    } finally { setBusy(false); }
   }, [acceptIdentityRun]);
   const identityGet = useCallback((runId: string) => request<IdentityGateSnapshot>(`/api/identity/runs/${encodeURIComponent(runId)}`), []);
-  const openIdentityRun = useCallback((runId: string) => { void identityAct(() => identityGet(runId)); }, [identityAct, identityGet]);
+  const openIdentityRun = useCallback((runId: string) => {
+    const source: IdentityReadSource = { epoch: startEpoch.current, kind: 'read' };
+    void identityAct(() => identityGet(runId), { source });
+  }, [identityAct, identityGet]);
 
   // Only a run the server no longer knows is forgotten. A server that is not
   // listening yet says nothing about whether the run exists, and the id is the
@@ -111,8 +144,9 @@ export default function App() {
     const remembered = rememberedIdentityRun();
     if (!remembered) { setUnreachableRunId(''); return; }
     setBusy(true); setIdentityError('');
+    const source: IdentityReadSource = { epoch: startEpoch.current, kind: 'read' };
     void identityGet(remembered).then(
-      acceptIdentityRun,
+      (next) => { acceptIdentityRun(next, source); },
       (cause: unknown) => {
         if (isMissing(cause)) { forgetIdentityRun(); setUnreachableRunId(''); return; }
         setUnreachableRunId(remembered);
@@ -140,38 +174,66 @@ export default function App() {
   const spent = identity && pollFailures.runId === identity.runId ? pollFailures.count : 0;
   useEffect(() => {
     if (!identity || !following || spent >= POLL_MAX_FAILURES) return;
-    const runId = identity.runId;
     // A reading of a run the screen has left cannot rewrite what is on it now.
     let dropped = false;
     const timer = setTimeout(() => {
+      const runId = identity.runId;
+      const source: IdentityReadSource = { epoch: startEpoch.current, kind: 'read' };
       void identityGet(runId).then(
-        (next) => { if (!dropped) acceptIdentityRun(next); },
+        (next) => {
+          if (dropped) return;
+          if (!acceptIdentityRun(next, source)) setPollTick((current) => current + 1);
+        },
         (cause: unknown) => {
           if (dropped) return;
           if (isMissing(cause)) {
             forgetIdentityRun();
+            setStartRecoveryRunId((current) => current === runId ? '' : current);
+            if (pendingStart.current?.runId === runId) {
+              pendingStart.current = null;
+              startEpoch.current += 1;
+              setStartingRun(false);
+              setBusy(false);
+            }
             setPollFailures({ runId, count: POLL_MAX_FAILURES });
             setIdentityError('Esta execução não está mais no servidor.');
             return;
           }
-          const count = spent + 1;
+          const count = startingRun || startRecoveryPending || !queued ? spent + 1 : 0;
           setPollFailures({ runId, count });
           if (count >= POLL_MAX_FAILURES) setIdentityError('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.');
+          if (count === 0) setPollTick((current) => current + 1);
         },
       );
     }, 1500);
     return () => { dropped = true; clearTimeout(timer); };
-  }, [acceptIdentityRun, following, identity, identityGet, running, spent]);
+  }, [acceptIdentityRun, following, identity, identityGet, pollTick, queued, running, spent, startRecoveryPending, startingRun]);
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = (briefing?: string) => identityAct(() => identityPost('/api/identity/runs', { runId: `identity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ...(briefing === undefined ? {} : { briefing }) }));
   const startIdentityRun = (): void => {
     if (!identity) return;
     const runId = identity.runId;
+    const epoch = startEpoch.current + 1;
+    startEpoch.current = epoch;
+    pendingStart.current = { runId, epoch };
     setStartRecoveryRunId('');
+    setPollFailures({ runId, count: 0 });
     setStartingRun(true);
-    void identityAct(() => identityPost(`/api/identity/runs/${runId}/start`)).then((next) => {
+    void identityAct(() => identityPost(`/api/identity/runs/${runId}/start`), {
+      source: { epoch, kind: 'action' },
+      shouldAccept: (next) => (pendingStart.current?.runId === runId && pendingStart.current.epoch === epoch)
+        || (latestIdentity.current?.runId === runId && latestIdentity.current.status === 'running' && next.status !== 'queued'),
+      onFailure: (cause) => {
+        if (pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
+        if (!(cause instanceof RequestError) || cause.status === undefined) {
+          setPollFailures({ runId, count: 0 });
+          setStartRecoveryRunId(runId);
+        }
+      },
+    }).then(() => {
+      if (pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
+      pendingStart.current = null;
       setStartingRun(false);
-      if (!next) setStartRecoveryRunId(runId);
     });
   };
   const cancelIdentityRun = (): void => { if (identity) void identityAct(() => identityPost(`/api/identity/runs/${identity.runId}/cancel`)); };
