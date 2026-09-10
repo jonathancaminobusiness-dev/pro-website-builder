@@ -5,7 +5,7 @@ import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { approvalOf, identityHash, identityLint, identityStageDeadlineMs as calculateIdentityStageDeadlineMs, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, resolveIdentityStageDeadlines, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
-import { IDENTITY_BRIEFING } from './identity-briefing.js';
+import { IDENTITY_BRIEFING, normalizeIdentityBriefing } from './identity-briefing.js';
 
 export { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -127,7 +127,7 @@ export class IdentityRun {
   private readonly deadlines: IdentityStageDeadlines;
 
   constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
-    this.briefing = options.briefing ?? IDENTITY_BRIEFING;
+    this.briefing = normalizeIdentityBriefing(options.briefing, options.briefing !== undefined);
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
@@ -170,7 +170,7 @@ export class IdentityRun {
   async restore(): Promise<boolean> {
     const run = await this.options.repository.getRun(this.options.runId);
     if (!run) return false;
-    this.briefing = run.briefing ?? IDENTITY_BRIEFING;
+    this.briefing = normalizeIdentityBriefing(run.briefing, run.briefing !== undefined);
     this.stage = this.newStage();
     for (const version of await this.options.repository.listVersions(run.projectId)) {
       if (this.store.get(version.id)) continue;

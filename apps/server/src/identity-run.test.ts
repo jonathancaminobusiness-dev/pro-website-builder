@@ -50,6 +50,21 @@ describe('identity run', () => {
     expect(curatorPrompt).toContain(briefing);
   });
 
+  it('normalizes a direct execution briefing before persistence and curator use', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({
+      runId: 'identity-normalized-direct',
+      repository,
+      provider: new FakeIdentityProvider(),
+      briefing: '  Nicho de cerâmica autoral.  ',
+    });
+
+    await run.initialize();
+
+    expect((await repository.getRun('identity-normalized-direct'))?.briefing).toBe('Nicho de cerâmica autoral.');
+    expect(run.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
+  });
+
   it('passes per-critic deadlines through to the identity stage', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({

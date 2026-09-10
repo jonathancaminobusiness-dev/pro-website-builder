@@ -4,7 +4,7 @@ import { tokenValueSchema } from '@pwb/domain';
 import { StageError } from '@pwb/stage-identity';
 import { RunConflictError } from './run-conflict.js';
 import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
-import { IDENTITY_BRIEFING_MAX_LENGTH } from './identity-briefing.js';
+import { BriefingValidationError, normalizeIdentityBriefing } from './identity-briefing.js';
 
 export interface IdentityApiOptions {
   runs: Map<string, IdentityRun>;
@@ -49,10 +49,8 @@ export async function handleIdentityRequest(
     const runId = typeof input.runId === 'string' ? input.runId : `identity-${randomUUID()}`;
     let briefing: string | undefined;
     if (Object.prototype.hasOwnProperty.call(input, 'briefing')) {
-      if (typeof input.briefing !== 'string') { send(400, { error: 'O briefing deve ser um texto.' }); return true; }
-      briefing = input.briefing.trim();
-      if (briefing.length === 0) { send(400, { error: 'O briefing é obrigatório e não pode estar vazio.' }); return true; }
-      if (briefing.length > IDENTITY_BRIEFING_MAX_LENGTH) { send(400, { error: `O briefing não pode ter mais de ${IDENTITY_BRIEFING_MAX_LENGTH} caracteres.` }); return true; }
+      try { briefing = normalizeIdentityBriefing(input.briefing, true); }
+      catch (error) { if (error instanceof BriefingValidationError) { send(400, { error: error.message }); return true; } throw error; }
     }
     // A run that is only on disk exists just as much as one this process holds:
     // creating over it would hand the captain an empty run under a decided id.
