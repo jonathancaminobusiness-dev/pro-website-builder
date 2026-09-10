@@ -20,4 +20,9 @@ describe('identity critic deadlines', () => {
     expect(identityProviderTimeoutMs({ critic: 600_000, criticById: { 'system-a11y-critic': 480_000 } })).toBe(600_000);
     expect(identityProviderTimeoutMs({ critic: 240_000 })).toBe(7 * 60_000);
   });
+
+  it('accounts for the default system accessibility window when a partial override leaves it unspecified', () => {
+    expect(identityProviderTimeoutMs({ criticById: { 'brand-fit-critic': 240_000 } })).toBe(10 * 60_000);
+    expect(identityProviderTimeoutMs(undefined)).toBe(10 * 60_000);
+  });
 });
