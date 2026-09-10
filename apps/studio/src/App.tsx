@@ -110,7 +110,7 @@ export default function App() {
     }
     setUnreachableRunId('');
     setPollFailures({ runId: next.runId, count: 0 });
-    setStartRecoveryRunId((current) => current === next.runId && (next.status !== 'queued' || source.kind === 'action' || source.epoch >= startEpoch.current) ? '' : current);
+    setStartRecoveryRunId((current) => current === next.runId && (next.status !== 'queued' || source.kind === 'action') ? '' : current);
     setIdentityError('');
     latestIdentity.current = next;
     setIdentity(next);
@@ -129,7 +129,7 @@ export default function App() {
       }
       return next;
     } catch (cause) {
-      setIdentityError(failureMessage(cause));
+      if (options.source?.kind !== 'action' || options.source.epoch === startEpoch.current) setIdentityError(failureMessage(cause));
       options.onFailure?.(cause);
       return undefined;
     } finally { if (manageBusy) setBusy(false); }
@@ -225,8 +225,7 @@ export default function App() {
     void identityAct(() => identityPost(`/api/identity/runs/${runId}/start`), {
       manageBusy: false,
       source: { epoch, kind: 'action' },
-      shouldAccept: (next) => (pendingStart.current?.runId === runId && pendingStart.current.epoch === epoch && latestIdentity.current?.runId === runId)
-        || (latestIdentity.current?.runId === runId && latestIdentity.current.status === 'running' && next.status !== 'queued'),
+      shouldAccept: (next) => pendingStart.current?.runId === runId && pendingStart.current.epoch === epoch && latestIdentity.current?.runId === runId,
       onFailure: (cause) => {
         if (pendingStart.current?.runId !== runId || pendingStart.current.epoch !== epoch) return;
         if (!(cause instanceof RequestError) || cause.status === undefined) {

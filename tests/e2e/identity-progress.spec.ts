@@ -109,6 +109,7 @@ test('an opened queued run follows a start from another tab', async ({ page }) =
     if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
       phase = 'running';
       await startHeld;
+      phase = 'needs_review';
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
       return;
     }
@@ -596,4 +597,156 @@ test('a retry does not accept an unchanged read dispatched after start', async (
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
 
   releaseRetryStart();
+});
+
+test('a stale start response cannot replace a later running retry', async ({ page }) => {
+  await page.clock.install();
+  let releaseFirstStart = (): void => {};
+  let releaseSecondStart = (): void => {};
+  const firstStartHeld = new Promise<void>((resolve) => { releaseFirstStart = resolve; });
+  const secondStartHeld = new Promise<void>((resolve) => { releaseSecondStart = resolve; });
+  let startCalls = 0;
+  let reads = 0;
+  let firstStartCompleted = false;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      startCalls += 1;
+      if (startCalls === 1) {
+        await firstStartHeld;
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+        firstStartCompleted = true;
+        return;
+      }
+      await secondStartHeld;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('running')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      reads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot(reads === 1 ? 'failed' : 'running')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => reads).toBe(1);
+  await expect(page.getByText('falhou', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Tentar novamente' }).click();
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => reads).toBe(2);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+
+  releaseFirstStart();
+  await expect.poll(() => firstStartCompleted).toBe(true);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+  await expect(page.getByText('falhou', { exact: true })).toHaveCount(0);
+
+  releaseSecondStart();
+});
+
+test('a queued recovery read keeps start recovery pending until progress', async ({ page }) => {
+  await page.clock.install();
+  let reads = 0;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      await route.abort();
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      reads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot(reads === 1 ? 'queued' : 'running')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toBeVisible();
+
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => reads).toBe(1);
+  await expect(page.getByRole('button', { name: 'Verificando execução…' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Executar etapa de identidade' })).toHaveCount(0);
+
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => reads).toBe(2);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
+});
+
+test('a stale start failure does not cover a later gate result with an error', async ({ page }) => {
+  await page.clock.install();
+  let releaseFirstStart = (): void => {};
+  const firstStartHeld = new Promise<void>((resolve) => { releaseFirstStart = resolve; });
+  let startCalls = 0;
+  let reads = 0;
+  let firstStartAborted = false;
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('**/api/identity/runs**', async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && pathname === '/api/identity/runs') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(snapshot('queued')) });
+      return;
+    }
+    if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      startCalls += 1;
+      if (startCalls === 1) {
+        await firstStartHeld;
+        await route.abort();
+        firstStartAborted = true;
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
+      return;
+    }
+    if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
+      reads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('failed')) });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+  await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await page.clock.fastForward(1_500);
+  await expect.poll(() => reads).toBe(1);
+  await expect(page.getByText('falhou', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Tentar novamente' }).click();
+  await expect(page.getByText('aguarda gate', { exact: true })).toBeVisible();
+
+  releaseFirstStart();
+  await expect.poll(() => firstStartAborted).toBe(true);
+  await expect(page.getByText('aguarda gate', { exact: true })).toBeVisible();
+  await expect(page.getByText('O servidor local não respondeu.', { exact: true })).toHaveCount(0);
 });
