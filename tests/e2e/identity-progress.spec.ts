@@ -75,6 +75,9 @@ test('Gate 1 follows running progress and keeps the completed result after refre
   await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
   await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
 
+  await expect(page.getByText('pronto para executar', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Iniciando…' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cancelar execução' })).toHaveCount(0);
   await expect(page.getByText('executando', { exact: true })).toBeVisible({ timeout: 4_000 });
   await expect(page.getByRole('button', { name: 'Cancelar execução' })).toBeVisible();
   await expect(page.getByText('pronto para executar', { exact: true })).toHaveCount(0);
@@ -396,6 +399,7 @@ test('a terminal poll does not unlock decisions during cancellation', async ({ p
   let releaseCancel = (): void => {};
   const startHeld = new Promise<void>((resolve) => { releaseStart = resolve; });
   const cancelHeld = new Promise<void>((resolve) => { releaseCancel = resolve; });
+  let phase: 'queued' | 'running' | 'needs_review' | 'cancelled' = 'queued';
 
   await page.addInitScript(() => localStorage.clear());
   await page.route('**/api/identity/runs**', async (route) => {
@@ -406,17 +410,21 @@ test('a terminal poll does not unlock decisions during cancellation', async ({ p
       return;
     }
     if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/start`) {
+      phase = 'running';
       await startHeld;
+      phase = 'needs_review';
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
       return;
     }
     if (request.method() === 'POST' && pathname === `/api/identity/runs/${runId}/cancel`) {
+      phase = 'needs_review';
       await cancelHeld;
+      phase = 'cancelled';
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('cancelled')) });
       return;
     }
     if (request.method() === 'GET' && pathname === `/api/identity/runs/${runId}`) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot('needs_review')) });
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(snapshot(phase)) });
       return;
     }
     await route.continue();
@@ -426,6 +434,8 @@ test('a terminal poll does not unlock decisions during cancellation', async ({ p
   await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
   await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
   await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+  await page.clock.fastForward(1_500);
+  await expect(page.getByText('executando', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Cancelar execução' }).click();
   await page.clock.fastForward(1_500);
 

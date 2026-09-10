@@ -43,7 +43,7 @@ function snapshot(status: IdentityGateSnapshot['status'], withResult = false): I
   };
 }
 
-function renderGate(next: IdentityGateSnapshot, busy = false): string {
+function renderGate(next: IdentityGateSnapshot, busy = false, inFlight = false): string {
   return renderToStaticMarkup(createElement(IdentityGate, {
     snapshot: next,
     busy,
@@ -59,7 +59,7 @@ function renderGate(next: IdentityGateSnapshot, busy = false): string {
     onReject: () => undefined,
     onChangeToken: () => undefined,
     previewOrigin: 'http://127.0.0.1:4311',
-    inFlight: false,
+    inFlight,
   }));
 }
 
@@ -91,6 +91,15 @@ describe('Gate 1 execution progress', () => {
     expect(markup).toContain('falhou');
     expect(markup).toContain('Tentar novamente');
     expect(markup).not.toContain('Executando…');
+  });
+
+  it('keeps a queued server status visible while the start request is pending', () => {
+    const markup = renderGate(snapshot('queued'), false, true);
+
+    expect(markup).toContain('status-queued');
+    expect(markup).toContain('pronto para executar');
+    expect(markup).toContain('Iniciando…');
+    expect(markup).not.toContain('Cancelar execução');
   });
 
   it('keeps the completed Gate 1 result visible after progress settles', () => {
