@@ -43,8 +43,22 @@ function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; dea
 }
 
 describe('identity stage fan-out', () => {
-  it('keeps the three-minute critic deadline as the default', () => {
+  it('keeps the three-minute deadline for regular critics and gives system accessibility more room by default', () => {
     expect(defaultIdentityDeadlines.critic).toBe(3 * 60_000);
+    expect(defaultIdentityDeadlines.criticById?.['system-a11y-critic']).toBe(10 * 60_000);
+  });
+
+  it('opens Gate 1 without critic failures under the default deadline policy', async () => {
+    const { stage, events } = harness();
+    const result = await stage.run();
+    const queued = events.filter((event) => event.type === 'identity.task.queued');
+    const deadlineOf = (taskId: string): unknown => queued.find((event) => event.payload.taskId === taskId)?.payload.deadlineMs;
+
+    expect(result.gate.state).toBe('open');
+    expect(result.failures).toEqual([]);
+    expect(deadlineOf('identity-critic-brand-fit-critic-editorial-material')).toBe(3 * 60_000);
+    expect(deadlineOf('identity-critic-divergence-critic')).toBe(3 * 60_000);
+    expect(deadlineOf('identity-critic-system-a11y-critic-editorial-material')).toBe(10 * 60_000);
   });
 
   it('turns one briefing into three sibling directions that never merge', async () => {

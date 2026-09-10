@@ -74,7 +74,15 @@ export interface IdentityStageDeadlines {
   artDirector: number;
   raster: number;
 }
-export const defaultIdentityDeadlines: IdentityStageDeadlines = { curator: 4 * 60_000, director: 7 * 60_000, critic: 3 * 60_000, refiner: 8 * 60_000, artDirector: 5 * 60_000, raster: 5 * 60_000 };
+export const defaultIdentityDeadlines: IdentityStageDeadlines = {
+  curator: 4 * 60_000,
+  director: 7 * 60_000,
+  critic: 3 * 60_000,
+  criticById: { 'system-a11y-critic': 10 * 60_000 },
+  refiner: 8 * 60_000,
+  artDirector: 5 * 60_000,
+  raster: 5 * 60_000,
+};
 
 export interface IdentityStageOptions {
   runId: string;
@@ -231,10 +239,17 @@ export class IdentityStage {
   constructor(private readonly options: IdentityStageOptions) {
     this.scheduler = options.scheduler ?? new Scheduler();
     this.branches = new CandidateBranchStore(options.store);
+    // A role-level override is explicit and therefore replaces the role's
+    // default for every critic. Named overrides remain more specific than it.
+    const criticById = options.deadlines?.critic !== undefined
+      ? options.deadlines.criticById
+      : { ...defaultIdentityDeadlines.criticById, ...options.deadlines?.criticById };
+    const { criticById: _defaultCriticById, ...defaultsWithoutCriticById } = defaultIdentityDeadlines;
+    const { criticById: _configuredCriticById, ...configuredWithoutCriticById } = options.deadlines ?? {};
     this.deadlines = {
-      ...defaultIdentityDeadlines,
-      ...options.deadlines,
-      ...(options.deadlines?.criticById ? { criticById: { ...defaultIdentityDeadlines.criticById, ...options.deadlines.criticById } } : {}),
+      ...defaultsWithoutCriticById,
+      ...configuredWithoutCriticById,
+      ...(criticById === undefined ? {} : { criticById }),
     };
     for (const [criticId, deadline] of Object.entries(this.deadlines.criticById ?? {})) {
       if (deadline === undefined || !Number.isSafeInteger(deadline) || deadline <= 0) throw new StageError(`Identity critic ${criticId} deadline must be a positive integer in milliseconds.`);

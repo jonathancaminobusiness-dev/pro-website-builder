@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startServer } from './index.js';
+import { openDatabase, ProjectRepository } from './db/repository.js';
 import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from './identity-briefing.js';
 import { STUDIO_ORIGIN } from './security.js';
 
@@ -40,6 +41,36 @@ function postIdentity(origin: string, body: Record<string, unknown>): Promise<Re
 }
 
 describe('identity run creation', () => {
+  it('opens Gate 1 through HTTP with the default critic deadline policy', async () => {
+    const server = await identityServer();
+    const created = await postIdentity(server.origin, { runId: 'default-deadline-api' });
+    expect(created.status).toBe(201);
+
+    const started = await fetch(`${server.origin}/api/identity/runs/default-deadline-api/start`, {
+      method: 'POST',
+      headers: { origin: STUDIO_ORIGIN, 'content-type': 'application/json' },
+      body: JSON.stringify({ approverRole: 'captain' }),
+    });
+    const snapshot = await started.json() as { status: string; gate: { state: string }; failures: Array<unknown> };
+
+    expect(started.status).toBe(200);
+    expect(snapshot.status).toBe('needs_review');
+    expect(snapshot.gate.state).toBe('open');
+    expect(snapshot.failures).toEqual([]);
+
+    const database = openDatabase(join(server.directory, 'identity.sqlite'));
+    try {
+      const events = await new ProjectRepository(database).listEvents('default-deadline-api');
+      const queued = events.filter((event) => event.type === 'identity.task.queued');
+      const deadlineOf = (taskId: string): unknown => queued.find((event) => event.payload.taskId === taskId)?.payload.deadlineMs;
+      expect(deadlineOf('identity-critic-brand-fit-critic-editorial-material')).toBe(3 * 60_000);
+      expect(deadlineOf('identity-critic-divergence-critic')).toBe(3 * 60_000);
+      expect(deadlineOf('identity-critic-system-a11y-critic-editorial-material')).toBe(10 * 60_000);
+    } finally {
+      database.sqlite.close();
+    }
+  });
+
   it('trims and persists a free briefing in the Gate 1 snapshot', async () => {
     const server = await identityServer();
     const response = await postIdentity(server.origin, { runId: 'briefing-api', briefing: '  Um nicho de cerâmica autoral.  ' });
