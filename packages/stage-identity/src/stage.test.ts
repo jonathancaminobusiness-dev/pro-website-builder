@@ -7,14 +7,67 @@ import { HiggsfieldMcpProvider, type ModelProvider } from '@pwb/providers';
 import { lintDesign } from '@pwb/linter';
 import { renderDesign } from '@pwb/renderer';
 import { identityAxisBriefs } from './axes.js';
+import { identityCritics } from './critics.js';
 import { generateImageAsset, imageryPolicyViolations, plannedImagery } from './art-director.js';
 import { directionVectorDraftSchemaFor, type ImagePromptPlan } from './contracts.js';
-import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
+import { FakeIdentityProvider, fakeBriefSpec, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
 import { defaultIdentityDeadlines, IdentityStage, type IdentityStageDeadlines } from './stage.js';
 import { stageRoles } from '@pwb/domain';
+import { criticPrompt, identityDirectorPrompt, identityRefinerPrompt } from './prompts.js';
 
 const BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A prova é o registro de cada decisão.';
+
+describe('identity worker prompts', () => {
+  it('gives refiners the closed token role contract and identity schema', () => {
+    const identity = fakeIdentityFor('editorial-material');
+    const prompt = identityRefinerPrompt({
+      brief: fakeBriefSpec,
+      directionId: 'editorial-material',
+      baseVersionId: 'v-base',
+      allowedPaths: ['/identity', '/reviewRecord'],
+      identity,
+      findings: {},
+    });
+
+    for (const [role, path] of Object.entries(identity.tokenRoles)) expect(prompt).toContain(`${role}=${path}`);
+    expect(prompt).toContain('The `tokenRoles` object is closed');
+    expect(prompt).toContain('focusIndicator');
+    expect(prompt).toContain('stateSurface');
+    expect(prompt).toContain('stateText');
+    expect(prompt).toContain('additionalProperties');
+
+    const directorPrompt = identityDirectorPrompt({
+      brief: fakeBriefSpec,
+      axisBriefId: 'modular-technical',
+      baseVersionId: 'v-base',
+      allowedPaths: ['/identity', '/reviewRecord'],
+      currentIdentity: fakeIdentityFor('modular-technical'),
+    });
+    expect(directorPrompt).toContain('The identity token contract is closed');
+    expect(directorPrompt).toContain('do not add, remove or rename token paths');
+  });
+
+  it('makes the accessibility rubric reuse supported roles instead of requiring new fields', () => {
+    const critic = identityCritics.find((entry) => entry.id === 'system-a11y-critic')!;
+    const prompt = criticPrompt({
+      criticId: critic.id,
+      dimension: critic.dimension,
+      brief: fakeBriefSpec,
+      subject: { kind: 'direction', directionId: 'modular-technical' },
+      rubric: critic.rubric,
+      vetoes: critic.vetoes,
+      document: fakeIdentityFor('modular-technical'),
+    });
+
+    expect(prompt).toContain('without adding roles');
+    expect(prompt).toContain('surface');
+    expect(prompt).toContain('text');
+    expect(prompt).toContain('bodyTypeface');
+    expect(prompt).toContain('baseSpacing');
+    expect(prompt).toContain('sectionSpacing');
+  });
+});
 
 function seedStore(): { store: VersionStore; baseVersionId: string } {
   const store = new VersionStore();
