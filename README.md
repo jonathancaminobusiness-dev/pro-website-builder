@@ -243,6 +243,17 @@ naming one execution's digest while holding the other's bytes. A closed gate doe
 reopen either: once the bundle is published the run has finished, so preparing
 again is refused rather than moving a finished run's document.
 
+A publish the release refuses answers `409` with its own reason, never `500`:
+nothing prepared in this execution, a digest the run no longer holds, a bundle
+prepared for another proposal, a veto still standing, or an open point never
+accepted in writing. The studio can tell the release having moved from the
+server having broken. And the bytes never outlive the acceptance: if the
+publication cannot be appended to the release record, or the gate cannot be
+approved, the bundle this publish wrote is removed again rather than left on
+disk with the run still needing review. A bundle that was already there — the
+same bytes published before — is never touched, because its own record stands
+for it.
+
 Only the captain may accept an open escalation in writing. A scripted run —
 `run:fixture` and `run:release` alike — goes through that same publish path
 under the `fixture` role and only when the report is clean; with a veto or an
