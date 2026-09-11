@@ -12,7 +12,7 @@ const NOW = new Date('2026-09-11T10:00:00.000Z');
 const VISUAL_STAGE_COPY = ['ver proposta', 'gerar identidade', 'abrir preview'];
 
 function state(snapshot: ConversationSnapshot | null, ...actions: ConversationAction[]): ConversationUiState {
-  return actions.reduce(conversationReducer, conversationReducer(initialConversationState('identity-conversation-fixture'), { type: 'resumed', snapshot }));
+  return actions.reduce(conversationReducer, conversationReducer(initialConversationState(), { type: 'resumed', snapshot }));
 }
 
 function render(next: ConversationUiState): string {
@@ -267,7 +267,7 @@ describe('briefing conversation panel', () => {
   it('names the read in flight when an unreadable conversation is being retried', () => {
     const retrying = conversationReducer(
       conversationReducer(
-        conversationReducer(initialConversationState('identity-1'), { type: 'begin', intent: { kind: 'resume' } }),
+        conversationReducer(initialConversationState(), { type: 'begin', intent: { kind: 'resume' } }),
         { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
       ),
       { type: 'retry' },
@@ -280,7 +280,7 @@ describe('briefing conversation panel', () => {
 
   it('says the conversation could not be read instead of reporting a read still running', () => {
     const unreachable = conversationReducer(
-      conversationReducer(initialConversationState('identity-1'), { type: 'begin', intent: { kind: 'resume' } }),
+      conversationReducer(initialConversationState(), { type: 'begin', intent: { kind: 'resume' } }),
       { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
     );
     const markup = render(unreachable);
@@ -289,6 +289,30 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('Abrindo a conversa desta execução…');
     expect(markup.match(/Tentar novamente/g)).toHaveLength(1);
     expect(markup).not.toContain('Reabrir do ponto salvo');
+  });
+
+  it('offers only a replay when the failed request was a read of the conversation', () => {
+    const markup = render(state(
+      conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 }),
+      { type: 'begin', intent: { kind: 'resume' } },
+      { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
+    ));
+
+    expect(markup).toContain('Tentar novamente');
+    expect(markup).not.toContain('Editar e reenviar');
+  });
+
+  it('keeps the conversation on screen when a reopen finds no conversation on the server', () => {
+    const markup = render(state(
+      conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 }),
+      { type: 'begin', intent: { kind: 'resume' } },
+      { type: 'resumed', snapshot: null },
+    ));
+
+    expect(markup).toContain('Somos uma clínica de bairro.');
+    expect(markup).toContain('não a encontrou');
+    expect(markup).toContain('Tentar novamente');
+    expect(markup).not.toContain('Briefing fechado');
   });
 
   it('stops offering the entry composer once a ceiling was reached', () => {

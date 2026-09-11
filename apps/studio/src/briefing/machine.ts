@@ -34,7 +34,6 @@ export interface ConversationFailure {
  * not asked yet" and from "we asked and could not read it".
  */
 export interface ConversationUiState {
-  runId: string;
   availability: 'unknown' | 'available' | 'absent' | 'unreachable';
   snapshot: ConversationSnapshot | null;
   /** The initial text or the answer being typed. Never cleared by a failure. */
@@ -46,7 +45,7 @@ export interface ConversationUiState {
 }
 
 export type ConversationAction =
-  | { type: 'reset'; runId: string }
+  | { type: 'reset' }
   | { type: 'resumed'; snapshot: ConversationSnapshot | null }
   | { type: 'draft'; value: string }
   | { type: 'summaryDraft'; value: string }
@@ -66,8 +65,8 @@ function summarySeed(snapshot: ConversationSnapshot): string {
   return snapshot.summary !== '' ? snapshot.summary : snapshot.briefing;
 }
 
-export function initialConversationState(runId: string): ConversationUiState {
-  return { runId, availability: 'unknown', snapshot: null, draft: '', summaryDraft: '', pending: null, failure: null };
+export function initialConversationState(): ConversationUiState {
+  return { availability: 'unknown', snapshot: null, draft: '', summaryDraft: '', pending: null, failure: null };
 }
 
 export function classifyFailure(cause: unknown): ConversationFailure {
@@ -86,11 +85,17 @@ export function classifyFailure(cause: unknown): ConversationFailure {
 export function conversationReducer(state: ConversationUiState, action: ConversationAction): ConversationUiState {
   switch (action.type) {
     case 'reset':
-      return initialConversationState(action.runId);
+      return initialConversationState();
     case 'resumed':
-      return action.snapshot === null
-        ? { ...state, availability: 'absent', snapshot: null, pending: null, failure: null }
-        : { ...state, availability: 'available', snapshot: action.snapshot, summaryDraft: summarySeed(action.snapshot), pending: null, failure: null };
+      if (action.snapshot === null) {
+        // A 404 only means "this server has no conversation for this run" when
+        // none was ever read. After a successful read it is a failed read: the
+        // history stays, the briefing stays open and the stage stays closed.
+        return state.snapshot === null
+          ? { ...state, availability: 'absent', snapshot: null, pending: null, failure: null }
+          : { ...state, failure: { message: 'Não foi possível reabrir a conversa desta execução: o servidor não a encontrou. Nada foi fechado e o que já foi lido continua aqui. Tente novamente.' } };
+      }
+      return { ...state, availability: 'available', snapshot: action.snapshot, summaryDraft: summarySeed(action.snapshot), pending: null, failure: null };
     case 'draft':
       return { ...state, draft: action.value };
     case 'summaryDraft':
@@ -192,15 +197,22 @@ export interface ConversationAffordances {
   closed: boolean;
   /** The failed request can be sent again with the intent it already had. */
   canRetry: boolean;
+  /**
+   * The failed request carried text from a field on screen, so dropping it and
+   * editing that field again is a real way out. A read carries none.
+   */
+  canDiscard: boolean;
 }
 
 export function affordances(state: ConversationUiState, now: Date): ConversationAffordances {
   const snapshot = state.snapshot;
   const busy = state.pending !== null && state.failure === null;
   const locked = state.pending !== null;
+  const canRetry = state.pending !== null && state.failure !== null;
+  const canDiscard = canRetry && (state.pending?.kind === 'confirm' || (state.pending?.kind === 'send' && (state.pending.request.intent === 'entry' || state.pending.request.intent === 'answer')));
   const ready = state.availability === 'available' && snapshot !== null;
   if (!ready || snapshot === null) {
-    return { ready: false, busy, locked, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry: state.pending !== null && state.failure !== null };
+    return { ready: false, busy, locked, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry, canDiscard };
   }
   const closed = briefingClosed(snapshot);
   const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
@@ -226,6 +238,7 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
     summaryOpen,
     atLimit,
     closed,
-    canRetry: state.pending !== null && state.failure !== null,
+    canRetry,
+    canDiscard,
   };
 }

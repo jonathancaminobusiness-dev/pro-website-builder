@@ -20,7 +20,7 @@ function reduce(state: ConversationUiState, ...actions: ConversationAction[]): C
 }
 
 function opened(overrides = {}): ConversationUiState {
-  return reduce(initialConversationState('identity-conversation-fixture'), { type: 'resumed', snapshot: conversationSnapshot(overrides) });
+  return reduce(initialConversationState(), { type: 'resumed', snapshot: conversationSnapshot(overrides) });
 }
 
 const entryIntent = { kind: 'send', request: { idempotencyKey: 'key-entry', intent: 'entry', message: 'Somos uma clínica veterinária de bairro.' } } as const;
@@ -35,11 +35,37 @@ describe('conversation ui state', () => {
   });
 
   it('marks a run the server has no conversation for as absent, leaving the old flow alone', () => {
-    const state = reduce(initialConversationState('identity-legacy'), { type: 'resumed', snapshot: null });
+    const state = reduce(initialConversationState(), { type: 'resumed', snapshot: null });
 
     expect(state.availability).toBe('absent');
     expect(state.snapshot).toBeNull();
     expect(affordances(state, NOW).ready).toBe(false);
+  });
+
+  it('treats a 404 after a conversation was read as a failed read, keeping the history and the gate closed', () => {
+    const read = opened({ state: 'recommendation', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 });
+    const state = reduce(read, { type: 'begin', intent: { kind: 'resume' } }, { type: 'resumed', snapshot: null });
+    const can = affordances(state, NOW);
+
+    expect(state.availability).toBe('available');
+    expect(state.snapshot?.turns).toHaveLength(2);
+    expect(state.failure).not.toBeNull();
+    expect(can.closed).toBe(false);
+    expect(can.canRetry).toBe(true);
+  });
+
+  it('offers no edit-and-resend for a failed read, which carried no field', () => {
+    const failed = reduce(opened({ state: 'recommendation', messageCount: 1 }), { type: 'begin', intent: { kind: 'resume' } }, { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) });
+    const can = affordances(failed, NOW);
+
+    expect(can.canRetry).toBe(true);
+    expect(can.canDiscard).toBe(false);
+  });
+
+  it('offers edit-and-resend for a failed send, which came from a field on screen', () => {
+    const failed = reduce(opened(), { type: 'draft', value: 'Somos uma clínica veterinária de bairro.' }, { type: 'begin', intent: entryIntent }, { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) });
+
+    expect(affordances(failed, NOW).canDiscard).toBe(true);
   });
 
   it('keeps the history and the draft while a send is in flight and refuses a duplicate send', () => {
@@ -172,7 +198,7 @@ describe('conversation ui state', () => {
 
   it('marks a conversation the server could not read as unreachable, never as absent', () => {
     const failed = reduce(
-      initialConversationState('identity-unreadable'),
+      initialConversationState(),
       { type: 'begin', intent: { kind: 'resume' } },
       { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
     );
@@ -238,22 +264,22 @@ describe('conversation ui state', () => {
 
   it('starts a reopened run from nothing, so a stale draft never leaks between executions', () => {
     const previous = reduce(opened(), { type: 'draft', value: 'texto da execução anterior' });
-    const reset = conversationReducer(previous, { type: 'reset', runId: 'identity-other' });
+    const reset = conversationReducer(previous, { type: 'reset' });
 
-    expect(reset).toEqual(initialConversationState('identity-other'));
+    expect(reset).toEqual(initialConversationState());
   });
 });
 
 describe('summary seeding', () => {
   it('falls back to the captain’s own text when a ceiling arrives before a summary', () => {
-    const state = conversationReducer(initialConversationState('identity-1'), { type: 'resumed', snapshot: conversationSnapshot({ state: 'question', briefing: 'Somos uma clínica veterinária de bairro.', question: clarifyingQuestion(), messageCount: 6 }) });
+    const state = conversationReducer(initialConversationState(), { type: 'resumed', snapshot: conversationSnapshot({ state: 'question', briefing: 'Somos uma clínica veterinária de bairro.', question: clarifyingQuestion(), messageCount: 6 }) });
 
     expect(state.summaryDraft).toBe('Somos uma clínica veterinária de bairro.');
     expect(affordances(state, NOW).canConfirm).toBe(true);
   });
 
   it('prefers the consolidated summary whenever the server produced one', () => {
-    const state = conversationReducer(initialConversationState('identity-1'), { type: 'resumed', snapshot: conversationSnapshot({ state: 'confirmation', briefing: 'texto original', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
+    const state = conversationReducer(initialConversationState(), { type: 'resumed', snapshot: conversationSnapshot({ state: 'confirmation', briefing: 'texto original', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
 
     expect(state.summaryDraft).toBe(CONSOLIDATED_SUMMARY);
   });
