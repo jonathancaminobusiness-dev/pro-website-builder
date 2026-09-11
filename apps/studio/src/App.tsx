@@ -93,11 +93,16 @@ export default function App() {
   const latestIdentity = useRef<IdentityGateSnapshot | null>(null);
   /** Every write to the pipeline snapshot bumps this, so a read can tell whether a newer one landed while it was in flight. */
   const snapshotEpoch = useRef(0);
+  /** The snapshot on screen, readable before React commits the render that set it. */
+  const currentSnapshot = useRef<Snapshot | null>(null);
   const commitSnapshot = useCallback((next: Snapshot): void => {
     snapshotEpoch.current += 1;
+    currentSnapshot.current = next;
     setSnapshot(next);
   }, []);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
+
+  useEffect(() => { currentSnapshot.current = snapshot; }, [snapshot]);
 
   useEffect(() => {
     const track = (): void => setHash(window.location.hash);
@@ -151,6 +156,7 @@ export default function App() {
       (next) => { setSnapshot((current) => current ?? next); },
       (cause: unknown) => {
         if (isMissing(cause)) { forgetRun(PIPELINE_RUN_KEY); return; }
+        if (currentSnapshot.current) return;
         setError(failureMessage(cause));
       },
     );
