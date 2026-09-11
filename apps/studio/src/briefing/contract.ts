@@ -183,6 +183,7 @@ function parseDirection(value: unknown, position: number): ConversationDirection
 function parseLimits(value: unknown): ConversationLimits {
   const source = record(value, 'limits');
   const expiresAt = optionalText(source.expiresAt, 'limits.expiresAt');
+  if (expiresAt && !Number.isFinite(Date.parse(expiresAt))) throw new ConversationContractError('limits.expiresAt');
   return {
     messageLimit: count(source.messageLimit, 'limits.messageLimit'),
     briefingMaxLength: count(source.briefingMaxLength, 'limits.briefingMaxLength'),
@@ -223,11 +224,10 @@ export function atMessageLimit(snapshot: ConversationSnapshot): boolean {
   return snapshot.messageCount >= snapshot.limits.messageLimit;
 }
 
-/** The time ceiling. A conversation with no `expiresAt` has none. */
+/** The time ceiling. A conversation with no `expiresAt` has none; a ceiling that arrives unreadable was already refused by the parser. */
 export function pastTimeLimit(snapshot: ConversationSnapshot, now: Date): boolean {
   if (!snapshot.limits.expiresAt) return false;
-  const deadline = Date.parse(snapshot.limits.expiresAt);
-  return Number.isFinite(deadline) && now.getTime() >= deadline;
+  return now.getTime() >= Date.parse(snapshot.limits.expiresAt);
 }
 
 /** A conversation that reached either ceiling stops asking and offers the editable summary and a manual close. */

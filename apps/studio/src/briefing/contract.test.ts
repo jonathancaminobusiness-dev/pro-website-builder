@@ -57,6 +57,7 @@ describe('conversation contract', () => {
     ['a turn whose nextState is not a state', wire({ turns: [{ ...entryTurn('x'), nextState: 'somewhere' }] })],
     ['a question with no reason', wire({ question: { id: 'q', prompt: 'p' } })],
     ['a direction that is not an object', wire({ directions: ['laço'] })],
+    ['a time ceiling no clock can read', wire({ limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: 'amanhã de manhã' } })],
     ['a body that is not an object', 'entry'],
   ])('refuses %s', (_label, payload) => {
     expect(() => parseConversationSnapshot(payload)).toThrow(ConversationContractError);

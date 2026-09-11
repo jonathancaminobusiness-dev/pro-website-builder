@@ -19,6 +19,8 @@ test('reads the text, answers the one question and closes the briefing into thre
   const chat = page.locator('.briefing-chat');
   await expect(chat.getByRole('heading', { name: 'Conversa de briefing' })).toBeVisible();
   await expect(chat.getByText('0/6 mensagens')).toBeVisible();
+  // The identity stage is not spendable while the briefing is still open.
+  await expect(page.getByRole('button', { name: 'Feche o briefing para executar' })).toBeDisabled();
 
   await page.getByLabel(/Conte sobre o negócio/).fill(ENTRY);
   await page.getByRole('button', { name: 'Enviar para leitura' }).click();
@@ -40,6 +42,8 @@ test('reads the text, answers the one question and closes the briefing into thre
   await page.getByRole('button', { name: 'Fechar briefing' }).click();
 
   await expect(chat.locator('.chat-closed')).toContainText('Briefing fechado');
+  // Closing the briefing is what enables the stage.
+  await expect(page.getByRole('button', { name: 'Executar etapa de identidade' })).toBeEnabled();
   await expect(chat.locator('.chat-direction')).toHaveCount(3);
   await expect(chat.getByText('conceito descrito · sem preview').first()).toBeVisible();
   // The visual stage owns previews; nothing in the chat opens one.
@@ -103,7 +107,7 @@ test('explains an off-contract response and lets the captain try again', async (
 });
 
 test('says plainly that a cancelled conversation sent nothing to the curator', async ({ page }) => {
-  await openConversation(page);
+  const api = await openConversation(page);
   await page.getByLabel(/Conte sobre o negócio/).fill(ENTRY);
   await page.getByRole('button', { name: 'Enviar para leitura' }).click();
   await expect(page.locator('#briefing-chat-question')).toHaveCount(1);
@@ -113,6 +117,12 @@ test('says plainly that a cancelled conversation sent nothing to the curator', a
   const chat = page.locator('.briefing-chat');
   await expect(chat.getByText('Nada foi enviado ao curador')).toBeVisible();
   await expect(chat.getByRole('button', { name: 'Fechar briefing' })).toHaveCount(0);
+  // A cancellation answers no question, so it carries no question id.
+  const cancels = api.writes.filter((write) => write.body.intent === 'cancel');
+  expect(cancels).toHaveLength(1);
+  expect(cancels[0]?.body.questionId).toBeUndefined();
+  // Cancelling closed no briefing, so it enabled no stage either.
+  await expect(page.getByRole('button', { name: 'Feche o briefing para executar' })).toBeDisabled();
 });
 
 test('reads the ceiling from the contract and closes manually once it is reached', async ({ page }) => {

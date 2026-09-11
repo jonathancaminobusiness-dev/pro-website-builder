@@ -62,7 +62,7 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
   const send = useCallback((intent: 'entry' | 'answer' | 'skip' | 'cancel', message: string): void => {
     if (!runId) return;
     const questionId = latest.current.snapshot?.question?.id;
-    void run({ kind: 'send', request: { idempotencyKey: newIdempotencyKey(), intent, message, ...(questionId && intent !== 'entry' ? { questionId } : {}) } }, runId);
+    void run({ kind: 'send', request: { idempotencyKey: newIdempotencyKey(), intent, message, ...(questionId && (intent === 'answer' || intent === 'skip') ? { questionId } : {}) } }, runId);
   }, [run, runId]);
 
   return useMemo<BriefingConversationController>(() => ({

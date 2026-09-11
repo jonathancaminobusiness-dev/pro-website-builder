@@ -79,6 +79,11 @@ export default function BriefingConversation(props: BriefingConversationProps): 
   const stopped = can.closed || snapshot.state === 'cancelled';
   const counter = `${snapshot.messageCount}/${snapshot.limits.messageLimit} mensagens`;
   const showSummary = !stopped && (snapshot.state === 'confirmation' || can.atLimit);
+  const showEntry = !stopped && snapshot.state === 'entry';
+  const showQuestion = !stopped && snapshot.question !== undefined && !can.atLimit;
+  // Correcting a turn loads it back into the draft, so it is offered only while
+  // a field bound to the draft is on screen to receive it.
+  const draftVisible = showEntry || showQuestion;
 
   return <section className="briefing-chat" aria-labelledby="briefing-chat-title">
     <div className="section-heading">
@@ -103,7 +108,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         {readingList('Hipóteses do Studio', turn.hypotheses, 'hypotheses')}
         {readingList('Ainda desconhecido', turn.unknowns, 'unknowns')}
         {turn.question && <p className="chat-why"><strong>Por que isso muda a identidade.</strong> {turn.question.why}</p>}
-        {turn.role === 'captain' && !stopped && <button className="secondary chat-correct" onClick={() => props.onCorrect(turn)} disabled={can.busy}>Corrigir esta resposta</button>}
+        {turn.role === 'captain' && draftVisible && <button className="secondary chat-correct" onClick={() => props.onCorrect(turn)} disabled={can.busy}>Corrigir esta resposta</button>}
       </li>)}
       {bubble !== null && <li className="chat-turn chat-captain chat-pending" aria-hidden={false}>
         <p className="chat-role">Você · enviando</p>
@@ -115,7 +120,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
 
     {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} onRetry={props.onRetry} onResume={props.onResume} />}
 
-    {snapshot.state === 'entry' && !stopped && <div className="chat-compose">
+    {showEntry && <div className="chat-compose">
       <label htmlFor="briefing-chat-entry">Conte sobre o negócio: nicho, promessa, provas e o que a identidade deve evitar</label>
       <textarea
         id="briefing-chat-entry"
@@ -130,13 +135,11 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         <span aria-live="polite">{state.draft.length}/{snapshot.limits.briefingMaxLength} caracteres</span>
       </div>
       <div className="actions">
-        <button className="secondary" onClick={props.onCancel} disabled={!can.canCancel}>Cancelar conversa</button>
         <button className="primary" onClick={props.onSendEntry} disabled={!can.canSendEntry}>Enviar para leitura</button>
       </div>
     </div>}
 
-    {snapshot.question && !stopped && !can.atLimit && <div className="chat-question">
-      <p className="eyebrow">Pergunta {Math.min(snapshot.messageCount + 1, snapshot.limits.messageLimit)} de no máximo {snapshot.limits.messageLimit}</p>
+    {showQuestion && snapshot.question && <div className="chat-question">
       <p className="chat-question-prompt" id="briefing-chat-question">{snapshot.question.prompt}</p>
       <p className="chat-why"><strong>Por que isso muda a identidade.</strong> {snapshot.question.why}</p>
       {snapshot.question.options && snapshot.question.options.length > 0 && <ul className="chat-options" aria-label="Respostas sugeridas">
@@ -155,7 +158,6 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         onChange={(event) => props.onDraftChange(event.target.value)}
       />
       <div className="actions">
-        <button className="secondary" onClick={props.onCancel} disabled={!can.canCancel}>Cancelar conversa</button>
         <button className="secondary" onClick={props.onSkip} disabled={!can.canSkip}>Pular esta pergunta</button>
         <button className="primary" onClick={props.onAnswer} disabled={!can.canAnswer}>Responder</button>
       </div>
@@ -176,9 +178,17 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         <span aria-live="polite">{state.summaryDraft.length}/{snapshot.limits.briefingMaxLength} caracteres</span>
       </div>
       <div className="actions">
-        <button className="secondary" onClick={props.onCancel} disabled={!can.canCancel}>Cancelar conversa</button>
         <button className="primary" onClick={props.onConfirm} disabled={!can.canConfirm}>Fechar briefing</button>
       </div>
+    </div>}
+
+    {/* The way out of the conversation, reported by the contract rather than by
+        whichever control block happens to be on screen: a state that shows no
+        composer — the first reading, a summary the server has not decided yet,
+        a failed conversation — still has an exit. */}
+    {!stopped && <div className="actions chat-exit">
+      <button className="secondary" onClick={props.onCancel} disabled={!can.canCancel}>Cancelar conversa</button>
+      {!draftVisible && !showSummary && state.failure === null && <button className="secondary" onClick={props.onResume} disabled={can.busy}>Reabrir do ponto salvo</button>}
     </div>}
 
     {snapshot.state === 'cancelled' && <p className="chat-cancelled" role="status">
