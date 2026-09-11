@@ -43,7 +43,7 @@ async function harness(approvedIdentity: () => DesignIR = createFixtureIR): Prom
       previewPrefix: (versionId) => `/preview/${versionId}`,
     }),
     // The stage starts from what Gate 1 approved, here the identity this test measures.
-    identity: async () => { const ir = approvedIdentity(); return { identityRunId: 'gate1-measured', projectId: ir.meta.projectId, versionId: ir.meta.versionId, identityHash: identityHash(ir), approvedAt: new Date().toISOString(), stale: false, ir }; },
+    identity: async () => { const ir = approvedIdentity(); return { identityRunId: 'gate1-measured', projectId: ir.meta.projectId, versionId: ir.meta.versionId, identityHash: identityHash(ir), approvedAt: new Date().toISOString(), stale: false, ir, assets: [] }; },
   });
   const api = createApiServer({
     runs: new Map(), prototypes: holder.registry,

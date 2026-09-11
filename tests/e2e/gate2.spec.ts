@@ -37,7 +37,7 @@ async function serveSeededRun(page: Page): Promise<() => Promise<void>> {
   const registry = new PrototypeRunRegistry({
     repository: new ProjectRepository(database),
     evidence: new DerivedEvidenceSource(),
-    identity: async () => ({ identityRunId: 'gate1-seeded', projectId: approved.meta.projectId, versionId: approved.meta.versionId, identityHash: identityHash(approved), approvedAt: new Date().toISOString(), stale: false, ir: approved }),
+    identity: async () => ({ identityRunId: 'gate1-seeded', projectId: approved.meta.projectId, versionId: approved.meta.versionId, identityHash: identityHash(approved), approvedAt: new Date().toISOString(), stale: false, ir: approved, assets: [] }),
   });
 
   await page.route('**/api/prototype/**', async (route) => {
