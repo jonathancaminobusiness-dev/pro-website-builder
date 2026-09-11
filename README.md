@@ -92,6 +92,9 @@ corepack pnpm build
 corepack pnpm test:e2e
 ```
 
+Chromium is what the Fase 0 suite measures; the release evidence needs Firefox
+and WebKit too, and the finalization section below names the command.
+
 Playwright ships no browser of its own and `pnpm install` does not fetch one. Every measured path opens its browser through `RenderHub`, which refuses without that binary and names the command that installs it — the server, the fixture CLI and the e2e harnesses all get the same sentence.
 
 Run the deterministic fixture without starting the UI:
@@ -210,10 +213,28 @@ corepack pnpm test:e2e:release     # only the browser evidence
 corepack pnpm run:lighthouse       # only the Lighthouse artifacts
 ```
 
+`run:evidence` and `test:e2e:release` measure the release on all three engines,
+and the quickstart installs only Chromium, so install the other two before the
+first evidence run:
+
+```bash
+corepack pnpm exec playwright install chromium firefox webkit
+```
+
+All three always run. An engine that cannot launch on the host leaves no
+artifact at all, and Gate 3 reports the gap as missing evidence the captain
+accepts in writing — never as a pass — so a checkout with one browser never
+reaches a clean report.
+
 Everything binds an ephemeral port the operating system chooses, so an evidence
 run never contends with the studio on `5173`, the preview on `4311`, or another
-worktree. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site name the
-canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT`,
+worktree; `PWB_RELEASE_PORT` pins the release harness to a fixed port instead —
+leave it unset unless something outside the run has to reach that origin, since
+several checkouts share one machine — and the harness publishes whichever origin
+it bound through `PWB_RELEASE_ORIGIN`. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site
+name the canonical URLs, the sitemap and Open Graph use — every compile site
+reads them, so the gate credits the digest the runners measured;
+`PWB_RELEASE_ROOT`,
 `PWB_EVIDENCE_DIR` and `PWB_FONTS_DIR` move the bundle, the artifacts and the
 fonts. Preparing a release writes
 the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and every
@@ -235,7 +256,10 @@ with the gate's open points unaccepted. The approve route refuses `finalization`
 and the studio's finalization row points at the Gate 3 panel. One code path owns
 the vetoes, the written acceptance, the `release.published` event, the release
 record and the single bundle root, and it claims the gate before its first
-await, so two publishes that race cannot both close it. A closed gate does not
+await, so two publishes that race cannot both close it. Preparing claims the
+gate the same way: a second preparation that arrives while one is in flight
+answers `409` instead of compiling the same gate twice and leaving the snapshot
+naming one execution's digest while holding the other's bytes. A closed gate does not
 reopen either: once the bundle is published the run has finished, so preparing
 again is refused rather than moving a finished run's document.
 
@@ -294,10 +318,14 @@ from its own origin under `font-src 'self'`, reading them again whenever the
 manifest or any file it declares changes rather than once at start, so a face
 added or re-exported while the studio runs reaches the captain's iframe and an
 unreadable manifest fails that request rather than the studio. Gate 3 then
-compares the faces the preview actually served against the ones the bundle ships,
-so a face replaced after the captain looked at it is a divergence and not an
+compares the faces the preview actually served — read back out of the
+`@font-face` rules that document declared, never from the fonts directory, which
+would compare the plan against itself — against the ones the bundle ships, so a
+face replaced after the captain looked at it is a divergence and not an
 identical route, and `tests/release/parity.spec.ts` asks both sides what they
-actually loaded rather than comparing two fallbacks.
+actually loaded rather than comparing two fallbacks. A release no preview served
+has nothing to compare, so its self-hosted faces escalate to the captain by name
+instead of reporting a parity nobody checked.
 
 So that this last check measures a face instead of an empty `document.fonts`,
 installing seeds `fonts/` with one real face — Fraunces 400 normal, under the

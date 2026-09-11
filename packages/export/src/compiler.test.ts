@@ -469,14 +469,40 @@ describe('the licence inventory names only the bytes the bundle ships', () => {
 });
 
 describe('the published policy allows only what the bundle can load', () => {
+  /** Both copies of the policy, since the meta tag and the headers file must agree. */
+  function policies(compiled: CompiledSite): string[] {
+    return [compiled.csp, (JSON.parse(fileText(compiled, 'headers.json')) as Record<string, Record<string, string>>)['/*']!['Content-Security-Policy']!];
+  }
+
   it('states an image policy no declared origin can widen', () => {
     const compiled = compileFixture((ir) => {
       ir.assets.items[0] = { ...ir.assets.items[0]!, uri: 'https://provider.example/hero.png', status: 'placeholder' };
     });
-    const delivered = (JSON.parse(fileText(compiled, 'headers.json')) as Record<string, Record<string, string>>)['/*']!['Content-Security-Policy']!;
-    expect(policyDirective(compiled.csp, 'img-src')).toBe("'self' data:");
-    expect(policyDirective(delivered, 'img-src')).toBe("'self' data:");
+    for (const policy of policies(compiled)) expect(policyDirective(policy, 'img-src')).toBe("'self'");
     expect(fileText(compiled, 'index.html')).not.toContain('provider.example');
+  });
+
+  it('allows data: images only for a bundle that embeds one', () => {
+    const withImage = compileFixture(withInlinedMark);
+    expect(fileText(withImage, 'index.html')).toContain('src="data:');
+    for (const policy of policies(withImage)) expect(policyDirective(policy, 'img-src')).toBe("'self' data:");
+
+    // The same document without the image: the bundle carries no data: URI, so
+    // the policy stops permitting one.
+    const withoutImage = compileFixture();
+    for (const policy of policies(withoutImage)) expect(policyDirective(policy, 'img-src')).toBe("'self'");
+  });
+
+  it('allows a font origin only for a bundle that ships a face', () => {
+    for (const policy of policies(compileFixture())) expect(policyDirective(policy, 'font-src')).toBe("'none'");
+
+    const ir = createFixtureIR();
+    const withFace = compileRelease(renderDesign(ir), ir, {
+      ...OPTIONS,
+      fonts: [{ family: 'Fraunces', weight: '400', style: 'normal', format: 'woff2', bytes: new Uint8Array([119, 79, 70, 50, 1, 2, 3, 4]), license: 'OFL-1.1', source: 'https://fonts.example/fraunces', author: 'a', date: '2026-09-05' }],
+    });
+    expect(withFace.fonts.some((decision) => decision.selfHosted)).toBe(true);
+    for (const policy of policies(withFace)) expect(policyDirective(policy, 'font-src')).toBe("'self'");
   });
 });
 

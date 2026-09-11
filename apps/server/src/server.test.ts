@@ -7,6 +7,7 @@ import { FakeModelProvider } from '@pwb/providers';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
+import { startServer } from './index.js';
 
 const studio = { origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' };
 
@@ -154,5 +155,72 @@ describe('local API', () => {
     expect(await read()).toBe('needs_review');
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     db.sqlite.close();
+  });
+
+  it('answers 409 to a second release preparation while the first is still in flight', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-prepare-'));
+    const db = openDatabase(join(dir, 'prepare.sqlite'));
+    const runs = new Map<string, FixtureRun>();
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    await fetch(`${origin}/api/runs`, { method: 'POST', headers: studio, body: JSON.stringify({ runId: 'prepare-race' }) });
+    // Both captain gates closed, so Gate 3 is the only one still open.
+    for (const stage of ['identity', 'prototype'] as const) {
+      await fetch(`${origin}/api/runs/prepare-race/stage`, { method: 'POST', headers: studio });
+      await fetch(`${origin}/api/runs/prepare-race/approve`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', stage }) });
+    }
+    await fetch(`${origin}/api/runs/prepare-race/stage`, { method: 'POST', headers: studio });
+
+    // Two preparations race: one compiles the gate, the other is refused the way
+    // a taken run id is, instead of interleaving a second compilation into the
+    // snapshot the studio will publish.
+    const [first, second] = await Promise.all([
+      fetch(`${origin}/api/runs/prepare-race/release`, { method: 'POST', headers: studio }),
+      fetch(`${origin}/api/runs/prepare-race/release`, { method: 'POST', headers: studio }),
+    ]);
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([200, 409]);
+    const refused = first.status === 409 ? first : second;
+    expect(((await refused.json()) as { error: string }).error).toMatch(/já está sendo preparado/);
+    const accepted = first.status === 200 ? first : second;
+    const prepared = (await accepted.json()) as { digest: string };
+    // The snapshot names the one preparation that ran, and a later one still works.
+    expect(runs.get('prepare-race')!.releaseSnapshot()!.digest).toBe(prepared.digest);
+    expect((await fetch(`${origin}/api/runs/prepare-race/release`, { method: 'POST', headers: studio })).status).toBe(200);
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    db.sqlite.close();
+  });
+  it('builds one run when two cold requests advance it at once after a restart', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-cold-stage-'));
+    const dbPath = join(dir, 'cold.sqlite');
+    const releaseRoot = join(dir, 'releases');
+    const seedDb = openDatabase(dbPath);
+    const seeded = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(seedDb), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await seeded.initialize('cold-staged');
+    await seeded.runNext();
+    await seeded.approve('identity', 'captain');
+    seedDb.sqlite.close();
+
+    const server = await startServer({ dbPath, releaseRoot, evidenceDir: join(dir, 'evidence'), renderCacheDir: join(dir, 'cache'), apiPort: 0, previewPort: 0, modelProvider: 'fake' });
+    const address = server.api.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    try {
+      // Nothing is cached yet, so both requests would each restore their own run
+      // object; two of them would each stage the run from a ledger the other has
+      // already moved on from, and the later write would hide the other's work —
+      // including the release the captain then prepares and publishes.
+      const answers = await Promise.all([
+        fetch(`${origin}/api/runs/cold-staged/stage`, { method: 'POST', headers: studio }),
+        fetch(`${origin}/api/runs/cold-staged/stage`, { method: 'POST', headers: studio }),
+      ]);
+      expect(answers.map((answer) => answer.status)).toEqual([200, 200]);
+      const staged = await Promise.all(answers.map(async (answer) => ((await answer.json()) as { currentVersion: { id: string } }).currentVersion.id));
+      expect(new Set(staged).size).toBe(1);
+      const read = (await (await fetch(`${origin}/api/runs/cold-staged`)).json()) as { currentVersion: { id: string }; approvals: unknown[] };
+      expect(read.currentVersion.id).toBe(staged[0]);
+      expect(read.approvals).toHaveLength(1);
+    } finally { await server.close(); }
   });
 });

@@ -20,14 +20,16 @@
  */
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { startServedPreview } from '../apps/server/src/preview.js';
 import { modelProviderName } from '../apps/server/src/provider.js';
-import { ReleaseRun } from '../apps/server/src/release-run.js';
+import { ReleaseRun, type ReleaseSnapshot } from '../apps/server/src/release-run.js';
+import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { Applier, PatchGate, VersionStore } from '../packages/orchestrator/src/index.js';
+import { renderDesign } from '../packages/renderer/src/index.js';
 import { loadReleaseDocument } from '../packages/stage-finalization/src/index.js';
 
 const root = process.cwd();
-const siteUrl = process.env.PWB_SITE_URL ?? 'https://site.invalid';
-const siteName = process.env.PWB_SITE_NAME ?? 'pro-website-builder';
+const { siteUrl, siteName } = siteFromEnvironment();
 const releaseRoot = process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
 const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
 const fontsDir = process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
@@ -40,24 +42,34 @@ async function main(): Promise<void> {
   const approved = applier.createRoot(await loadReleaseDocument(evidenceDir));
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
 
+  // Gate 3 can only speak for faces a preview served, so this run serves the
+  // version the stage hands the gate — asked for by `previewFaces` while the
+  // release is prepared, before any refinement cycle — and hands the gate the
+  // faces that origin delivered; the faces come from the fonts directory, so a
+  // refinement does not change them. Port 0 keeps the CLI off the developer ports.
+  const preview = await startServedPreview(fontsDir);
   const release = new ReleaseRun('cli-release', {
     releaseRoot,
     evidenceDir,
     fontsDir,
     siteUrl,
     siteName,
+    previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)),
     modelProvider: modelProviderName(process.env.PWB_MODEL_PROVIDER),
   });
   // A command line run has no durable log of its own, so its events are printed
   // beside the report instead of being dropped.
-  const prepared = await release.prepare({
-    approved,
-    current: approved,
-    applier,
-    adopt: async () => { /* a refinement is already in this run's own version store */ },
-    record: async (type, payload) => { events.push({ type, payload }); },
-    approveFinalization: async () => { /* the CLI has no run to advance; the release record is the durable trace */ },
-  });
+  let prepared: ReleaseSnapshot;
+  try {
+    prepared = await release.prepare({
+      approved,
+      current: approved,
+      applier,
+      adopt: async () => { /* a refinement is already in this run's own version store */ },
+      record: async (type, payload) => { events.push({ type, payload }); },
+      approveFinalization: async () => { /* the CLI has no run to advance; the release record is the durable trace */ },
+    });
+  } finally { await preview.close(); }
 
   const report = prepared.report;
   const publishable = !report.blocked && report.escalations.length === 0;

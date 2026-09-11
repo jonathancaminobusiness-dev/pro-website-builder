@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding } from '@pwb/domain';
-import { compileRelease } from '@pwb/export';
+import { compileRelease, parseFontFaceCss, type CompiledSite, type ServedFace } from '@pwb/export';
 import { Applier, PatchGate, Scheduler, VersionStore } from '@pwb/orchestrator';
 import { CodexJsonRunner, type CodexExecutor } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import {
   aggregateVetoes, checkPreviewReleaseParity, ClaudeReleaseCriticProvider, createReleaseHarness, criticTasks, DeterministicReleaseSummarizer,
   evaluateReleaseGate, evidenceCoverage, evidenceVetoes, FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage,
-  partitionEvidence, PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, VETO_CATALOG, writeEvidenceArtifact,
+  partitionEvidence, PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, unreviewedFaces, VETO_CATALOG, writeEvidenceArtifact,
   type ReleaseCriticProvider, type ReleaseRefinerProvider, type ReleaseSummarizerProvider,
 } from './index.js';
 
@@ -48,6 +48,16 @@ const FIXTURE_FACE = {
 function compiledWithFace() {
   const ir = createFixtureIR();
   return { ir, compiled: compileRelease(renderDesign(ir), ir, { ...COMPILER_OPTIONS, fonts: [FIXTURE_FACE] }) };
+}
+
+/**
+ * The faces a view's document declared, read back out of its stylesheet the way
+ * the preview origin reads back the bytes it served: the two sides of the
+ * comparison never come from the same object.
+ */
+function servedFaces(compiled: CompiledSite): ServedFace[] {
+  const stylesheet = compiled.files.find((file) => file.path === compiled.stylesheetPath)!;
+  return parseFontFaceCss(stylesheet.contents as string, (url) => `assets/${url}`);
 }
 
 function artifact(overrides: Partial<EvidenceArtifact> & Pick<EvidenceArtifact, 'id' | 'runner' | 'engine'>): EvidenceArtifact {
@@ -167,13 +177,21 @@ describe('preview and release parity', () => {
 
   it('reports identical routes when the preview served the faces the release ships', () => {
     const { ir, compiled } = compiledWithFace();
-    expect(checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir), compiled.fonts).matched).toBe(true);
+    expect(checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir), servedFaces(compiled)).matched).toBe(true);
+  });
+
+  it('names the self-hosted faces no preview ever compared', () => {
+    const { compiled } = compiledWithFace();
+    expect(unreviewedFaces(compiled, servedFaces(compiled))).toEqual([]);
+    expect(unreviewedFaces(compiled)).toEqual(['Fixture Sans 400 normal']);
+    // A bundle that self-hosts nothing has no face to report as unreviewed.
+    expect(unreviewedFaces(compiledFixture().compiled)).toEqual([]);
   });
 
   it('catches a release that ships a face the preview never served', () => {
     const { ir, compiled } = compiledWithFace();
     // The face the captain was served before the file behind it was replaced.
-    const served = compiled.fonts.map((decision) => ({ ...decision, path: 'assets/fonts/fixture-sans-400-normal.000000000000.woff2', hash: '0'.repeat(64) }));
+    const served = servedFaces(compiled).map((face) => ({ ...face, path: 'assets/fonts/fixture-sans-400-normal.000000000000.woff2' }));
     const report = checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir), served);
     expect(report.matched).toBe(false);
     for (const route of report.routes) expect(route.differences.join(' ')).toMatch(/A face Fixture Sans 400 normal tem arquivos diferentes/);
@@ -510,6 +528,46 @@ describe('the finalization stage end to end with the deterministic providers', (
     expect(result.report.parity.matched).toBe(true);
     expect(result.report.summary?.gateAuthority).toBe('none');
     expect(result.report.escalations).toEqual([]);
+  });
+
+  it('escalates the faces it publishes when no preview served the document', async () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const version = applier.createRoot(createFixtureIR());
+    const stage = new FinalizationStage({
+      modelAlias: 'fake',
+      criticProvider: new FakeReleaseCriticProvider(),
+      refiner: new PatchRefiner(new FakeReleaseRefiner()),
+      compilerOptions: { ...COMPILER_OPTIONS, fonts: [FIXTURE_FACE] },
+    });
+    // The bundle carries a face, so the evidence has to name that release.
+    const faced = stage.compile(version.ir);
+    const measured = { releaseDigest: faced.digest, irHash: faced.irHash };
+    const evidence = [
+      artifact({ id: 'vitest', runner: 'vitest', engine: 'node', ...measured }),
+      artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', ...measured }),
+      artifact({ id: 'pw-chromium', runner: 'playwright', engine: 'chromium', ...measured }),
+      artifact({ id: 'pw-firefox', runner: 'playwright', engine: 'firefox', ...measured }),
+      artifact({ id: 'pw-webkit', runner: 'playwright', engine: 'webkit', ...measured }),
+      artifact({ id: 'lh-mobile', runner: 'lighthouse', engine: 'chromium', metrics: { performance: 0.98 }, ...measured }),
+    ];
+    // No `previewFaces`: a run where nothing ever served the document.
+    const silent = await stage.run({ runId: 'run-no-preview', version, evidence, applier });
+    expect(silent.report.parity.matched).toBe(true);
+    expect(silent.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
+
+    // The same bundle, with the faces a preview's document really declared, has
+    // nothing open.
+    const served = servedFaces(faced);
+    const reviewed = await stage.run({ runId: 'run-preview', version, evidence, applier, previewFaces: served });
+    expect(reviewed.report.escalations).toEqual([]);
+    expect(reviewed.report.parity.matched).toBe(true);
+
+    // A preview whose document named another file for the same face — the face
+    // was re-exported after the captain looked at it — is a divergence.
+    const moved = await stage.run({ runId: 'run-moved', version, evidence, applier, previewFaces: served.map((face) => ({ ...face, path: 'assets/fonts/fixture-sans-400-normal.000000000000.woff2' })) });
+    expect(moved.report.parity.matched).toBe(false);
+    expect(moved.report.parity.routes.flatMap((route) => route.differences).join(' ')).toMatch(/A face Fixture Sans 400 normal tem arquivos diferentes/);
   });
 
   it('keeps missing Codex setup errors actionable in the finalization report', async () => {

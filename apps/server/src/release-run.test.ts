@@ -3,13 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
-import { compileRelease, readReleasePublications } from '@pwb/export';
+import { compileRelease, readReleasePublications, type FontDecision, type ServedFace } from '@pwb/export';
 import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { writeEvidenceArtifact } from '@pwb/stage-finalization';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
+import { startServedPreview } from './preview.js';
 
 const studio = { origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' };
 const cleanups: Array<() => Promise<void>> = [];
@@ -19,7 +20,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(
 interface ReleaseSnapshot {
   digest: string;
   versionId: string;
-  report: { blocked: boolean; bundleDigest: string; irHash: string; approvedVersionId: string; releasedVersionId: string; vetoes: Array<{ id: string }>; rubric: Array<{ dimension: string }>; parity: { matched: boolean }; evidence: unknown[]; escalations: string[]; refinementCycles: number; summary?: { gateAuthority: string } };
+  report: { blocked: boolean; bundleDigest: string; irHash: string; approvedVersionId: string; releasedVersionId: string; vetoes: Array<{ id: string }>; rubric: Array<{ dimension: string }>; parity: { matched: boolean; routes: Array<{ route: string; differences: string[] }> }; evidence: unknown[]; escalations: string[]; refinementCycles: number; summary?: { gateAuthority: string } };
   catalog: Array<{ id: string }>;
   published?: { directory: string };
 }
@@ -44,7 +45,7 @@ function pageEditingProvider(text: string): ModelProvider {
   };
 }
 
-async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string } = {}) {
+async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string; previewFaces?: (version: { id: string }) => ServedFace[] | undefined } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-release-api-'));
   const evidenceDir = join(dir, 'evidence');
   const releaseRoot = join(dir, 'releases');
@@ -53,7 +54,7 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs,
-    createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}), ...(options.previewFaces ? { previewFaces: options.previewFaces } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -149,6 +150,23 @@ describe('Gate 3 over the local API', () => {
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
   });
 
+  it('refuses a second preparation while one is still in flight', async () => {
+    const { origin, runId, run } = await harness();
+    // The claim is taken before the first await, so the route sees it while the
+    // first preparation is still compiling: two of them would interleave the
+    // snapshot, the compiled bytes and the refiner's idempotency key.
+    const inFlight = run.prepareRelease();
+    const refused = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: string }).error).toMatch(/já está sendo preparado/);
+
+    const prepared = await inFlight;
+    expect(run.releaseSnapshot()?.digest).toBe(prepared.digest);
+    // The claim is released with the preparation, so the gate still prepares.
+    const again = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
+    expect(again.status).toBe(200);
+  });
+
   it('ships the faces the project offers, and the release record carries their terms', async () => {
     const bytes = Buffer.from([119, 79, 70, 50, 9, 8, 7, 6]);
     const fontsDir = await mkdtemp(join(tmpdir(), 'pwb-run-fonts-'));
@@ -200,6 +218,68 @@ describe('Gate 3 over the local API', () => {
     expect(unhostedRow?.licenseUrl).toBeUndefined();
     const publicArtifacts = `${await readFile(join(bundle, 'licenses.json'), 'utf8')}${await readFile(join(bundle, 'manifest.json'), 'utf8')}`;
     expect(publicArtifacts).not.toContain('invoice 42');
+  });
+
+  it('compares the faces a preview really served, so a scripted run has nothing open about them', async () => {
+    const bytes = Buffer.from([119, 79, 70, 50, 5, 5, 5, 5]);
+    const fontsDir = await mkdtemp(join(tmpdir(), 'pwb-run-served-fonts-'));
+    cleanups.push(async () => { await rm(fontsDir, { recursive: true, force: true }); });
+    await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), bytes);
+    await writeFile(join(fontsDir, 'foundry-grotesk-400.woff2'), Buffer.from([119, 79, 70, 50, 6, 6, 6, 6]));
+    // The second face may not be redistributed, so neither view declares it and
+    // both fall back to the same stack: it is not a divergence.
+    await writeFile(join(fontsDir, 'manifest.json'), JSON.stringify({
+      faces: [
+        { family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07' },
+        { family: 'Foundry Grotesk', weight: '400', style: 'normal', format: 'woff2', file: 'foundry-grotesk-400.woff2', license: 'Foundry desktop licence', source: 'https://fonts.example/foundry-grotesk', author: 'Foundry', date: '2026-09-07' },
+      ],
+    }), 'utf8');
+
+    // Nothing served the document: the bundle self-hosts a face the gate cannot
+    // speak for, which is what every command line run used to report as parity.
+    const silent = await harness({ fontsDir });
+    const unreviewed = await fetch(`${silent.origin}/api/runs/${silent.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(unreviewed.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
+
+    // The same run behind the preview origin `run:release` and `run:fixture` now
+    // start: the faces the gate compares are the ones that origin's document
+    // declared, read back out of the bytes it served.
+    const preview = await startServedPreview(fontsDir);
+    cleanups.push(async () => { await preview.close(); });
+    // A route the origin does not have serves nothing, so it answers for no face.
+    expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(404);
+    expect(preview.servedFaces('v0')).toBeUndefined();
+
+    const declared = await preview.serve('v0', renderDesign(createFixtureIR()));
+    expect(declared.map((face) => face.family)).toEqual(['Fixture Sans']);
+    expect(preview.servedFaces('v0')).toEqual(declared);
+
+    const served = await harness({ fontsDir, previewFaces: () => declared });
+    const compared = await fetch(`${served.origin}/api/runs/${served.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(compared.report.parity.matched).toBe(true);
+    expect(compared.report.parity.routes.flatMap((route) => route.differences)).toEqual([]);
+    expect(compared.report.escalations.join(' ')).not.toMatch(/Fixture Sans|Foundry Grotesk/);
+
+    // One studio origin serves many runs: the faces are recorded per version, so
+    // a run whose preview the captain never opened has nothing to compare and
+    // the gate says so instead of borrowing another run's document.
+    const unopened = await harness({ fontsDir, previewFaces: (version) => preview.servedFaces(version.id) });
+    const borrowed = await fetch(`${unopened.origin}/api/runs/${unopened.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(borrowed.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
+
+    // The same run once its own document really left the origin.
+    const opened = await harness({ fontsDir, previewFaces: (version) => preview.servedFaces(version.id) });
+    await preview.serve(opened.stageVersionId, renderDesign(opened.run.releaseContext().current.ir));
+    const reviewed = await fetch(`${opened.origin}/api/runs/${opened.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(reviewed.report.parity.matched).toBe(true);
+    expect(reviewed.report.escalations.join(' ')).not.toMatch(/Fixture Sans/);
+
+    // The same served document against a release that ships no face at all: the
+    // comparison has two independent sides, so it says the face moved.
+    const diverged = await harness({ previewFaces: () => declared });
+    const flagged = await fetch(`${diverged.origin}/api/runs/${diverged.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(flagged.report.parity.matched).toBe(false);
+    expect(flagged.report.parity.routes.flatMap((route) => route.differences)).toContain('A face Fixture Sans 400 normal está no preview e não no release.');
   });
 
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {

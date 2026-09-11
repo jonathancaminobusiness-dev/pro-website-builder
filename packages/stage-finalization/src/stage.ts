@@ -1,5 +1,5 @@
 import { hashJson, stageRoles, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding, type ReleaseGateReport, type ReleaseSummary } from '@pwb/domain';
-import { compileRelease, type CompiledSite, type FontDecision, type ReleaseCompilerOptions } from '@pwb/export';
+import { compileRelease, type CompiledSite, type ReleaseCompilerOptions, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { Scheduler } from '@pwb/orchestrator';
 import { renderDesign } from '@pwb/renderer';
@@ -7,7 +7,7 @@ import { criticTasks, type CriticTaskContext } from './critics.js';
 import type { ReleaseCriticProvider } from './critic-provider.js';
 import { partitionEvidence } from './evidence.js';
 import { evaluateReleaseGate } from './gate.js';
-import { checkPreviewReleaseParity } from './parity.js';
+import { checkPreviewReleaseParity, unreviewedFaces } from './parity.js';
 import { PatchRefiner } from './refiner.js';
 import { DeterministicReleaseSummarizer, type ReleaseSummarizerProvider } from './summarizer.js';
 
@@ -33,10 +33,12 @@ export interface FinalizationStageInput {
   approved?: VersionRecord;
   evidence: EvidenceArtifact[];
   /**
-   * The faces the preview origin served the captain. Absent when no preview
-   * served this document, and then the parity check says nothing about faces.
+   * The faces the preview origin served the captain, read back out of the bytes
+   * that document declared. Absent when no preview served it, and then the
+   * parity check says nothing about faces: the stage escalates the ones the
+   * bundle self-hosts by name instead.
    */
-  previewFaces?: FontDecision[];
+  previewFaces?: ServedFace[];
   applier: Applier;
   signal?: AbortSignal;
   onEvent?: (type: string, payload: Record<string, unknown>) => void | Promise<void>;
@@ -142,6 +144,11 @@ export class FinalizationStage {
     }
 
     const parity = checkPreviewReleaseParity(renderDesign(version.ir), compiled, new Map(version.ir.pages.routes.map((page) => [page.route, page.id])), input.previewFaces);
+    // Parity can only speak for faces a preview actually served. When none did,
+    // the faces the bundle self-hosts are coverage the gate does not have, and
+    // the captain is told which ones rather than reading silence as a match.
+    const unreviewed = unreviewedFaces(compiled, input.previewFaces);
+    if (unreviewed.length > 0) escalations.push(`Nenhum preview serviu este documento, então a paridade não comparou nenhuma face: o release publica ${unreviewed.join(', ')} sem que o capitão as tenha visto.`);
     const draft = evaluateReleaseGate({
       compiled,
       evidence: input.evidence,

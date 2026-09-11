@@ -2,8 +2,9 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { openDatabase, ProjectRepository } from '../apps/server/src/db/repository.js';
 import { FixtureRun, type FixtureSnapshot } from '../apps/server/src/fixture-run.js';
-import { createPreviewServer } from '../apps/server/src/preview.js';
+import { createPreviewServer, startServedPreview } from '../apps/server/src/preview.js';
 import { createModelProvider, modelProviderName } from '../apps/server/src/provider.js';
+import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { createRenderMatrix, qaFor, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../packages/render-hub/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 
@@ -15,6 +16,9 @@ const releaseRoot = process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
 const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
 const fontsDir = process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
 const renderCacheDir = process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
+// The origin enters the canonical URLs, the sitemap and robots.txt, so it is part
+// of the digest the evidence runners measure and the gate credits.
+const { siteUrl, siteName } = siteFromEnvironment();
 
 async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSummary> {
   const versionId = snapshot.currentVersion.id;
@@ -47,15 +51,26 @@ async function main(): Promise<void> {
   await mkdir(releaseRoot, { recursive: true });
   const database = openDatabase(databasePath);
   try {
+    // Gate 3 can only speak for faces a preview served, so this run serves the
+    // version the stage hands the gate — asked for by `previewFaces` while the
+    // release is prepared, before any refinement cycle — from the same origin
+    // the studio uses; the faces come from the fonts directory, so a refinement
+    // does not change them. Port 0 keeps the CLI off the developer ports.
     const providerName = modelProviderName(process.env.PWB_MODEL_PROVIDER);
-    const run = new FixtureRun({
-      repository: new ProjectRepository(database),
-      provider: createModelProvider(providerName),
-      modelProvider: providerName,
-      release: { releaseRoot, evidenceDir, fontsDir },
-    });
-    await run.initialize('cli-fixture');
-    let snapshot = await run.runAll();
+    const preview = await startServedPreview(fontsDir);
+    let staged: { run: FixtureRun; snapshot: FixtureSnapshot };
+    try {
+      const started = new FixtureRun({
+        repository: new ProjectRepository(database),
+        provider: createModelProvider(providerName),
+        modelProvider: providerName,
+        release: { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)) },
+      });
+      await started.initialize('cli-fixture');
+      staged = { run: started, snapshot: await started.runAll() };
+    } finally { await preview.close(); }
+    const { run } = staged;
+    let { snapshot } = staged;
     const report = run.releaseSnapshot()?.report;
     // A script never signs for the captain. It prints what Gate 3 found and
     // publishes only a release that left nothing for a human to accept.

@@ -4,6 +4,7 @@ import type { FixtureRun } from './fixture-run.js';
 import { handleIdentityRequest, type IdentityApiOptions } from './identity-api.js';
 import type { PrototypeRunRegistry } from './prototype-api.js';
 import { handlePrototypeRequest } from './prototype-routes.js';
+import { ReleasePrepareConflictError } from './release-run.js';
 import { RunConflictError } from './run-conflict.js';
 import { STUDIO_ORIGIN } from './security.js';
 
@@ -69,7 +70,14 @@ export function createApiServer(options: ApiOptions): Server {
         // compiled from the version the finalization stage produced.
         const blocker = run.releaseBlocker();
         if (blocker) { send(response, 409, { error: blocker }); return; }
-        if (!release[2]) { send(response, 200, await run.prepareRelease()); return; }
+        if (!release[2]) {
+          // One preparation at a time: a second one in flight would compile the
+          // same gate twice and leave the snapshot naming one execution's digest
+          // while holding the other's bytes.
+          try { send(response, 200, await run.prepareRelease()); }
+          catch (error) { if (error instanceof ReleasePrepareConflictError) { send(response, 409, { error: error.message }); return; } throw error; }
+          return;
+        }
         const input = await body(request);
         if (input.approverRole !== 'captain') { send(response, 403, { error: 'Only the captain can approve v1 gates.' }); return; }
         if (typeof input.digest !== 'string') { send(response, 400, { error: 'O digest do bundle aprovado é obrigatório.' }); return; }

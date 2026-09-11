@@ -1,9 +1,10 @@
 import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
-import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type FontDecision, type ReleaseManifest } from '@pwb/export';
+import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
 import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
+import { siteFromEnvironment } from './site-environment.js';
 import {
   ClaudeReleaseCriticProvider, ClaudeReleaseRefiner, ClaudeReleaseSummarizer, DeterministicReleaseSummarizer,
   FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage, PatchRefiner, readEvidence, writeReleaseDocument,
@@ -19,12 +20,13 @@ export interface ReleaseRunOptions {
   /** Where the project keeps the faces it may self-host; no manifest means none. */
   fontsDir?: string;
   /**
-   * The faces the preview origin served the captain, read when the release is
-   * prepared. Gate 3 compares them against the compiled bundle, so a face
-   * replaced after the captain looked at it is a divergence and not an
-   * identical route. A run with no preview leaves this out.
+   * The faces the preview origin served, asked for the very version Gate 3 is
+   * about to compile so a script can serve that document before answering.
+   * Gate 3 compares them against the compiled bundle, so a face replaced after
+   * the captain looked at it is a divergence and not an identical route. A run
+   * with no preview leaves this out.
    */
-  previewFaces?: () => FontDecision[] | undefined;
+  previewFaces?: (version: VersionRecord) => Promise<ServedFace[] | undefined> | ServedFace[] | undefined;
 }
 
 /**
@@ -49,6 +51,15 @@ export interface ReleaseContext {
  * nothing to accept, so no script ever signs for the captain.
  */
 export type ReleaseApprover = 'captain' | 'fixture';
+
+/**
+ * A release already being prepared in this run. Preparing twice at once would
+ * interleave two compilations into one snapshot — and propose the same refiner
+ * patch twice — so the second caller is refused the way a taken run id is.
+ */
+export class ReleasePrepareConflictError extends Error {
+  constructor(runId: string) { super(`O release do run ${runId} já está sendo preparado.`); this.name = 'ReleasePrepareConflictError'; }
+}
 
 export interface ReleaseSnapshot {
   runId: string;
@@ -86,12 +97,31 @@ export class ReleaseRun {
   private snapshotValue: ReleaseSnapshot | undefined;
   private compiled: CompiledSite | undefined;
   private context: ReleaseContext | undefined;
+  private preparing = false;
 
   constructor(private readonly runId: string, private readonly options: ReleaseRunOptions) {}
 
+  /**
+   * Compiles, critiques and evaluates Gate 3, and holds the report.
+   *
+   * The gate is claimed before the first await, as publishing claims it: two
+   * preparations that raced would each run a full stage and then interleave the
+   * three assignments this method ends with, so the report could name one
+   * execution's digest while the bytes held for publishing came from the other,
+   * and both would propose the refiner's patch under the same idempotency key —
+   * the loser turning into an escalation the captain never caused.
+   */
   async prepare(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
+    if (this.preparing) throw new ReleasePrepareConflictError(this.runId);
+    this.preparing = true;
+    try { return await this.prepareClaimed(context, signal); }
+    finally { this.preparing = false; }
+  }
+
+  private async prepareClaimed(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
     const name = modelProviderName(this.options.modelProvider);
     const chosen = providers(name);
+    const site = siteFromEnvironment();
     const fonts = await loadFontSources(this.options.fontsDir);
     const stage = new FinalizationStage({
       criticProvider: chosen.critic,
@@ -100,13 +130,13 @@ export class ReleaseRun {
       // The critics and the refiner record the provider that actually answered;
       // `idempotencyKey` hashes the alias, so it may not name Claude under Codex.
       modelAlias: modelAlias(name),
-      compilerOptions: { siteUrl: this.options.siteUrl ?? 'https://site.invalid', siteName: this.options.siteName ?? 'pro-website-builder', ...(fonts.length > 0 ? { fonts } : {}) },
+      compilerOptions: { siteUrl: this.options.siteUrl ?? site.siteUrl, siteName: this.options.siteName ?? site.siteName, ...(fonts.length > 0 ? { fonts } : {}) },
     });
     // The evidence runners compile the document the gate compiles, so they can
     // stamp their artifacts with the release they actually measured.
     await writeReleaseDocument(this.options.evidenceDir, context.current.ir);
     const evidence = await readEvidence(this.options.evidenceDir);
-    const previewFaces = this.options.previewFaces?.();
+    const previewFaces = await this.options.previewFaces?.(context.current);
     const result = await stage.run({
       runId: this.runId,
       version: context.current,
