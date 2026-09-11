@@ -184,4 +184,26 @@ describe('identity run creation', () => {
       preserved.sqlite.close();
     }
   });
+
+  it('answers 404 for a /confirm suffix on any action but the conversation, without reaching the handler', async () => {
+    const server = await identityServer();
+    expect((await postIdentity(server.origin, { runId: 'sufixo-confirm' })).status).toBe(201);
+
+    for (const action of ['start', 'cancel', 'approve', 'reject', 'token']) {
+      const response = await fetch(`${server.origin}/api/identity/runs/sufixo-confirm/${action}/confirm`, {
+        method: 'POST',
+        headers: { origin: STUDIO_ORIGIN, 'content-type': 'application/json' },
+        body: JSON.stringify({ approverRole: 'captain', directionId: 'editorial-material', tokenPath: '/identity/tokens/color/ink', value: { $value: '#123456', $type: 'color' } }),
+      });
+      expect(response.status).toBe(404);
+    }
+
+    // Nothing ran: no fan-out was bought and no decision was recorded.
+    const snapshot = await (await fetch(`${server.origin}/api/identity/runs/sufixo-confirm`, { headers: { origin: STUDIO_ORIGIN } })).json() as { status: string; directions: unknown[]; approvals: unknown[] };
+    expect(snapshot.status).toBe('queued');
+    expect(snapshot.directions).toEqual([]);
+    expect(snapshot.approvals).toEqual([]);
+    // The suffix the conversation owns still routes.
+    expect((await fetch(`${server.origin}/api/identity/runs/sufixo-confirm/conversation`, { headers: { origin: STUDIO_ORIGIN } })).status).toBe(200);
+  });
 });

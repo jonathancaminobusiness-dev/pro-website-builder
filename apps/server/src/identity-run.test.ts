@@ -420,6 +420,12 @@ describe('identity run', () => {
     expect(failed.directions).toEqual([]);
     expect(run.snapshot().directions).toEqual([]);
 
+    // A captain who approves a direction read before the failure is refused,
+    // instead of deciding a fan-out the run no longer holds.
+    await expect(run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Gate 1 aprovado pelo capitão.' })).rejects.toThrow(/not one of this run's candidates/);
+    expect(run.snapshot().approvals).toEqual([]);
+    expect(run.snapshot().handoff).toBeUndefined();
+
     const corrected = await run.conversation.confirm({ briefing: 'Clínica de bairro preventiva, corrigida depois da falha.', idempotencyKey: 'confirm-1' });
 
     expect(corrected.confirmations).toHaveLength(1);
