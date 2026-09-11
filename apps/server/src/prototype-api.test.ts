@@ -35,7 +35,7 @@ async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSour
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs, prototypes: registry,
-    createRun: async (id) => { const run = new FixtureRun({ repository, provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository, provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
   });
   // Port 0 keeps parallel checkouts off each other's fixed developer ports.
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -268,3 +268,29 @@ describe('Gate 2 API', () => {
     } finally { db.sqlite.close(); }
   });
 });
+
+describe('prototype registry provider recognition', () => {
+  async function repository(): Promise<ProjectRepository> {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-provider-'));
+    return new ProjectRepository(openDatabase(join(dir, 'gate2.sqlite')));
+  }
+
+  it('refuses a provider name it does not recognise instead of running the fakes', async () => {
+    const repo = await repository();
+    for (const name of ['Codex', 'codex ', 'claude', '']) {
+      // `provider.ts` is the one place a name is recognised; a near miss is an
+      // error here, not a silent deterministic run under the wrong alias.
+      expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), modelProvider: name as never }))
+        .toThrow(/Unknown model provider/);
+    }
+  });
+
+  it('accepts every recognised name, and defaults to the fakes', async () => {
+    const repo = await repository();
+    for (const name of ['fake', 'claude-code', 'codex'] as const) {
+      expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), modelProvider: name })).not.toThrow();
+    }
+    expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource() })).not.toThrow();
+  });
+});
+

@@ -31,6 +31,8 @@ export interface PrototypeStageOptions {
   critique: CritiqueProvider;
   evidence: EvidenceSource;
   brief: string;
+  /** The model that answers this stage's tasks, as the composer records it on every task it derives. */
+  modelAlias: string;
   budget?: LoopBudget;
   now?: () => number;
   onEvent?: (type: string, payload: Record<string, unknown>) => void | Promise<void>;
@@ -68,6 +70,8 @@ export class PrototypeStageError extends Error {
  * their own sessions, and one refinement cycle per pass of a loop that always stops for a stated reason.
  */
 export class PrototypeStage {
+  private get modelAlias(): string { return this.options.modelAlias; }
+
   private readonly budget: LoopBudget;
   private readonly now: () => number;
   private readonly refiner: PrototypeRefiner;
@@ -211,7 +215,7 @@ export class PrototypeStage {
     const tasks = criticRegistry.map((definition) => agentTaskSchema.parse({
       id: `${input.runId}-critic-${definition.dimension}-c${cycle}`,
       attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'claude',
-      baseVersionId: ir.meta.versionId, inputDigest: qa.issueHash, promptVersion: PROMPT_VERSION, modelAlias: 'claude-local',
+      baseVersionId: ir.meta.versionId, inputDigest: qa.issueHash, promptVersion: PROMPT_VERSION, modelAlias: this.modelAlias,
       deadlineMs: CRITIC_DEADLINE_MS,
       allowedPaths: [],
       brief: this.options.brief,
@@ -275,7 +279,7 @@ export class PrototypeStage {
     return agentTaskSchema.parse({
       id: `${input.runId}-architect`, attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'claude',
       baseVersionId: input.baseVersionId, inputDigest: hashJson([this.options.brief, input.baseVersionId]),
-      promptVersion: ARCHITECT_PROMPT_VERSION, modelAlias: 'claude-local', deadlineMs: 5 * 60_000,
+      promptVersion: ARCHITECT_PROMPT_VERSION, modelAlias: this.modelAlias, deadlineMs: 5 * 60_000,
       allowedPaths: ARCHITECT_ALLOWED_PATHS, brief: this.options.brief, documentSlice: { '/identity': identity },
     } satisfies AgentTask);
   }
@@ -284,7 +288,7 @@ export class PrototypeStage {
     return agentTaskSchema.parse({
       id: `${input.runId}-compose-${section.id}`, attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'claude',
       baseVersionId, inputDigest: hashJson([section, manifest.journey]), promptVersion: COMPOSER_PROMPT_VERSION,
-      modelAlias: 'claude-local', deadlineMs: 5 * 60_000, allowedPaths: sectionAllowedPaths(manifest, section.id),
+      modelAlias: this.modelAlias, deadlineMs: 5 * 60_000, allowedPaths: sectionAllowedPaths(manifest, section.id),
       brief: this.options.brief, documentSlice: { '/identity': identity },
     } satisfies AgentTask);
   }

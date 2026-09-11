@@ -55,7 +55,7 @@ Changing a token afterwards is checked before anything is committed: the token k
 corepack pnpm --filter @pwb/server dev   # then, in the Studio, open the "Gate 1 · identidade" tab
 ```
 
-Creating an identity run costs nothing. `POST /api/identity/runs/<id>/start` is the only route that spends a model turn, and every state-changing identity route is captain-only and accepted from the Studio origin alone.
+Creating an identity run costs nothing. `POST /api/identity/runs/<id>/start` is the only route that spends a model turn, and every state-changing identity route is captain-only and accepted from the Studio origin alone. The start answers immediately with the `running` snapshot rather than holding the connection for the stage deadline; what the stage becomes — `needs_review`, `failed` or the deadline error — is read from `GET /api/identity/runs/<id>`, which is what the Studio polls.
 
 The renderer refuses raw visual values. Colors, dimensions, font settings, radii, shadows, and motion must resolve through tokens, with no exception path in Fase 0. A page node's `semantic` is the tag it renders as, drawn from a closed vocabulary, so the schema refuses a landmark the renderer would silently drop; `body` carries the query container and `main` is the element the breakpoint restyles. Preview is served on port `4311`, separate from the Studio/API origin, and the Studio iframe uses `sandbox` without `allow-same-origin`.
 

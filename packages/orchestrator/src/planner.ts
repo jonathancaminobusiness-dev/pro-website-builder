@@ -114,7 +114,8 @@ function valueAt(ir: DesignIR, path: string): unknown {
 }
 
 export class RunPlanner {
-  constructor(private readonly store: VersionStore) {}
+  /** `modelAlias` is what the resolved provider is called on every task; `idempotencyKey` hashes it. */
+  constructor(private readonly store: VersionStore, private readonly modelAlias: string) {}
 
   plan(runId: string, baseVersionId: string, brief: string): RunPlan {
     const base = this.store.get(baseVersionId);
@@ -129,7 +130,7 @@ export class RunPlanner {
       { stage: 'finalization', deadlineMs: deadline('finalization') },
     ];
     const inputDigest = hashJson({ runId, brief, documentSlice });
-    const tasks = stages.map((item) => ({ id: `task-${item.stage}`, ...item, role: stageRoles[item.stage], attempt: 1, state: 'queued' as const, lane: 'claude' as const, baseVersionId, inputDigest, promptVersion: 'phase0-v1', modelAlias: 'claude-local', allowedPaths: stageWritablePaths[item.stage], documentSlice, brief }));
+    const tasks = stages.map((item) => ({ id: `task-${item.stage}`, ...item, role: stageRoles[item.stage], attempt: 1, state: 'queued' as const, lane: 'claude' as const, baseVersionId, inputDigest, promptVersion: 'phase0-v1', modelAlias: this.modelAlias, allowedPaths: stageWritablePaths[item.stage], documentSlice, brief }));
     return { runId, tasks, edges: [['task-identity', 'task-prototype'], ['task-prototype', 'task-finalization']] };
   }
 }

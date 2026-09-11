@@ -21,6 +21,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startServedPreview } from '../apps/server/src/preview.js';
+import { modelProviderName } from '../apps/server/src/provider.js';
 import { ReleaseRun, type ReleaseSnapshot } from '../apps/server/src/release-run.js';
 import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { Applier, PatchGate, VersionStore } from '../packages/orchestrator/src/index.js';
@@ -54,7 +55,7 @@ async function main(): Promise<void> {
     siteUrl,
     siteName,
     previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)),
-    ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}),
+    modelProvider: modelProviderName(process.env.PWB_MODEL_PROVIDER),
   });
   // A command line run has no durable log of its own, so its events are printed
   // beside the report instead of being dropped.

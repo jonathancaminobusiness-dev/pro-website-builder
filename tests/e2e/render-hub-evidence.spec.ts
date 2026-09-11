@@ -21,7 +21,7 @@ test.describe('render hub evidence', () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const base = applier.createRoot(createFixtureIR());
-    const stage = new PrototypeStage({
+    const stage = new PrototypeStage({ modelAlias: 'fake',
       store, applier, scheduler: new Scheduler(),
       architect: new FakeInformationArchitect(), composer: new FakeSectionComposer(),
       critique: new FakeCritiqueProvider(), evidence: new DerivedEvidenceSource(),

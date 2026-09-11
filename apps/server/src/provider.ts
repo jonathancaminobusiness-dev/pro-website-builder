@@ -9,6 +9,16 @@ export function modelProviderName(name: string = 'fake'): ModelProviderName {
   throw new Error(`Unknown model provider ${name}; use fake, claude-code, or codex.`);
 }
 
+/**
+ * What a task records as the model that produced it. `idempotencyKey` hashes it,
+ * so two providers answering the same task must not derive the same key: an
+ * alias that always said `claude-local` made PatchGate's dedupe unable to tell a
+ * Codex patch from a Claude one.
+ */
+const MODEL_ALIASES: Record<ModelProviderName, string> = { fake: 'fake', 'claude-code': 'claude-local', codex: 'codex-gpt-5.6-sol' };
+
+export function modelAlias(name: ModelProviderName): string { return MODEL_ALIASES[name]; }
+
 export function createModelProvider(name: string = 'fake'): ModelProvider {
   const selected = modelProviderName(name);
   if (selected === 'claude-code') return new ClaudeRunner();

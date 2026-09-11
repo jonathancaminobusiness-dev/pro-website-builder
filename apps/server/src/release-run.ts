@@ -3,6 +3,7 @@ import type { ReleaseGateReport } from '@pwb/domain';
 import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
+import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
 import { siteFromEnvironment } from './site-environment.js';
 import {
   ClaudeReleaseCriticProvider, ClaudeReleaseRefiner, ClaudeReleaseSummarizer, DeterministicReleaseSummarizer,
@@ -15,7 +16,7 @@ export interface ReleaseRunOptions {
   evidenceDir: string;
   siteUrl?: string;
   siteName?: string;
-  modelProvider?: string;
+  modelProvider?: ModelProviderName;
   /** Where the project keeps the faces it may self-host; no manifest means none. */
   fontsDir?: string;
   /**
@@ -70,9 +71,8 @@ export interface ReleaseSnapshot {
   published?: { directory: string; digest: string };
 }
 
-function providers(name: string): { critic: ReleaseCriticProvider; refiner: ReleaseRefinerProvider; summarizer: ReleaseSummarizerProvider } {
+function providers(name: ModelProviderName): { critic: ReleaseCriticProvider; refiner: ReleaseRefinerProvider; summarizer: ReleaseSummarizerProvider } {
   if (name === 'fake') return { critic: new FakeReleaseCriticProvider(), refiner: new FakeReleaseRefiner(), summarizer: new DeterministicReleaseSummarizer() };
-  if (name !== 'claude-code' && name !== 'codex') throw new Error(`Unknown model provider ${name}; use fake, claude-code, or codex.`);
   const runner = name === 'codex' ? new CodexJsonRunner() : new ClaudeJsonRunner();
   return { critic: new ClaudeReleaseCriticProvider(runner), refiner: new ClaudeReleaseRefiner(runner), summarizer: new ClaudeReleaseSummarizer(runner) };
 }
@@ -119,13 +119,17 @@ export class ReleaseRun {
   }
 
   private async prepareClaimed(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
-    const chosen = providers(this.options.modelProvider ?? 'fake');
+    const name = modelProviderName(this.options.modelProvider);
+    const chosen = providers(name);
     const site = siteFromEnvironment();
     const fonts = await loadFontSources(this.options.fontsDir);
     const stage = new FinalizationStage({
       criticProvider: chosen.critic,
       refiner: new PatchRefiner(chosen.refiner),
       summarizer: chosen.summarizer,
+      // The critics and the refiner record the provider that actually answered;
+      // `idempotencyKey` hashes the alias, so it may not name Claude under Codex.
+      modelAlias: modelAlias(name),
       compilerOptions: { siteUrl: this.options.siteUrl ?? site.siteUrl, siteName: this.options.siteName ?? site.siteName, ...(fonts.length > 0 ? { fonts } : {}) },
     });
     // The evidence runners compile the document the gate compiles, so they can

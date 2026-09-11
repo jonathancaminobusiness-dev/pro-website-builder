@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { openDatabase, ProjectRepository } from '../apps/server/src/db/repository.js';
 import { FixtureRun, type FixtureSnapshot } from '../apps/server/src/fixture-run.js';
 import { createPreviewServer, startServedPreview } from '../apps/server/src/preview.js';
-import { createModelProvider } from '../apps/server/src/provider.js';
+import { createModelProvider, modelProviderName } from '../apps/server/src/provider.js';
 import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { createRenderMatrix, qaFor, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../packages/render-hub/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
@@ -56,13 +56,15 @@ async function main(): Promise<void> {
     // release is prepared, before any refinement cycle — from the same origin
     // the studio uses; the faces come from the fonts directory, so a refinement
     // does not change them. Port 0 keeps the CLI off the developer ports.
+    const providerName = modelProviderName(process.env.PWB_MODEL_PROVIDER);
     const preview = await startServedPreview(fontsDir);
     let staged: { run: FixtureRun; snapshot: FixtureSnapshot };
     try {
       const started = new FixtureRun({
         repository: new ProjectRepository(database),
-        provider: createModelProvider(process.env.PWB_MODEL_PROVIDER),
-        release: { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)), ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
+        provider: createModelProvider(providerName),
+        modelProvider: providerName,
+        release: { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)) },
       });
       await started.initialize('cli-fixture');
       staged = { run: started, snapshot: await started.runAll() };

@@ -79,7 +79,11 @@ export async function handleIdentityRequest(
     switch (action) {
       case 'start':
         if (!captain(input, send, 'start')) return true;
-        snapshot = await run.start();
+        // The stage runs for tens of minutes; holding the response for it kills
+        // the client long before the server is done. Answer with the running
+        // snapshot and let the studio read the rest through its polling, the way
+        // POST /api/prototype/runs already answers 201 queued.
+        snapshot = await run.begin();
         break;
       case 'cancel':
         if (!captain(input, send, 'cancel')) return true;

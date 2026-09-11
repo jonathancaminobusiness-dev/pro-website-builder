@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTaskSchema, createFixtureIR, documentPathSchemas, hashJson, stageResultJsonSchemas, type AgentTask, type DesignIR } from '@pwb/domain';
+import { agentTaskSchema, createFixtureIR, documentPathSchemas, hashJson, idempotencyKey, stageResultJsonSchemas, type AgentTask, type DesignIR } from '@pwb/domain';
 import { CLAUDE_RUNNER_TIMEOUT_MS, FakeModelProvider } from '@pwb/providers';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, VersionStore } from './index.js';
 
@@ -13,7 +13,7 @@ describe('orchestrator', () => {
   it('plans the fixed identity to prototype to finalization stage order', () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const plan = new RunPlanner(store).plan('run-1', root.id, 'brief');
+    const plan = new RunPlanner(store, 'claude-local').plan('run-1', root.id, 'brief');
     expect(plan.tasks.map((item) => item.stage)).toEqual(['identity', 'prototype', 'finalization']);
     expect(plan.tasks.map((item) => item.id)).toEqual(['task-identity', 'task-prototype', 'task-finalization']);
     expect(plan.edges).toEqual([['task-identity', 'task-prototype'], ['task-prototype', 'task-finalization']]);
@@ -22,22 +22,22 @@ describe('orchestrator', () => {
   it('budgets every stage for two full runner invocations and honours a single deadline override', () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const deadlines = new RunPlanner(store).plan('run-deadlines', root.id, 'brief').tasks.map((task) => task.deadlineMs);
+    const deadlines = new RunPlanner(store, 'claude-local').plan('run-deadlines', root.id, 'brief').tasks.map((task) => task.deadlineMs);
     for (const deadlineMs of deadlines) expect(deadlineMs).toBeGreaterThanOrEqual(2 * CLAUDE_RUNNER_TIMEOUT_MS);
     const previous = process.env.PWB_STAGE_DEADLINE_MS;
     process.env.PWB_STAGE_DEADLINE_MS = String(30 * 60_000);
     try {
-      expect(new RunPlanner(store).plan('run-override', root.id, 'brief').tasks.map((task) => task.deadlineMs)).toEqual([30 * 60_000, 30 * 60_000, 30 * 60_000]);
+      expect(new RunPlanner(store, 'claude-local').plan('run-override', root.id, 'brief').tasks.map((task) => task.deadlineMs)).toEqual([30 * 60_000, 30 * 60_000, 30 * 60_000]);
     } finally {
       if (previous === undefined) delete process.env.PWB_STAGE_DEADLINE_MS; else process.env.PWB_STAGE_DEADLINE_MS = previous;
     }
-    expect(new RunPlanner(store).plan('run-default', root.id, 'brief').tasks.map((task) => task.deadlineMs)).toEqual(deadlines);
+    expect(new RunPlanner(store, 'claude-local').plan('run-default', root.id, 'brief').tasks.map((task) => task.deadlineMs)).toEqual(deadlines);
   });
 
   it('budgets the identity stage for its complete supported critical path', () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const identity = new RunPlanner(store).plan('run-identity-critical-path', root.id, 'brief').tasks.find((task) => task.stage === 'identity');
+    const identity = new RunPlanner(store, 'claude-local').plan('run-identity-critical-path', root.id, 'brief').tasks.find((task) => task.stage === 'identity');
 
     expect(identity?.deadlineMs).toBe(119 * 60_000);
   });
@@ -50,7 +50,7 @@ describe('orchestrator', () => {
     process.env.PWB_IDENTITY_CRITIC_DEADLINE_MS = String(10 * 60_000);
     delete process.env.PWB_IDENTITY_CRITIC_SYSTEM_A11Y_CRITIC_DEADLINE_MS;
     try {
-      const identity = new RunPlanner(store).plan('run-identity-configured-path', root.id, 'brief').tasks.find((task) => task.stage === 'identity');
+      const identity = new RunPlanner(store, 'claude-local').plan('run-identity-configured-path', root.id, 'brief').tasks.find((task) => task.stage === 'identity');
       expect(identity?.deadlineMs).toBe(161 * 60_000);
     } finally {
       if (previousGlobal === undefined) delete process.env.PWB_IDENTITY_CRITIC_DEADLINE_MS; else process.env.PWB_IDENTITY_CRITIC_DEADLINE_MS = previousGlobal;
@@ -61,7 +61,7 @@ describe('orchestrator', () => {
   it('gives each stage its own write boundary and refuses a later stage that touches the identity', () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const plan = new RunPlanner(store).plan('run-paths', root.id, 'brief');
+    const plan = new RunPlanner(store, 'claude-local').plan('run-paths', root.id, 'brief');
     expect(plan.tasks.map((item) => [item.stage, item.allowedPaths])).toEqual([
       ['identity', ['/identity', '/reviewRecord']],
       ['prototype', ['/pages', '/assets', '/stateFixtures', '/reviewRecord']],
@@ -84,7 +84,7 @@ describe('orchestrator', () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const root = applier.createRoot(ir);
-    const plan = new RunPlanner(store).plan('run-slice', root.id, 'brief');
+    const plan = new RunPlanner(store, 'claude-local').plan('run-slice', root.id, 'brief');
     const identityTask = agentTaskSchema.parse(plan.tasks[0]);
     const prototypeTask = agentTaskSchema.parse(plan.tasks[1]);
     expect(identityTask.documentSlice['/identity']).toEqual(ir.identity);
@@ -93,7 +93,7 @@ describe('orchestrator', () => {
     (identityTask.documentSlice['/pages'] as DesignIR['pages']).routes.length = 0;
     expect(store.get(root.id)!.ir.pages.routes).toHaveLength(3);
     const next = applier.apply({ operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['changed'] }], baseVersionId: root.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'change the document', confidence: 1, stage: 'identity', role: 'director', idempotencyKey: 'slice-digest' }, ALLOWED, root.id);
-    const replanned = new RunPlanner(store).plan('run-slice', next.id, 'brief');
+    const replanned = new RunPlanner(store, 'claude-local').plan('run-slice', next.id, 'brief');
     expect(replanned.tasks[0]!.documentSlice['/reviewRecord']).toEqual({ findings: ['changed'], approvals: [] });
     expect(replanned.tasks[0]!.inputDigest).not.toBe(identityTask.inputDigest);
   });
@@ -157,7 +157,7 @@ describe('orchestrator', () => {
     expect(declared('finalization')).toEqual(['finalization', 'compiler']);
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const plan = new RunPlanner(store).plan('run-roles', root.id, 'brief');
+    const plan = new RunPlanner(store, 'claude-local').plan('run-roles', root.id, 'brief');
     expect(plan.tasks.map((task) => [task.stage, task.role])).toEqual(plan.tasks.map((task) => declared(task.stage)));
   });
 
@@ -316,7 +316,7 @@ describe('orchestrator', () => {
   it('starts a stage only after the stage it depends on has succeeded', async () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const plan = new RunPlanner(store).plan('run-dag', root.id, 'brief');
+    const plan = new RunPlanner(store, 'claude-local').plan('run-dag', root.id, 'brief');
     const started: string[] = [];
     const finished: string[] = [];
     let concurrent = 0;
@@ -340,7 +340,7 @@ describe('orchestrator', () => {
   it('cancels the stages that depend on a stage which did not succeed', async () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const plan = new RunPlanner(store).plan('run-dag', root.id, 'brief');
+    const plan = new RunPlanner(store, 'claude-local').plan('run-dag', root.id, 'brief');
     const result = await new Scheduler().run(plan.tasks, async (item) => {
       if (item.stage === 'identity') throw new Error('director failed');
       return item.stage;
@@ -355,7 +355,7 @@ describe('orchestrator', () => {
   it('holds a dependent stage until its predecessor gate is settled and re-runs a rejected stage', async () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const plan = new RunPlanner(store).plan('run-gate', root.id, 'brief');
+    const plan = new RunPlanner(store, 'claude-local').plan('run-gate', root.id, 'brief');
     const started: string[] = [];
     const approved = new Set<string>();
     let identityVerdicts: GateVerdict[] = ['rejected', 'approved'];
@@ -378,7 +378,7 @@ describe('orchestrator', () => {
   it('refuses a stage submitted on its own until its predecessor is in the completed set', async () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-    const plan = new RunPlanner(store).plan('run-completed', root.id, 'brief');
+    const plan = new RunPlanner(store, 'claude-local').plan('run-completed', root.id, 'brief');
     const prototype = plan.tasks.filter((item) => item.id === 'task-prototype');
     const started: string[] = [];
     const worker = async (item: AgentTask): Promise<string> => { started.push(item.id); return item.stage; };
@@ -416,7 +416,7 @@ describe('orchestrator', () => {
     const worked: string[] = [];
     // A caller that awaits anything before scheduling can be cancelled in that
     // window, and hands over a signal that will never fire an abort event.
-    const tasks = new RunPlanner(store).plan('run-preaborted', root.id, 'brief').tasks.map((task) => ({ ...task, deadlineMs: 60_000 }));
+    const tasks = new RunPlanner(store, 'claude-local').plan('run-preaborted', root.id, 'brief').tasks.map((task) => ({ ...task, deadlineMs: 60_000 }));
     const result = await scheduler.run(tasks, async (task) => { worked.push(task.id); return 'value'; }, { signal: controller.signal });
 
     expect(worked).toEqual([]);
@@ -429,7 +429,7 @@ describe('orchestrator', () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
     const controller = new AbortController();
-    const task = { ...new RunPlanner(store).plan('run-settle', root.id, 'brief').tasks[0]!, deadlineMs: 60_000 };
+    const task = { ...new RunPlanner(store, 'claude-local').plan('run-settle', root.id, 'brief').tasks[0]!, deadlineMs: 60_000 };
     const started = scheduler.run([task], async () => 'value', {
       signal: controller.signal,
       settle: () => new Promise<GateVerdict>(() => { /* a gate that never resolves */ }),
@@ -440,3 +440,19 @@ describe('orchestrator', () => {
     expect(result.results[0]?.state).toBe('cancelled');
   });
 });
+
+describe('run planner model alias', () => {
+  it('names the resolved provider on every task, and keeps their idempotency keys apart', () => {
+    const store = new VersionStore();
+    const base = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const claude = new RunPlanner(store, 'claude-local').plan('run-claude', base.id, 'fixture');
+    const codex = new RunPlanner(store, 'codex-gpt-5.6-sol').plan('run-claude', base.id, 'fixture');
+    expect(claude.tasks.map((task) => task.modelAlias)).toEqual(['claude-local', 'claude-local', 'claude-local']);
+    expect(codex.tasks.map((task) => task.modelAlias)).toEqual(['codex-gpt-5.6-sol', 'codex-gpt-5.6-sol', 'codex-gpt-5.6-sol']);
+    // Same run, same brief, same base: only the provider differs, and the key must too.
+    for (const [index, task] of codex.tasks.entries()) {
+      expect(idempotencyKey(task)).not.toBe(idempotencyKey(claude.tasks[index]!));
+    }
+  });
+});
+

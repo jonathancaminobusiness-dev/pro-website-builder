@@ -2,9 +2,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createFixtureIR, type AgentTask } from '@pwb/domain';
+import { createFixtureIR, idempotencyKey, type AgentTask } from '@pwb/domain';
 import { ClaudeRunner, CodexRunner, FakeModelProvider } from '@pwb/providers';
-import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
+import { createIdentityProvider, createModelProvider, createRasterProvider, modelAlias, modelProviderName } from './provider.js';
 
 const request = { id: 'asset-job', digest: 'digest', prompt: 'papel impresso em duas tintas', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' };
 
@@ -100,3 +100,25 @@ describe('raster provider selection', () => {
     expect(JSON.stringify(job)).not.toContain('owner-bearer-value');
   });
 });
+
+describe('model alias', () => {
+  it('names the provider that actually answered, one alias per recognised name', () => {
+    expect(modelAlias('fake')).toBe('fake');
+    expect(modelAlias('claude-code')).toBe('claude-local');
+    expect(modelAlias('codex')).toBe('codex-gpt-5.6-sol');
+    expect(new Set([modelAlias('fake'), modelAlias('claude-code'), modelAlias('codex')]).size).toBe(3);
+  });
+
+  it('gives the same task a different idempotency key under each provider', () => {
+    const task = { stage: 'prototype' as const, role: 'director' as const, baseVersionId: 'v0', inputDigest: 'digest', promptVersion: 'p1' };
+    const keys = (['fake', 'claude-code', 'codex'] as const).map((name) => idempotencyKey({ ...task, modelAlias: modelAlias(name) }));
+    // PatchGate dedupes on this key: a Codex patch and a Claude patch for the
+    // same task must not look like the same proposal.
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it('only aliases a name provider.ts recognises', () => {
+    expect(() => modelAlias(modelProviderName('Codex'))).toThrow(/Unknown model provider/);
+  });
+});
+
