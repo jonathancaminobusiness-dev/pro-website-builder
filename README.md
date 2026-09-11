@@ -392,8 +392,9 @@ files. `evidenceVetoes` derives every veto the evidence can raise from what the
 runners measured — axe's raw violation counts, a failed Vitest or Playwright run
 — and never from a field a runner chose to set, because an artifact has no such
 field to set; and
-`sealSummary` overwrites the summarizer's veto count with the authoritative one,
-so no summary can hide a veto. What the gate did — each refinement cycle, a
+the stage seals whatever summarizer answered — `sealSummary` overwrites the
+veto count with the authoritative one and strips any claimed gate authority — so
+no summary can hide a veto, whoever wrote it. What the gate did — each refinement cycle, a
 critic or a model session that failed, the verdict itself — is written to the
 run's event log as it happens, so a blocked Gate 3 leaves a durable trace. A runner that did not run leaves no artifact, and
 the gate reports the gap as an escalation instead of treating silence as a pass.
