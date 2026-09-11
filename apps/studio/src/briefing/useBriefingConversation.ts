@@ -32,7 +32,7 @@ export interface BriefingConversationController {
  * know leaves the panel silent and the old briefing field in charge.
  */
 export function useBriefingConversation(client: ConversationClient, runId: string | null): BriefingConversationController {
-  const [state, dispatch] = useReducer(conversationReducer, initialConversationState(runId ?? ''));
+  const [state, dispatch] = useReducer(conversationReducer, initialConversationState());
   const generation = useRef(0);
   const latest = useRef(state);
   latest.current = state;
@@ -57,7 +57,7 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
 
   useEffect(() => {
     generation.current += 1;
-    dispatch({ type: 'reset', runId: runId ?? '' });
+    dispatch({ type: 'reset' });
     if (runId) void run({ kind: 'resume' }, runId);
   }, [run, runId]);
 

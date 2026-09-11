@@ -50,7 +50,7 @@ function snapshot(status: IdentityGateSnapshot['status'], withResult = false): I
 
 /** A controller whose only interesting fact here is where its conversation stands. */
 function controllerFor(snapshot: ConversationSnapshot | null): BriefingConversationController {
-  const state = conversationReducer(initialConversationState('identity-progress-fixture'), { type: 'resumed', snapshot });
+  const state = conversationReducer(initialConversationState(), { type: 'resumed', snapshot });
   const noop = (): undefined => undefined;
   return {
     state,
@@ -139,7 +139,7 @@ describe('Gate 1 execution progress', () => {
   });
 
   it('holds the identity stage closed while the conversation is still being read', () => {
-    const pending: BriefingConversationController = { ...controllerFor(null), state: initialConversationState('identity-progress-fixture') };
+    const pending: BriefingConversationController = { ...controllerFor(null), state: initialConversationState() };
     const markup = renderGate(snapshot('queued'), false, false, pending);
 
     expect(markup).toContain('Abrindo a conversa desta execução…');
@@ -151,7 +151,7 @@ describe('Gate 1 execution progress', () => {
     const unreadable: BriefingConversationController = {
       ...controllerFor(null),
       state: conversationReducer(
-        conversationReducer(initialConversationState('identity-progress-fixture'), { type: 'begin', intent: { kind: 'resume' } }),
+        conversationReducer(initialConversationState(), { type: 'begin', intent: { kind: 'resume' } }),
         { type: 'failed', failure: { message: 'Falha ao ler a conversa.' } },
       ),
     };

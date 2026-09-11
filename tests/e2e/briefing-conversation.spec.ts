@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { CONSOLIDATED_SUMMARY, FakeConversationApi, type FakeConversationOptions } from './fake-conversation-api.js';
+import { CONSOLIDATED_SUMMARY } from '../../apps/studio/src/briefing/conversation-fixture.js';
+import { FakeConversationApi, type FakeConversationOptions } from './fake-conversation-api.js';
 
 const ENTRY = 'Somos uma clínica veterinária de bairro. Queremos cuidar de cães e gatos com prevenção, sem parecer hospital frio nem pet shop genérico.';
 
