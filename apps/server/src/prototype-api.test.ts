@@ -26,6 +26,16 @@ function createOffRhythmControlIR(): DesignIR {
   return ir;
 }
 
+/**
+ * A revision the prototype linter refuses on its own terms: the content contract forbids a word the
+ * identity's own message carries, so the copy every composer writes trips `COPY-110`, severity error.
+ */
+function createForbiddenCopyIR(): DesignIR {
+  const ir = createFixtureIR();
+  ir.identity.content = { ...ir.identity.content, forbiddenTerms: [...ir.identity.content.forbiddenTerms, 'motivo'] };
+  return ir;
+}
+
 async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSource; decorate?: (repository: ProjectRepository) => ProjectRepository } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; close: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-'));
   const db = openDatabase(join(dir, 'gate2.sqlite'));
@@ -227,6 +237,38 @@ describe('Gate 2 API', () => {
       const approved = await post(api.origin, path, { approverRole: 'captain', decision: 'approved', rationale: 'Hierarquia e caráter aprovados.' });
       expect(approved.status).toBe(200);
       expect(approved.payload.result!.approval).toMatchObject({ decision: 'approved', versionId: created.result!.after.versionId, approverRole: 'captain', stage: 'prototype' });
+    } finally { await api.close(); }
+  });
+
+  it('refuses to approve a revision the prototype linter rejects, and still lets the captain reject it', async () => {
+    const api = await harness({ seed: createForbiddenCopyIR });
+    try {
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-lint' });
+      const review = await settled(api.origin, 'gate2-lint');
+      expect(review.result!.lint.some((finding) => finding.id === 'COPY-110' && finding.severity === 'error')).toBe(true);
+
+      // Every other gate refuses to close over a document the linter rejects; Gate 2 no longer is the exception.
+      const refused = await post(api.origin, '/api/prototype/runs/gate2-lint/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Parece bom.' });
+      expect(refused.status).toBe(409);
+      expect(refused.payload.error).toContain('COPY-110');
+      expect(api.registry.get('gate2-lint')!.result!.approval).toBeUndefined();
+
+      // Sending it back is exactly what a captain should be able to do with it.
+      const rejected = await post(api.origin, '/api/prototype/runs/gate2-lint/gate', { approverRole: 'captain', decision: 'rejected', rationale: 'A cópia usa um termo proibido.' });
+      expect(rejected.status).toBe(200);
+      expect(rejected.payload.result!.approval).toMatchObject({ decision: 'rejected' });
+    } finally { await api.close(); }
+  });
+
+  it('approves a revision the prototype linter passes', async () => {
+    const api = await harness();
+    try {
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-clean' });
+      const review = await settled(api.origin, 'gate2-clean');
+      expect(review.result!.lint.filter((finding) => finding.severity === 'error')).toEqual([]);
+      const approved = await post(api.origin, '/api/prototype/runs/gate2-clean/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Revisado e aprovado.' });
+      expect(approved.status).toBe(200);
+      expect(approved.payload.result!.approval).toMatchObject({ decision: 'approved', approverRole: 'captain' });
     } finally { await api.close(); }
   });
 
