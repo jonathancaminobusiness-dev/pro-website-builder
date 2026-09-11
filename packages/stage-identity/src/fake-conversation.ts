@@ -15,15 +15,22 @@ import { BRIEFING_CONVERSATION_STATES, type BriefingConversationState, type Brie
  */
 export const FAKE_CONVERSATION_TASK_PREFIX = 'identity-briefing-conversation';
 
+/**
+ * The fixture reads the prompt the server built, so a prompt it can no longer
+ * read is a failure rather than a default: a silent `entry` would keep the
+ * suites green while answering from a state the conversation is not in.
+ */
 function stateOf(prompt: string): BriefingConversationState {
   const match = /O estado atual da conversa é `([a-z]+)`/.exec(prompt);
   const found = BRIEFING_CONVERSATION_STATES.find((state) => state === match?.[1]);
-  return found ?? 'entry';
+  if (!found) throw new Error('A conversa falsa não encontrou o estado atual no prompt do turno.');
+  return found;
 }
 
 function questionsAsked(prompt: string): number {
   const match = /Perguntas já feitas: (\d+) de \d+/.exec(prompt);
-  return match ? Number(match[1]) : 0;
+  if (!match) throw new Error('A conversa falsa não encontrou a contagem de perguntas no prompt do turno.');
+  return Number(match[1]);
 }
 
 function directions(): ConceptualDirection[] {

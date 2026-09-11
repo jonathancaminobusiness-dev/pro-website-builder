@@ -25,12 +25,9 @@ export type BriefingConversationState = z.infer<typeof briefingConversationState
  * Two returns are deliberate rather than accidental: `question ->
  * recommendation` is what an answer does, because the model re-reads the brief
  * before it asks again, and `confirmation -> question` is what a captain asking
- * for an adjustment does. `confirmation -> confirmation` is the other half of
- * that correction: a captain who fixes a detail rather than reopening a
- * question gets the summary back revised. `entry -> confirmation` exists
- * because a model with enough context may skip the questions, and because the
- * deterministic fallback has to be able to offer a summary even when the very
- * first turn fails.
+ * for an adjustment does. `entry -> confirmation` exists because a model with
+ * enough context may skip the questions, and because the deterministic fallback
+ * has to be able to offer a summary even when the very first turn fails.
  *
  * `final` is never a move a model makes: only the captain's confirmation closes
  * the briefing, which is why it appears solely as an exit of `confirmation`, of
@@ -45,7 +42,7 @@ export const BRIEFING_CONVERSATION_TRANSITIONS: Readonly<Record<BriefingConversa
   entry: ['recommendation', 'confirmation', 'cancelled', 'failed'],
   recommendation: ['question', 'confirmation', 'cancelled', 'failed'],
   question: ['recommendation', 'confirmation', 'cancelled', 'failed'],
-  confirmation: ['question', 'confirmation', 'final', 'cancelled', 'failed'],
+  confirmation: ['question', 'final', 'cancelled', 'failed'],
   final: ['final'],
   cancelled: [],
   failed: ['final'],
@@ -67,14 +64,18 @@ export function canBriefingConversationTransition(from: BriefingConversationStat
  * built from this list and the server validates against it, which is the point
  * of computing it once: a turn spent on a move the validator refuses is a turn
  * the captain paid for and lost. The list is never empty — a conversation that
- * must conclude can always offer its summary.
+ * must conclude can always offer its summary, which is the one case where a
+ * captain correcting a summary is answered with another summary instead of the
+ * `confirmation -> question` return the machine prefers below the cap.
  */
 export function briefingTurnNextStates(state: BriefingConversationState, turn: { closing: boolean; mustConclude: boolean }): BriefingConversationState[] {
   if (turn.closing) return ['final'];
-  return BRIEFING_CONVERSATION_TRANSITIONS[state].filter((next) => {
+  const allowed = BRIEFING_CONVERSATION_TRANSITIONS[state].filter((next) => {
     if (next === 'cancelled' || next === 'failed' || next === 'final') return false;
     return !(turn.mustConclude && next === 'question');
   });
+  if (state === 'confirmation' && turn.mustConclude) allowed.push('confirmation');
+  return allowed;
 }
 
 /** The states a captain may still send a message from; everything else is closed to model turns. */
@@ -149,18 +150,28 @@ function normalizeForEcho(text: string): string {
   return text.toLowerCase().replace(/\s+/g, ' ');
 }
 
+/**
+ * A match that ends a sentence carries the punctuation the greedy patterns
+ * swallow, so the token the captain wrote is compared without it: "o site é
+ * https://clinicax.com.br." is the same URL the captain typed mid-sentence.
+ */
+function echoedToken(match: string): string {
+  return normalizeForEcho(match).replace(/[.,;:!?)\]}'"]+$/, '');
+}
+
 function everyMatchWasSaid(pattern: RegExp, text: string, said: string): boolean {
   const all = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
-  return [...text.matchAll(all)].every((match) => said.includes(normalizeForEcho(match[0])));
+  return [...text.matchAll(all)].every((match) => said.includes(echoedToken(match[0])));
 }
 
 /**
  * The ids of every visual-output rule the text breaks, in declaration order.
  *
- * `restatedFrom` is the captain's own words, passed only for the fields the
- * plan asks the model to give back — the summary, the facts, the hypotheses. A
- * rule that a captain may legitimately have written is broken there only by a
- * value the captain never wrote; everything else is judged as the model's.
+ * `restatedFrom` is the captain's own words, passed for the fields that give
+ * the briefing back — the reply itself, the summary, the facts, the hypotheses
+ * and the declared gaps. A rule that a captain may legitimately have written is
+ * broken there only by a value the captain never wrote; everything else is
+ * judged as the model's.
  */
 export function findVisualOutput(text: string, restatedFrom?: string): string[] {
   const said = restatedFrom === undefined ? undefined : normalizeForEcho(restatedFrom);
@@ -254,11 +265,11 @@ function turnTexts(turn: BriefingConversationTurn): Array<{ text: string; restat
   const authored = (text: string): { text: string; restated: boolean } => ({ text, restated: false });
   const restated = (text: string): { text: string; restated: boolean } => ({ text, restated: true });
   return [
-    authored(turn.message),
+    restated(turn.message),
     ...(turn.question ? [turn.question.text, turn.question.why, ...turn.question.options].map(authored) : []),
     ...turn.facts.map(restated),
     ...turn.hypotheses.map(restated),
-    ...turn.unknowns.flatMap((gap) => [authored(gap.gap), authored(gap.impact)]),
+    ...turn.unknowns.flatMap((gap) => [restated(gap.gap), restated(gap.impact)]),
     ...(turn.summary ? [restated(turn.summary)] : []),
     ...(turn.directions ?? []).flatMap((direction) => [direction.label, direction.positioning, direction.tone, direction.visualLanguage, direction.palette, direction.typography, direction.composition, ...direction.applications].map(authored)),
   ];

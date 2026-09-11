@@ -55,6 +55,13 @@ export interface BriefingConversationOptions {
   /** Called with the briefing a confirmation produced, so the execution carries it into the identity stage. */
   onConfirmed?: (briefing: string, revision: number) => Promise<void> | void;
   /**
+   * True once the execution can no longer take a new briefing, because the
+   * identity stage already ran on the one it has. A confirmation is refused
+   * there rather than recorded: a revision the execution would never apply is
+   * a signature the captain would read as applied.
+   */
+  briefingFrozen?: () => boolean;
+  /**
    * The briefing the execution carries, read at the moment a turn needs it. The
    * plan creates the execution from the captain's first text, so the opening
    * turn may carry no message at all and start from that text instead of asking
@@ -251,6 +258,7 @@ export class BriefingConversation {
 
   private async runConfirm(input: { briefing: string; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
+    if (this.options.briefingFrozen?.()) throw new ConversationError('A etapa de identidade desta execução já começou, então o briefing dela está congelado. Crie uma nova execução para trabalhar com um briefing diferente.', 409);
     if (!canConfirmBriefing(this.data.state)) throw new ConversationError(this.confirmRefusal(), 409);
     let briefing: string;
     try { briefing = normalizeIdentityBriefing(input.briefing); }
@@ -273,9 +281,11 @@ export class BriefingConversation {
       this.data.error = { code: turn.failure.code, message: `${turn.failure.message} O briefing foi confirmado mesmo assim; as três direções conceituais podem ser pedidas de novo.` };
       this.append({ author: 'system', text: this.data.error.message, state: 'final', fallback: true });
     }
-    const snapshot = await this.commit(input.idempotencyKey);
+    // The execution takes the briefing before the key is spent, so a write that
+    // throws leaves the conversation unconfirmed and the same-key retry re-drives
+    // the whole confirmation instead of reading a signature nothing applied.
     await this.options.onConfirmed?.(briefing, revision);
-    return snapshot;
+    return await this.commit(input.idempotencyKey);
   }
 
   // ------------------------------------------------------- the model turn
@@ -308,6 +318,12 @@ export class BriefingConversation {
     }
     finally { clearTimeout(timer); }
 
+    // An answer that names another task is another turn's answer: a provider
+    // resolving out of order would otherwise write its summary and its question
+    // into the transcript under this turn's number.
+    if (result.taskId !== task.id) {
+      return { ok: false, failure: { code: 'CONVERSATION_TASK_MISMATCH', message: 'O modelo respondeu a outro turno desta execução.' }, corrections: [`A resposta trouxe \`taskId\` \`${result.taskId}\`, mas este turno é \`${task.id}\`.`] };
+    }
     if (result.status === 'failed') return { ok: false, failure: { code: result.errorCode ?? 'CONVERSATION_PROVIDER_FAILED', message: result.summary || 'A chamada ao modelo falhou.' } };
     if (!result.artifact) return { ok: false, failure: { code: result.errorCode ?? 'CONVERSATION_EMPTY_ANSWER', message: 'O modelo respondeu sem o documento tipado da conversa.' }, corrections: ['A resposta não trouxe o objeto `artifact` com o turno da conversa.'] };
 
