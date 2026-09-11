@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { openDatabase, ProjectRepository } from '../apps/server/src/db/repository.js';
 import { FixtureRun, type FixtureSnapshot } from '../apps/server/src/fixture-run.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
-import { createModelProvider, modelAlias, modelProviderName } from '../apps/server/src/provider.js';
+import { createModelProvider, modelProviderName } from '../apps/server/src/provider.js';
 import { createRenderMatrix, qaFor, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../packages/render-hub/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 
@@ -51,8 +51,8 @@ async function main(): Promise<void> {
     const run = new FixtureRun({
       repository: new ProjectRepository(database),
       provider: createModelProvider(providerName),
-      modelAlias: modelAlias(providerName),
-      release: { releaseRoot, evidenceDir, fontsDir, modelProvider: providerName },
+      modelProvider: providerName,
+      release: { releaseRoot, evidenceDir, fontsDir },
     });
     await run.initialize('cli-fixture');
     let snapshot = await run.runAll();

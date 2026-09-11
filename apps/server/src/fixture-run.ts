@@ -5,6 +5,7 @@ import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type ScheduleResult, type VersionRecord, VersionStore } from '@pwb/orchestrator';
 import { ReleaseRun, type ReleaseApprover, type ReleaseContext, type ReleaseRunOptions, type ReleaseSnapshot } from './release-run.js';
 import type { ModelProvider } from '@pwb/providers';
+import { modelAlias, type ModelProviderName } from './provider.js';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import type { ProjectRepository } from './db/repository.js';
 
@@ -70,15 +71,20 @@ export class FixtureRun {
 
   private releaseRun: ReleaseRun | undefined;
 
-  constructor(private readonly options: { repository: ProjectRepository; provider: ModelProvider; release?: ReleaseRunOptions; modelAlias: string }) {
+  constructor(private readonly options: { repository: ProjectRepository; provider: ModelProvider; release?: Omit<ReleaseRunOptions, 'modelProvider'>; modelProvider: ModelProviderName }) {
     // Every task the plan derives names the provider that will answer it, so a
     // Codex run and a Claude run of the same task do not hash the same key.
-    this.planner = new RunPlanner(this.store, this.options.modelAlias);
+    this.planner = new RunPlanner(this.store, modelAlias(this.options.modelProvider));
+  }
+
+  private releaseOptions(): ReleaseRunOptions | undefined {
+    return this.options.release ? { ...this.options.release, modelProvider: this.options.modelProvider } : undefined;
   }
 
   async initialize(runId: string): Promise<void> {
     this.runIdentifier = runId;
-    if (this.options.release) this.releaseRun = new ReleaseRun(runId, this.options.release);
+    const release = this.releaseOptions();
+    if (release) this.releaseRun = new ReleaseRun(runId, release);
     const ir = createFixtureIR();
     await ignoringDuplicate(this.options.repository.createProject({ id: ir.meta.projectId, name: 'Fixture project' }));
     await ignoringDuplicate(this.options.repository.createRun({ id: runId, projectId: ir.meta.projectId }));
@@ -321,7 +327,8 @@ export class FixtureRun {
    */
   private discardPreparedRelease(): void {
     this.releaseGate = new PatchGate();
-    if (this.options.release) this.releaseRun = new ReleaseRun(this.runIdentifier, this.options.release);
+    const release = this.releaseOptions();
+    if (release) this.releaseRun = new ReleaseRun(this.runIdentifier, release);
   }
 
   private approvedAt(stage: Stage): Approval | undefined {

@@ -75,7 +75,6 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // the bundle ships, so the preview is read when a release is prepared.
   const release = {
     releaseRoot, evidenceDir, fontsDir, siteUrl, siteName,
-    modelProvider: providerName,
     previewFaces: () => preview.servedFaces(),
   };
   const api = createApiServer({
@@ -85,7 +84,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
       try {
-        const run = new FixtureRun({ repository, provider, release, modelAlias: alias });
+        const run = new FixtureRun({ repository, provider, release, modelProvider: providerName });
         await run.initialize(id);
         runs.set(id, run);
         return run;
@@ -94,7 +93,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     loadRun: async (id) => {
       const existing = runs.get(id);
       if (existing) return existing;
-      const run = new FixtureRun({ repository, provider, release, modelAlias: alias });
+      const run = new FixtureRun({ repository, provider, release, modelProvider: providerName });
       if (!await run.restore(id)) return undefined;
       runs.set(id, run);
       return run;
