@@ -393,7 +393,7 @@ export class IdentityStage {
 
   private async curate(signal?: AbortSignal): Promise<BriefSpec> {
     const base = this.branches.version(this.options.baseVersionId);
-    const task = this.task({ id: 'identity-curator', role: 'curator', deadlineMs: this.deadlines.curator, brief: briefCuratorPrompt(this.options.briefing), allowedPaths: [], ir: base.ir });
+    const task = this.task({ id: 'identity-curator', role: 'curator', deadlineMs: this.deadlines.curator, brief: briefCuratorPrompt({ runId: this.options.runId, briefing: this.options.briefing }), allowedPaths: [], ir: base.ir });
     const [result] = await this.dispatch([task], signal, () => briefSpecSchema);
     if (!result) throw new StageError(this.failures.at(-1)?.reason ?? 'The brief curator produced no result.');
     return requireArtifact(briefSpecSchema, result.artifact, task.id, 'BriefSpec');

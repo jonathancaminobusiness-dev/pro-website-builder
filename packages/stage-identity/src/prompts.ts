@@ -45,16 +45,28 @@ function tokenContract(identity: IdentitySpec): string {
   ].join('\n');
 }
 
-export function briefCuratorPrompt(briefing: string): string {
+/**
+ * The three things the execution hands the curator, and nothing else: the final
+ * briefing, which execution it belongs to, and the instruction not to invent
+ * audience, proof or restriction.
+ *
+ * The briefing arrives verbatim — the text the captain signed, byte for byte —
+ * because everything downstream cites evidence ids quoted out of it: a briefing
+ * this prompt paraphrased would produce evidence no captain ever wrote. The
+ * execution id is here so the curator knows the one execution it is curating,
+ * which is also the only cross-execution fact a briefing turn is ever given.
+ */
+export function briefCuratorPrompt(input: { runId: string; briefing: string }): string {
   return [
     'You are the brief curator of the identity stage. You do not design anything.',
     'Turn one raw briefing into a structured BriefSpec whose evidence ids the three identity directors will cite for the rest of the stage.',
     HOUSE_RULES,
+    `You are curating execution ${input.runId}. The briefing below is the final briefing of that execution, confirmed by the captain, and it is the whole of what you were told. Curate it and no other execution.`,
     'Give every evidence item a stable id in the form ev-<slug>, a verbatim quote from the briefing, and the place in the briefing it came from.',
-    'Anything the briefing does not state belongs in `unknowns` or in `assumptions` with a risk level. Do not invent audiences, proofs or constraints.',
+    'Do not invent an audience, a proof or a restriction. Anything the briefing does not state is not yours to supply: it belongs in `unknowns`, or in `assumptions` with a risk level that says it is an assumption, and never in evidence.',
     '`forbiddenDefaults` must name the generic moves this particular project has to refuse, derived from the briefing rather than from a stock list.',
     schemaBlock('BriefSpec', briefSpecJsonSchema),
-    `Raw briefing:\n${briefing}`,
+    `Raw briefing:\n${input.briefing}`,
   ].join('\n\n');
 }
 

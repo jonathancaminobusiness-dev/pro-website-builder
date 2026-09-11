@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createFixtureIR, flattenTokens, type Approval, type TokenValue } from '@pwb/domain';
+import { createFixtureIR, flattenTokens, type Approval, type BriefingConversationState, type TokenValue } from '@pwb/domain';
 import { Applier, DEFAULT_MAX_ACTIVE_CLAUDE, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
@@ -47,6 +47,21 @@ function mergeFailures(...groups: Array<Array<{ taskId: string; reason: string }
 const INTERRUPTED = 'The server restarted while the identity stage was running, so that fan-out was lost. Start the stage again.';
 
 const FROZEN_BRIEFING = 'A etapa de identidade desta execução já começou, então o briefing dela está congelado. Crie uma nova execução para trabalhar com um briefing diferente.';
+
+/**
+ * Why the identity stage may not start on this execution's conversation yet.
+ *
+ * The rule is one sentence: the stage runs on a briefing the captain signed, so
+ * an execution whose conversation has not reached `final` has no such briefing
+ * and starts nothing. Cancelling and failing are refused for exactly that
+ * reason and not as punishment — they closed a round without signing anything —
+ * which is why both refusals name the way forward the execution still has.
+ */
+const UNCONFIRMED_BRIEFING: Readonly<Partial<Record<BriefingConversationState, string>>> = Object.freeze({
+  cancelled: 'A conversa de briefing desta execução foi cancelada, então nenhum briefing foi confirmado. Abra outra conversa nesta execução, ou crie outra execução, antes de iniciar a etapa de identidade.',
+  failed: 'A conversa de briefing desta execução terminou em erro, então nenhum briefing foi confirmado. Confirme o resumo em modo seguro, ou abra outra conversa nesta execução, antes de iniciar a etapa de identidade.',
+});
+const OPEN_BRIEFING = 'A conversa de briefing desta execução ainda está aberta. Confirme o briefing no chat antes de iniciar a etapa de identidade.';
 
 function identityStageDeadlineMs(deadlines: Partial<IdentityStageDeadlines> | undefined, maxActiveClaude: number): number {
   const override = Number(process.env.PWB_STAGE_DEADLINE_MS);
@@ -215,6 +230,13 @@ export class IdentityRun {
     // The conversation is rebuilt from the execution before anything else reads
     // it, so a restarted server serves the same transcript, state and summary.
     this.conversationRun.restore(run.conversation);
+    // The confirmed briefing is a record, and the record is what the stage
+    // runs on: a restarted process reads it from the transcript rather than
+    // trusting the run's own column to have been written by the same
+    // transaction. The two agree today — a confirmation writes both at once —
+    // and when they ever disagree, the text the captain signed wins.
+    const confirmed = this.conversationRun.confirmedBriefing;
+    if (confirmed !== undefined) this.briefing = confirmed;
     this.stage = this.newStage();
     for (const version of await this.options.repository.listVersions(run.projectId)) {
       if (this.store.get(version.id)) continue;
@@ -304,6 +326,7 @@ export class IdentityRun {
    */
   async begin(): Promise<IdentityRunSnapshot> {
     this.refuseIfTerminal('create another one to run the identity stage.');
+    this.refuseUnconfirmedBriefing();
     await this.exclusive(async () => {
       // A failure is not the end of the run: the captain can ask again here, on
       // the same terms a restarted process already offers.
@@ -373,6 +396,22 @@ export class IdentityRun {
     if (this.result !== undefined) return true;
     if (this.status === 'failed' || this.status === 'interrupted') return false;
     return this.status === 'running';
+  }
+
+  /**
+   * The stage starts on a briefing the captain signed, and on nothing else.
+   *
+   * An execution whose captain never opened the chat is the legacy flow and
+   * keeps today's behaviour exactly: it runs on the briefing it was created
+   * with. Once the chat has been used, that conversation is what decides this
+   * execution's briefing, so the stage waits for it to reach `final` — an open
+   * round is not an approval, a cancelled one advanced nothing to the curator,
+   * and a failed one signed nothing either.
+   */
+  private refuseUnconfirmedBriefing(): void {
+    const conversation = this.conversationRun;
+    if (!conversation.opened || conversation.state === 'final') return;
+    throw new StageError(UNCONFIRMED_BRIEFING[conversation.state] ?? OPEN_BRIEFING);
   }
 
   /**

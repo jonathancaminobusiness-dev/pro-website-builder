@@ -52,6 +52,27 @@ export function canBriefingConversationTransition(from: BriefingConversationStat
   return BRIEFING_CONVERSATION_TRANSITIONS[from].includes(to);
 }
 
+/** The two ways a conversation round ends without signing a briefing, which are the two a reopen succeeds. */
+export const briefingConversationClosedStateSchema = z.enum(['cancelled', 'failed']);
+export type BriefingConversationClosedState = z.infer<typeof briefingConversationClosedStateSchema>;
+
+/**
+ * The states a captain may open the next conversation from. It is deliberately
+ * not a transition: `cancelled` and `failed` end the conversation they are the
+ * state of, and what follows is the *next* revision of the conversation on the
+ * same execution — a fresh round that starts at `entry` while the round it
+ * succeeds stays readable in `previousRevisions`. The execution is never
+ * deleted and never loses what was said, which is the whole reason a stop is
+ * safe to take.
+ *
+ * `final` is not here: a briefing the captain already signed is edited by
+ * confirming the next revision of it, which `canConfirmBriefing` already
+ * allows, not by reopening the chat that produced it.
+ */
+export function canReopenBriefingConversation(state: BriefingConversationState): state is BriefingConversationClosedState {
+  return state === 'cancelled' || state === 'failed';
+}
+
 /**
  * The moves a model may ask for on one turn, which is narrower than the moves
  * the conversation can make. `cancelled` and `failed` are the server's to
@@ -346,10 +367,41 @@ export type BriefingConfirmation = z.infer<typeof briefingConfirmationSchema>;
 export const briefingConversationErrorSchema = z.object({ code: z.string().min(1), message: z.string().min(1) }).strict();
 export type BriefingConversationError = z.infer<typeof briefingConversationErrorSchema>;
 
+/**
+ * A conversation round the captain closed and then opened the next one after.
+ *
+ * Cancelling and failing are terminal for the round they end, never for the
+ * execution: the round is archived whole — its transcript, the state it ended
+ * in, the summary it had reached, the questions it had asked and the error that
+ * ended it — so the next round starts empty while everything said in the
+ * previous one stays readable. Nothing here is ever rewritten.
+ */
+export const briefingConversationRevisionSchema = z.object({
+  revision: z.number().int().positive(),
+  /** The terminal state this round ended in; only those two rounds are ever archived. */
+  closedAs: briefingConversationClosedStateSchema,
+  closedAt: z.string().min(1),
+  messages: z.array(briefingConversationMessageSchema).default([]),
+  summary: z.string().optional(),
+  openGaps: z.array(briefingGapSchema).default([]),
+  askedQuestions: z.array(briefingAnsweredQuestionSchema).default([]),
+  questionCount: z.number().int().nonnegative().default(0),
+  error: briefingConversationErrorSchema.optional(),
+}).strict();
+export type BriefingConversationRevision = z.infer<typeof briefingConversationRevisionSchema>;
+
 /** Everything the GET route returns and the execution persists, in one shape. */
 export const briefingConversationSnapshotSchema = z.object({
   runId: z.string().min(1),
   state: briefingConversationStateSchema,
+  /**
+   * Which round of the conversation this execution is on. It starts at 1 and
+   * only a reopen after a cancelled or failed round moves it; a file written
+   * before reopens existed reads 1, which is what it was.
+   */
+  revision: z.number().int().positive().default(1),
+  /** The rounds that were closed before this one, oldest first, kept readable. */
+  previousRevisions: z.array(briefingConversationRevisionSchema).default([]),
   /** The captain's first text exactly as it was typed. */
   originalText: z.string().default(''),
   /** The same text after the server's normalization; this is what the model reads. */
@@ -390,6 +442,11 @@ export function briefingConversationConfirmPath(runId: string): string {
   return `${briefingConversationPath(runId)}/confirm`;
 }
 
+/** Opens the next conversation round on the same execution, after a cancelled or failed one. */
+export function briefingConversationReopenPath(runId: string): string {
+  return `${briefingConversationPath(runId)}/reopen`;
+}
+
 /**
  * What a captain can do with one message. `answer` and `correct` both carry
  * text; `skip` declines the open question without pretending it was answered;
@@ -409,6 +466,16 @@ export const briefingConversationRequestSchema = z.object({
   idempotencyKey: z.string().trim().min(1).max(BRIEFING_IDEMPOTENCY_KEY_MAX_LENGTH),
 }).strict();
 export type BriefingConversationRequest = z.infer<typeof briefingConversationRequestSchema>;
+
+/**
+ * Reopening carries no text: the next round starts at `entry` exactly as the
+ * first one did, so the captain's opening message goes through the one message
+ * route rather than through a second normalization path of its own.
+ */
+export const briefingReopenRequestSchema = z.object({
+  idempotencyKey: z.string().trim().min(1).max(BRIEFING_IDEMPOTENCY_KEY_MAX_LENGTH),
+}).strict();
+export type BriefingReopenRequest = z.infer<typeof briefingReopenRequestSchema>;
 
 export const briefingConfirmRequestSchema = z.object({
   /** The edited summary the captain is signing; it becomes the execution's briefing. */

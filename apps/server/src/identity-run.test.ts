@@ -3,14 +3,14 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createFixtureIR } from '@pwb/domain';
+import { createFixtureIR, hashJson } from '@pwb/domain';
 import { lintDesign } from '@pwb/linter';
 import { CodexRunner, type ModelProvider } from '@pwb/providers';
 import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
-import { IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
+import { IDENTITY_BRIEFING, IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
 import { STUDIO_ORIGIN } from './security.js';
 
 let directory: string;
@@ -25,6 +25,20 @@ afterEach(async () => {
   database.sqlite.close();
   await rm(directory, { recursive: true, force: true });
 });
+
+/**
+ * The briefing the curator prompt actually carries, read back out of it.
+ *
+ * The prompt ends with the raw briefing, so the text after that heading is what
+ * the curator was handed — which is the only way to compare what the stage sent
+ * with what the captain signed, instead of trusting that they agree.
+ */
+function curatorBriefing(prompt: string): string {
+  const marker = '\n\nRaw briefing:\n';
+  const at = prompt.lastIndexOf(marker);
+  expect(at).toBeGreaterThan(-1);
+  return prompt.slice(at + marker.length);
+}
 
 /** Walks the fixture conversation up to the editable summary, which is where a captain may confirm. */
 async function driveToConfirmation(run: IdentityRun): Promise<void> {
@@ -117,6 +131,156 @@ describe('identity run', () => {
     expect(restored.snapshot().status).not.toBe('unrecoverable');
     expect(restored.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
     expect((await repository.getRun(runId))?.briefing).toBe('  Nicho de cerâmica autoral.  ');
+  });
+
+  it('hands the curator the confirmed briefing itself, byte for byte, and says which execution it is', async () => {
+    const repository = new ProjectRepository(database);
+    const inner = new FakeIdentityProvider();
+    let curatorPrompt = '';
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-curator') curatorPrompt = task.brief;
+        return inner.propose(task, signal);
+      },
+    };
+    const runId = 'identity-briefing-confirmado';
+    const run = new IdentityRun({ runId, repository, provider, briefing: 'Texto inicial, que a conversa ainda vai substituir.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+    const signed = 'Clínica de bairro preventiva para cães e gatos, que equilibra autoridade clínica e proximidade cotidiana.';
+    const confirmed = await run.conversation.confirm({ briefing: signed, idempotencyKey: 'confirm-1' });
+
+    const started = await run.start();
+
+    // What the curator read is compared to the record the captain signed, not to
+    // the text this test typed: the record is the contract between the two.
+    const record = confirmed.confirmations.at(-1)!.briefing;
+    expect(curatorBriefing(curatorPrompt)).toBe(record);
+    expect(hashJson(curatorBriefing(curatorPrompt))).toBe(hashJson(record));
+    expect(curatorPrompt).toContain(`You are curating execution ${runId}.`);
+    expect(curatorPrompt).toContain('Do not invent an audience, a proof or a restriction.');
+    expect(started.briefing).toBe(record);
+    expect(started.directions).toHaveLength(3);
+  });
+
+  it('never advances a cancelled conversation to the curator', async () => {
+    const repository = new ProjectRepository(database);
+    const inner = new FakeIdentityProvider();
+    const tasks: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) { tasks.push(task.id); return inner.propose(task, signal); },
+    };
+    const run = new IdentityRun({ runId: 'identity-conversa-cancelada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+    await run.conversation.send({ action: 'cancel', idempotencyKey: 'cancel-1' });
+
+    await expect(run.start()).rejects.toThrow(/foi cancelada/);
+
+    // Cancelling closed a conversation, not the execution: no curator ran, and
+    // the execution is still there to open the next conversation on.
+    expect(tasks).not.toContain('identity-curator');
+    expect(run.snapshot().status).toBe('queued');
+    expect(run.snapshot().directions).toEqual([]);
+    const reopened = await run.conversation.reopen({ idempotencyKey: 'reopen-1' });
+    expect(reopened.state).toBe('entry');
+    expect(reopened.previousRevisions[0]?.closedAs).toBe('cancelled');
+  });
+
+  it('keeps the stage refused after a reopen until the next conversation signs a briefing', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({ runId: 'identity-conversa-reaberta', repository, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+    await run.conversation.send({ action: 'cancel', idempotencyKey: 'cancel-1' });
+    await run.conversation.reopen({ idempotencyKey: 'reopen-1' });
+
+    await expect(run.start()).rejects.toThrow(/ainda está aberta/);
+
+    await run.conversation.send({ message: 'Recomeçando: clínica de bairro, prevenção no centro.', action: 'answer', idempotencyKey: 'turn-r1' });
+    await run.conversation.send({ message: 'Segurança clínica com carinho.', action: 'answer', idempotencyKey: 'turn-r2' });
+    await run.conversation.send({ message: 'Acompanhamento é a promessa.', action: 'answer', idempotencyKey: 'turn-r3' });
+    await run.conversation.send({ message: 'Prevenção continua no centro.', action: 'answer', idempotencyKey: 'turn-r4' });
+    expect(run.conversation.state).toBe('confirmation');
+    const signed = await run.conversation.confirm({ briefing: 'Segunda conversa: clínica de bairro preventiva, com acompanhamento contínuo.', idempotencyKey: 'confirm-1' });
+
+    const started = await run.start();
+
+    expect(signed.revision).toBe(2);
+    expect(signed.previousRevisions).toHaveLength(1);
+    expect(started.briefing).toBe('Segunda conversa: clínica de bairro preventiva, com acompanhamento contínuo.');
+    expect(started.directions).toHaveLength(3);
+  });
+
+  it('never turns the editable summary the conversation offers into an approval', async () => {
+    const repository = new ProjectRepository(database);
+    const inner = new FakeIdentityProvider();
+    const tasks: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) { tasks.push(task.id); return inner.propose(task, signal); },
+    };
+    const run = new IdentityRun({ runId: 'identity-resumo-nao-aprova', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+
+    // The conversation is sitting on a summary it offered, which is a draft and
+    // not a signature: nothing but the captain's confirmation starts the stage.
+    const offered = run.conversation.snapshot();
+    expect(offered.state).toBe('confirmation');
+    expect(offered.summary).toBeTruthy();
+    expect(offered.briefing).toBeUndefined();
+    await expect(run.start()).rejects.toThrow(/ainda está aberta/);
+    expect(tasks).not.toContain('identity-curator');
+  });
+
+  it('runs the stage on the confirmed briefing after a restart, not on the text the execution was created with', async () => {
+    const repository = new ProjectRepository(database);
+    const inner = new FakeIdentityProvider();
+    let curatorPrompt = '';
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-curator') curatorPrompt = task.brief;
+        return inner.propose(task, signal);
+      },
+    };
+    const runId = 'identity-restart-confirmado';
+    const run = new IdentityRun({ runId, repository, provider, briefing: 'Texto inicial, que a conversa ainda vai substituir.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+    await run.conversation.confirm({ briefing: 'Clínica de bairro preventiva, confirmada antes do restart.', idempotencyKey: 'confirm-1' });
+
+    const restored = new IdentityRun({ runId, repository, provider });
+    expect(await restored.restore()).toBe(true);
+    const started = await restored.start();
+
+    expect(restored.conversation.state).toBe('final');
+    expect(curatorBriefing(curatorPrompt)).toBe('Clínica de bairro preventiva, confirmada antes do restart.');
+    expect(started.briefing).toBe('Clínica de bairro preventiva, confirmada antes do restart.');
+    expect(started.directions).toHaveLength(3);
+  });
+
+  it('keeps the legacy flow for an execution whose captain never opened the conversation', async () => {
+    const repository = new ProjectRepository(database);
+    const inner = new FakeIdentityProvider();
+    let curatorPrompt = '';
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-curator') curatorPrompt = task.brief;
+        return inner.propose(task, signal);
+      },
+    };
+    // No `briefing` and no conversation: the omitted field is the legacy flow,
+    // and it still runs on the fixed compatibility briefing.
+    const run = new IdentityRun({ runId: 'identity-sem-conversa', repository, provider });
+    await run.initialize();
+
+    const started = await run.start();
+
+    expect(run.conversation.state).toBe('entry');
+    expect(run.conversation.snapshot().messages).toEqual([]);
+    expect(started.briefing).toBe(IDENTITY_BRIEFING);
+    expect(curatorBriefing(curatorPrompt)).toBe(IDENTITY_BRIEFING);
+    expect(started.directions).toHaveLength(3);
   });
 
   it('passes per-critic deadlines through to the identity stage', async () => {
@@ -233,17 +397,24 @@ describe('identity run', () => {
     let reached = (): void => {};
     const closing = new Promise<void>((resolve) => { release = resolve; });
     const closingTurn = new Promise<void>((resolve) => { reached = resolve; });
+    // Only the second closing turn is held: the first one is the signature the
+    // start needs before there is a fan-out for a revision to race at all.
+    let closings = 0;
     const provider: ModelProvider = {
       async propose(task, signal) {
-        if (task.id.startsWith('identity-briefing-conversation') && task.brief.includes('O capitão confirmou o briefing.')) { reached(); await closing; }
+        if (task.id.startsWith('identity-briefing-conversation') && task.brief.includes('O capitão confirmou o briefing.')) {
+          closings += 1;
+          if (closings === 2) { reached(); await closing; }
+        }
         return fake.propose(task, signal);
       },
     };
     const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-confirma-na-largada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
+    await run.conversation.confirm({ briefing: 'Clínica veterinária de bairro, preventiva.', idempotencyKey: 'confirm-1' });
 
-    const confirming = run.conversation.confirm({ briefing: 'Briefing corrigido durante a largada.', idempotencyKey: 'confirm-1' });
+    const confirming = run.conversation.confirm({ briefing: 'Briefing corrigido durante a largada.', idempotencyKey: 'confirm-2' });
     // The start lands while the closing turn is in flight, which is the only
     // window where the freeze can be true at apply time and false when asked.
     await closingTurn;
@@ -256,7 +427,7 @@ describe('identity run', () => {
     expect(snapshot.directions).toHaveLength(3);
     expect(snapshot.gate.state).toBe('open');
     expect(snapshot.briefing).toBe('Clínica veterinária de bairro, preventiva.');
-    expect(run.conversation.snapshot().confirmations).toEqual([]);
+    expect(run.conversation.snapshot().confirmations.map((entry) => entry.revision)).toEqual([1]);
   });
 
   it('spends no conversation turn on an execution the captain stopped', async () => {
@@ -373,7 +544,7 @@ describe('identity run', () => {
     expect(approved.handoff?.versionId).toBeTruthy();
   });
 
-  it('refuses a turn on a frozen execution but still lets the captain close the chat', async () => {
+  it('refuses the next briefing revision on a frozen execution, and spends no turn finding that out', async () => {
     const repository = new ProjectRepository(database);
     const conversationTasks: string[] = [];
     const fake = new FakeIdentityProvider();
@@ -385,16 +556,18 @@ describe('identity run', () => {
     };
     const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-conversa-congelada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
-    await run.conversation.send({ action: 'answer', idempotencyKey: 'turn-0' });
-    expect(run.conversation.state).toBe('recommendation');
+    await driveToConfirmation(run);
+    await run.conversation.confirm({ briefing: 'Clínica veterinária de bairro, preventiva.', idempotencyKey: 'confirm-1' });
+    const spent = conversationTasks.length;
 
     await run.start();
 
-    await expect(run.conversation.send({ message: 'Pensando melhor, mudamos de ideia.', action: 'answer', idempotencyKey: 'turn-1' })).rejects.toThrow(/congelado/);
-    const stopped = await run.conversation.send({ action: 'cancel', idempotencyKey: 'turn-2' });
+    await expect(run.conversation.send({ message: 'Pensando melhor, mudamos de ideia.', action: 'answer', idempotencyKey: 'turn-9' })).rejects.toThrow(/congelado/);
+    await expect(run.conversation.confirm({ briefing: 'Pensando melhor, mudamos de ideia.', idempotencyKey: 'confirm-2' })).rejects.toThrow(/congelado/);
 
-    expect(stopped.state).toBe('cancelled');
-    expect(conversationTasks).toHaveLength(1);
+    expect(conversationTasks).toHaveLength(spent);
+    expect(run.conversation.snapshot().confirmations.map((entry) => entry.revision)).toEqual([1]);
+    expect(run.snapshot().briefing).toBe('Clínica veterinária de bairro, preventiva.');
     expect(run.snapshot().directions).toHaveLength(3);
   });
 
@@ -410,6 +583,7 @@ describe('identity run', () => {
     const run = new IdentityRun({ modelAlias: 'fake', runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
+    await run.conversation.confirm({ briefing: 'Clínica veterinária de bairro, preventiva.', idempotencyKey: 'confirm-1' });
     failing = true;
 
     const failed = await run.start();
@@ -426,9 +600,9 @@ describe('identity run', () => {
     expect(run.snapshot().approvals).toEqual([]);
     expect(run.snapshot().handoff).toBeUndefined();
 
-    const corrected = await run.conversation.confirm({ briefing: 'Clínica de bairro preventiva, corrigida depois da falha.', idempotencyKey: 'confirm-1' });
+    const corrected = await run.conversation.confirm({ briefing: 'Clínica de bairro preventiva, corrigida depois da falha.', idempotencyKey: 'confirm-2' });
 
-    expect(corrected.confirmations).toHaveLength(1);
+    expect(corrected.confirmations.map((entry) => entry.revision)).toEqual([1, 2]);
     expect(run.snapshot().briefing).toBe('Clínica de bairro preventiva, corrigida depois da falha.');
   });
 

@@ -266,6 +266,26 @@ describe('identity stage fan-out', () => {
     expect(result.candidates.find((candidate) => candidate.directionId === 'editorial-material')?.scores).toContainEqual({ criticId: 'system-a11y-critic', dimension: 'system-accessibility', score: 4 });
   });
 
+  it('hands the curator the briefing verbatim, the execution it belongs to and the refusal to invent', async () => {
+    let curatorPrompt = '';
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id === 'identity-curator') curatorPrompt = task.brief;
+        return inner.propose(task, signal);
+      },
+    };
+    const { stage } = harness({ provider });
+
+    await stage.run();
+
+    expect(curatorPrompt).toContain('You are curating execution run-identity-test.');
+    expect(curatorPrompt).toContain('Do not invent an audience, a proof or a restriction.');
+    // The briefing is the end of the prompt, so a prompt that paraphrased it
+    // would fail this rather than quietly changing what the evidence quotes.
+    expect(curatorPrompt.endsWith(`Raw briefing:\n${BRIEFING}`)).toBe(true);
+  });
+
   it('records the brief the curator extracted, with its evidence ids', async () => {
     const { stage } = harness();
     const result = await stage.run();

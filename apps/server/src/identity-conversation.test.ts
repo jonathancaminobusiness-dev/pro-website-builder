@@ -6,6 +6,7 @@ import {
   briefingTurnNextStates,
   canBriefingConversationTransition,
   canConfirmBriefing,
+  canReopenBriefingConversation,
   canSendBriefingMessage,
   findVisualOutput,
   IDENTITY_BRIEFING_MAX_LENGTH,
@@ -218,6 +219,102 @@ describe('briefing conversation state machine', () => {
     expect(cancelled.messages).toHaveLength(3);
     expect(tasks).toHaveLength(1);
     await expect(conversation.send({ message: 'Mais uma coisa.', action: 'answer', idempotencyKey: nextKey() })).rejects.toThrow(/cancelada/);
+  });
+
+  it('opens the next conversation after a cancelled one, keeping the one it succeeds readable', async () => {
+    const { conversation, tasks } = harness([succeeded(RECOMMENDATION), succeeded(RECOMMENDATION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    const cancelled = await conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+
+    const reopened = await conversation.reopen({ idempotencyKey: nextKey() });
+
+    // A reopen buys nothing: the round that closed is archived whole and the
+    // new one starts where the first one did.
+    expect(tasks).toHaveLength(1);
+    expect(reopened.state).toBe('entry');
+    expect(reopened.revision).toBe(2);
+    expect(reopened.previousRevisions).toHaveLength(1);
+    expect(reopened.previousRevisions[0]?.revision).toBe(1);
+    expect(reopened.previousRevisions[0]?.closedAs).toBe('cancelled');
+    expect(reopened.previousRevisions[0]?.messages).toEqual(cancelled.messages);
+    expect(reopened.messages).toHaveLength(1);
+    expect(reopened.messages[0]?.text).toContain('continua legível');
+
+    // And the next round is an ordinary conversation on the same execution.
+    const opened = await conversation.send({ message: 'Na verdade somos uma clínica de bairro com foco em prevenção.', action: 'answer', idempotencyKey: nextKey() });
+    expect(opened.state).toBe('recommendation');
+    expect(opened.normalizedText).toBe('Na verdade somos uma clínica de bairro com foco em prevenção.');
+    expect(opened.previousRevisions).toHaveLength(1);
+    expect(tasks).toHaveLength(2);
+  });
+
+  it('refuses to reopen a briefing the captain already signed, which the next revision edits instead', async () => {
+    const { conversation } = harness([succeeded(CONFIRMATION), succeeded(FINAL)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    await conversation.confirm({ briefing: 'Clínica de bairro preventiva, assinada pelo capitão.', idempotencyKey: nextKey() });
+    expect(conversation.state).toBe('final');
+
+    await expect(conversation.reopen({ idempotencyKey: nextKey() })).rejects.toThrow(/já foi confirmado/);
+    expect(conversation.snapshot().revision).toBe(1);
+  });
+
+  it('reopens a conversation safe mode ended, and keeps the failure it ended on readable', async () => {
+    const failing: Answer = (task) => ({ taskId: task.id, status: 'failed', summary: 'provider down', errorCode: 'DOWN' });
+    const { conversation } = harness([failing, failing, succeeded(RECOMMENDATION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    expect(conversation.state).toBe('confirmation');
+    await conversation.send({ message: 'Tenta de novo, por favor.', action: 'answer', idempotencyKey: nextKey() });
+    expect(conversation.state).toBe('failed');
+
+    const reopened = await conversation.reopen({ idempotencyKey: nextKey() });
+
+    expect(reopened.state).toBe('entry');
+    expect(reopened.revision).toBe(2);
+    expect(reopened.previousRevisions[0]?.closedAs).toBe('failed');
+    expect(reopened.previousRevisions[0]?.error?.code).toBe('DOWN');
+    expect(reopened.error).toBeUndefined();
+    expect(reopened.fallback).toBe(false);
+    const opened = await conversation.send({ message: 'Vamos recomeçar pela prevenção.', action: 'answer', idempotencyKey: nextKey() });
+    expect(opened.state).toBe('recommendation');
+  });
+
+  it('refuses to reopen a conversation that is still open', async () => {
+    const { conversation } = harness([succeeded(RECOMMENDATION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    await expect(conversation.reopen({ idempotencyKey: nextKey() })).rejects.toThrow(/ainda está aberta/);
+    expect(conversation.snapshot().revision).toBe(1);
+  });
+
+  it('opens exactly one new conversation when the same reopen key is retried', async () => {
+    const { conversation } = harness([succeeded(RECOMMENDATION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    await conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    const key = nextKey();
+
+    const first = await conversation.reopen({ idempotencyKey: key });
+    const again = await conversation.reopen({ idempotencyKey: key });
+
+    expect(first.revision).toBe(2);
+    expect(again.revision).toBe(2);
+    expect(again.previousRevisions).toHaveLength(1);
+    expect(again.messages).toEqual(first.messages);
+  });
+
+  it('rebuilds the archived rounds from what it wrote, so a restart still reads the previous conversation', async () => {
+    const { conversation } = harness([succeeded(RECOMMENDATION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    await conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    await conversation.reopen({ idempotencyKey: nextKey() });
+    const written = conversation.serialize();
+
+    const restored = harness([]).conversation;
+    restored.restore(written);
+
+    expect(restored.state).toBe('entry');
+    expect(restored.snapshot().revision).toBe(2);
+    expect(restored.snapshot().previousRevisions[0]?.closedAs).toBe('cancelled');
+    expect(restored.opened).toBe(true);
   });
 
   it('offers an editable summary instead of a silent approval when the question limit is reached', async () => {
@@ -750,6 +847,10 @@ describe('briefing conversation contract', () => {
     expect(canBriefingConversationTransition('final', 'question')).toBe(false);
     expect(canBriefingConversationTransition('final', 'final')).toBe(true);
     expect(BRIEFING_CONVERSATION_MAX_QUESTIONS).toBe(6);
+    // Reopening is not a transition: it is the next round, and only the two
+    // states that closed one without signing a briefing may open it.
+    for (const state of ['cancelled', 'failed'] as const) expect(canReopenBriefingConversation(state)).toBe(true);
+    for (const state of ['entry', 'recommendation', 'question', 'confirmation', 'final'] as const) expect(canReopenBriefingConversation(state)).toBe(false);
   });
 
   it('rejects a turn whose intent and next state disagree', () => {

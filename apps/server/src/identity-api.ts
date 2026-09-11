@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { briefingConfirmRequestSchema, briefingConversationRequestSchema, tokenValueSchema } from '@pwb/domain';
+import { briefingConfirmRequestSchema, briefingConversationRequestSchema, briefingReopenRequestSchema, tokenValueSchema } from '@pwb/domain';
 import { StageError } from '@pwb/stage-identity';
 import { RunConflictError } from './run-conflict.js';
 import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
@@ -73,12 +73,12 @@ export async function handleIdentityRequest(
     return true;
   }
 
-  // The `/confirm` suffix belongs to the conversation and to nothing else, which
-  // the pattern states structurally by nesting it inside that alternative. The
-  // refusal below states the same rule where a reader of the handler sees it;
-  // both stay, because a pattern edit that loosens the nesting again would
-  // otherwise route `/start/confirm` into a paid fan-out.
-  const match = /^\/api\/identity\/runs\/([^/]+)(?:\/(?:(start|approve|reject|cancel|token)|(conversation)(?:\/(confirm))?))?$/.exec(pathname);
+  // The `/confirm` and `/reopen` suffixes belong to the conversation and to
+  // nothing else, which the pattern states structurally by nesting them inside
+  // that alternative. The refusal below states the same rule where a reader of
+  // the handler sees it; both stay, because a pattern edit that loosens the
+  // nesting again would otherwise route `/start/confirm` into a paid fan-out.
+  const match = /^\/api\/identity\/runs\/([^/]+)(?:\/(?:(start|approve|reject|cancel|token)|(conversation)(?:\/(confirm|reopen))?))?$/.exec(pathname);
   if (!match) { send(404, { error: 'Not found.' }); return true; }
   const run = await resolve(options, decodeURIComponent(match[1]!));
   if (!run) { send(404, { error: 'Identity run not found.' }); return true; }
@@ -89,9 +89,10 @@ export async function handleIdentityRequest(
   if (request.method === 'GET' && !action) { send(200, run.snapshot()); return true; }
 
   // The briefing conversation: send a message, resume the history, close the
-  // briefing. It is a preparation layer, not a gate, so it carries no approver
-  // role; what it does carry is an idempotency key, because a retry after a
-  // timed-out model turn must never buy a second turn.
+  // briefing, or open the next round after a cancelled or failed one. It is a
+  // preparation layer, not a gate, so it carries no approver role; what it does
+  // carry is an idempotency key, because a retry after a timed-out model turn
+  // must never buy a second turn.
   if (action === 'conversation') {
     if (request.method === 'GET') {
       if (subAction) { send(404, { error: 'Not found.' }); return true; }
@@ -105,6 +106,12 @@ export async function handleIdentityRequest(
         const confirmation = briefingConfirmRequestSchema.safeParse(payload);
         if (!confirmation.success) { send(400, { error: requestProblem(confirmation.error.issues) }); return true; }
         send(200, await run.conversation.confirm(confirmation.data));
+        return true;
+      }
+      if (subAction === 'reopen') {
+        const reopen = briefingReopenRequestSchema.safeParse(payload);
+        if (!reopen.success) { send(400, { error: requestProblem(reopen.error.issues) }); return true; }
+        send(200, await run.conversation.reopen(reopen.data));
         return true;
       }
       const message = briefingConversationRequestSchema.safeParse(payload);

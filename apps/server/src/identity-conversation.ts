@@ -9,6 +9,7 @@ import {
   briefingConversationTurnSchema,
   briefingTurnNextStates,
   canConfirmBriefing,
+  canReopenBriefingConversation,
   canSendBriefingMessage,
   findTurnVisualOutput,
   hashJson,
@@ -20,6 +21,7 @@ import {
   type BriefingConversationError,
   type BriefingConversationMessage,
   type BriefingConversationSnapshot,
+  type BriefingConversationRevision,
   type BriefingConversationState,
   type BriefingConversationTurn,
   type BriefingGap,
@@ -97,6 +99,8 @@ export interface BriefingConversationOptions {
 
 interface ConversationState {
   state: BriefingConversationState;
+  revision: number;
+  previousRevisions: BriefingConversationRevision[];
   originalText: string;
   normalizedText: string;
   messages: BriefingConversationMessage[];
@@ -114,7 +118,7 @@ interface ConversationState {
 }
 
 function emptyState(): ConversationState {
-  return { state: 'entry', originalText: '', normalizedText: '', messages: [], openGaps: [], askedQuestions: [], questionCount: 0, attempt: 0, fallback: false, confirmations: [], directions: [], appliedKeys: [] };
+  return { state: 'entry', revision: 1, previousRevisions: [], originalText: '', normalizedText: '', messages: [], openGaps: [], askedQuestions: [], questionCount: 0, attempt: 0, fallback: false, confirmations: [], directions: [], appliedKeys: [] };
 }
 
 /**
@@ -166,6 +170,8 @@ export class BriefingConversation {
     const record = snapshot.data;
     this.data = {
       state: record.state,
+      revision: record.revision,
+      previousRevisions: record.previousRevisions,
       originalText: record.originalText,
       normalizedText: record.normalizedText,
       messages: record.messages,
@@ -187,10 +193,27 @@ export class BriefingConversation {
   /** The briefing the captain confirmed, if any; the execution runs the identity stage on this. */
   get confirmedBriefing(): string | undefined { return this.data.briefing; }
 
+  /**
+   * True once this execution has a briefing conversation at all.
+   *
+   * It is the line between the new flow and the legacy one, which is why it
+   * reads facts a conversation writes rather than the state: an execution whose
+   * captain never opened the chat sits at `entry` with nothing in it, exactly
+   * as a legacy execution created straight from a briefing field does, and both
+   * keep today's behaviour. Anything the captain actually did — a message, a
+   * confirmed revision, a round they closed and reopened — makes the
+   * conversation the thing that decides this execution's briefing.
+   */
+  get opened(): boolean {
+    return this.data.messages.length > 0 || this.data.confirmations.length > 0 || this.data.previousRevisions.length > 0;
+  }
+
   snapshot(): BriefingConversationSnapshot {
     return {
       runId: this.options.runId,
       state: this.data.state,
+      revision: this.data.revision,
+      previousRevisions: structuredClone(this.data.previousRevisions),
       originalText: this.data.originalText,
       normalizedText: this.data.normalizedText,
       messages: structuredClone(this.data.messages),
@@ -251,7 +274,7 @@ export class BriefingConversation {
     if (!canSendBriefingMessage(this.data.state)) throw new ConversationError(this.closedReason(), 409);
 
     if (input.action === 'cancel') {
-      this.append({ author: 'system', text: 'Conversa cancelada pelo capitão. A execução e o briefing já confirmado continuam disponíveis.', state: 'cancelled' });
+      this.append({ author: 'system', text: 'Conversa cancelada pelo capitão. Nada foi enviado ao curador e a execução continua reabrível: abra outra conversa nela quando quiser, que esta continua legível.', state: 'cancelled' });
       this.data.state = 'cancelled';
       this.data.attempt = 0;
       return await this.commit(input.idempotencyKey);
@@ -321,6 +344,59 @@ export class BriefingConversation {
       await this.options.onConfirmed?.(briefing, revision);
       return snapshot;
     });
+  }
+
+  /**
+   * Opens the next conversation round on an execution whose last one was
+   * cancelled or failed.
+   *
+   * It buys no model turn and signs nothing: the closed round is archived whole
+   * and the new one starts at `entry`, so the captain types their next message
+   * through the one message route. What the execution already carries is
+   * untouched — the confirmations it has signed, the briefing it runs on and
+   * the idempotency keys it has spent all survive, because a reopen is another
+   * round of the same execution and never a new execution.
+   */
+  async reopen(input: { idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
+    if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
+    return await this.enqueue(() => this.runReopen(input));
+  }
+
+  private async runReopen(input: { idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
+    if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
+    // The same ask every route that writes to this execution makes: a stopped
+    // execution, or one whose briefing is frozen because it already holds
+    // identity work, has nothing to gain from a round it could never close.
+    this.options.guardTurn?.({ cancelling: false });
+    if (!canReopenBriefingConversation(this.data.state)) throw new ConversationError(this.reopenRefusal(), 409);
+
+    const closed: BriefingConversationRevision = {
+      revision: this.data.revision,
+      closedAs: this.data.state,
+      closedAt: this.now().toISOString(),
+      messages: structuredClone(this.data.messages),
+      ...(this.data.summary === undefined ? {} : { summary: this.data.summary }),
+      openGaps: structuredClone(this.data.openGaps),
+      askedQuestions: structuredClone(this.data.askedQuestions),
+      questionCount: this.data.questionCount,
+      ...(this.data.error === undefined ? {} : { error: { ...this.data.error } }),
+    };
+    this.data.previousRevisions.push(closed);
+    this.data.revision += 1;
+    this.data.state = 'entry';
+    this.data.messages = [];
+    this.data.originalText = '';
+    this.data.normalizedText = '';
+    this.data.askedQuestions = [];
+    this.data.openGaps = [];
+    this.data.directions = [];
+    this.data.questionCount = 0;
+    this.data.attempt = 0;
+    this.data.fallback = false;
+    delete this.data.summary;
+    delete this.data.error;
+    this.append({ author: 'system', text: `Conversa ${closed.revision} encerrada como ${closed.closedAs === 'cancelled' ? 'cancelada' : 'falha'}; ela continua legível acima. Esta é a conversa ${this.data.revision} desta execução.`, state: 'entry' });
+    return await this.commit(input.idempotencyKey);
   }
 
   // ------------------------------------------------------- the model turn
@@ -542,9 +618,14 @@ export class BriefingConversation {
   }
 
   private closedReason(): string {
-    if (this.data.state === 'cancelled') return 'Esta conversa foi cancelada. A execução continua com o briefing com que foi criada e a etapa de identidade ainda pode ser iniciada a partir dele.';
-    if (this.data.state === 'failed') return 'Esta conversa foi encerrada em modo seguro. Edite o resumo e confirme o briefing para seguir.';
+    if (this.data.state === 'cancelled') return 'Esta conversa foi cancelada e não fechou nenhum briefing. Abra outra conversa nesta execução para seguir; esta continua legível.';
+    if (this.data.state === 'failed') return 'Esta conversa foi encerrada em modo seguro. Edite o resumo e confirme o briefing, ou abra outra conversa nesta execução.';
     return 'O briefing desta execução já foi confirmado; confirme uma nova revisão para mudá-lo.';
+  }
+
+  private reopenRefusal(): string {
+    if (this.data.state === 'final') return 'O briefing desta execução já foi confirmado; confirme uma nova revisão para mudá-lo, em vez de abrir outra conversa.';
+    return 'Esta conversa ainda está aberta; cancele-a antes de abrir outra nesta execução.';
   }
 
   private confirmRefusal(): string {

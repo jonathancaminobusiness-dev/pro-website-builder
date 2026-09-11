@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { briefingConversationConfirmPath, briefingConversationPath, IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH, type BriefingConversationSnapshot } from '@pwb/domain';
+import { briefingConversationConfirmPath, briefingConversationPath, briefingConversationReopenPath, IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH, type BriefingConversationSnapshot } from '@pwb/domain';
 import { startServer } from './index.js';
 import { STUDIO_ORIGIN } from './security.js';
 
@@ -46,6 +46,17 @@ async function createRun(origin: string, runId: string, briefing?: string): Prom
 
 async function snapshotOf(response: Response): Promise<BriefingConversationSnapshot> {
   return await response.json() as BriefingConversationSnapshot;
+}
+
+/** The four turns the fixture conversation needs to reach the editable summary a captain may sign. */
+async function driveToConfirmation(origin: string, runId: string, prefix = 'turn'): Promise<BriefingConversationSnapshot> {
+  const messages = [undefined, 'A prevenção é o centro.', 'Segurança clínica com carinho.', 'Acompanhamento é a promessa.'];
+  let snapshot!: BriefingConversationSnapshot;
+  for (const [index, message] of messages.entries()) {
+    snapshot = await snapshotOf(await post(origin, briefingConversationPath(runId), { ...(message === undefined ? {} : { message }), idempotencyKey: `${prefix}-${index}` }));
+  }
+  expect(snapshot.state).toBe('confirmation');
+  return snapshot;
 }
 
 const FIRST_TEXT = 'Somos uma clínica veterinária de bairro. Queremos cuidar de cães e gatos com prevenção, sem parecer hospital frio nem pet shop genérico.';
@@ -150,22 +161,69 @@ describe('briefing conversation API', () => {
     expect(conversation.confirmations).toHaveLength(1);
   });
 
-  it('refuses a turn the conversation would otherwise accept once the stage has started', async () => {
+  it('refuses to start the identity stage while the conversation is still open', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-em-curso', FIRST_TEXT);
     const opened = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-em-curso'), { idempotencyKey: 'turn-1' }));
     expect(opened.state).toBe('recommendation');
-    const started = await post(server.origin, '/api/identity/runs/conversa-em-curso/start', { approverRole: 'captain' });
-    expect(started.status).toBe(200);
 
-    // The conversation would take this message; only the frozen execution refuses it.
-    const refused = await post(server.origin, briefingConversationPath('conversa-em-curso'), { message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
+    const refused = await post(server.origin, '/api/identity/runs/conversa-em-curso/start', { approverRole: 'captain' });
 
-    expect(refused.status).toBe(409);
-    expect((await refused.json() as { error: string }).error).toMatch(/congelado/);
+    expect(refused.status).toBe(400);
+    expect((await refused.json() as { error: string }).error).toMatch(/ainda está aberta/);
+    // Nothing was curated and nothing was spent: the conversation is exactly
+    // where the captain left it.
     const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-em-curso')}`, { headers: { origin: STUDIO_ORIGIN } }));
     expect(conversation.state).toBe('recommendation');
     expect(conversation.messages).toHaveLength(2);
+    const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-em-curso`, { headers: { origin: STUDIO_ORIGIN } })).json() as { directions: unknown[]; status: string };
+    expect(run.directions).toEqual([]);
+    expect(run.status).toBe('queued');
+  });
+
+  it('opens the next conversation on an execution a cancel left reopenable, and starts on what it signs', async () => {
+    const server = await conversationServer();
+    await createRun(server.origin, 'conversa-reaberta', FIRST_TEXT);
+    await driveToConfirmation(server.origin, 'conversa-reaberta');
+    const cancelled = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-reaberta'), { action: 'cancel', idempotencyKey: 'cancel-1' }));
+    expect(cancelled.state).toBe('cancelled');
+    // A cancelled conversation signed nothing, so the stage has nothing to run.
+    const refused = await post(server.origin, '/api/identity/runs/conversa-reaberta/start', { approverRole: 'captain' });
+    expect(refused.status).toBe(400);
+    expect((await refused.json() as { error: string }).error).toMatch(/foi cancelada/);
+
+    const reopened = await post(server.origin, briefingConversationReopenPath('conversa-reaberta'), { idempotencyKey: 'reopen-1' });
+
+    expect(reopened.status).toBe(200);
+    const next = await snapshotOf(reopened);
+    expect(next.state).toBe('entry');
+    expect(next.revision).toBe(2);
+    // The execution was never deleted and the round it closed is still readable.
+    expect(next.previousRevisions[0]?.closedAs).toBe('cancelled');
+    expect(next.previousRevisions[0]?.messages).toEqual(cancelled.messages);
+
+    await driveToConfirmation(server.origin, 'conversa-reaberta', 'again');
+    await post(server.origin, briefingConversationConfirmPath('conversa-reaberta'), { briefing: 'Segunda conversa: clínica de bairro preventiva, com acompanhamento contínuo.', idempotencyKey: 'confirm-1' });
+    const started = await post(server.origin, '/api/identity/runs/conversa-reaberta/start', { approverRole: 'captain' });
+
+    expect(started.status).toBe(200);
+    expect((await started.json() as { briefing: string }).briefing).toBe('Segunda conversa: clínica de bairro preventiva, com acompanhamento contínuo.');
+  });
+
+  it('refuses a reopen of a conversation that is still open, and one without an idempotency key', async () => {
+    const server = await conversationServer();
+    await createRun(server.origin, 'conversa-aberta-demais', FIRST_TEXT);
+    await post(server.origin, briefingConversationPath('conversa-aberta-demais'), { idempotencyKey: 'turn-1' });
+
+    const open = await post(server.origin, briefingConversationReopenPath('conversa-aberta-demais'), { idempotencyKey: 'reopen-1' });
+    const keyless = await post(server.origin, briefingConversationReopenPath('conversa-aberta-demais'), {});
+
+    expect(open.status).toBe(409);
+    expect((await open.json() as { error: string }).error).toMatch(/ainda está aberta/);
+    expect(keyless.status).toBe(400);
+    const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-aberta-demais')}`, { headers: { origin: STUDIO_ORIGIN } }));
+    expect(conversation.revision).toBe(1);
+    expect(conversation.previousRevisions).toEqual([]);
   });
 
   it('never duplicates a turn when the same idempotency key is retried', async () => {
