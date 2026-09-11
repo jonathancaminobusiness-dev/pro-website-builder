@@ -53,20 +53,25 @@ function samePublication(one: ReleasePublication, other: ReleasePublication): bo
     && one.acceptedEscalations.length === other.acceptedEscalations.length && one.acceptedEscalations.every((escalation, index) => escalation === other.acceptedEscalations[index]);
 }
 
-/**
- * Records one publication, or leaves the record alone when it already holds
- * exactly this one. Appending is how a publish writes the acceptance it owes,
- * and that write is retried until it lands, so the same publication arriving
- * twice is one publication that was recorded late — not a second one. Two
- * publications that differ in anything an auditor reads — the documents, the
- * approver, what they accepted — are distinct entries, as republishing the same
- * bytes from another run stays distinct.
- */
 export async function appendReleasePublication(rootDir: string, entry: ReleasePublication): Promise<ReleasePublication[]> {
   await mkdir(rootDir, { recursive: true });
+  const publications = [...await readReleasePublications(rootDir, entry.digest), entry];
+  await writeFile(recordPath(rootDir, entry.digest), `${JSON.stringify(publications, null, 2)}\n`, 'utf8');
+  return publications;
+}
+
+/**
+ * Takes one publication back out of the record: the acceptance it belongs to
+ * did not commit, so it describes a publication that never happened. Only the
+ * entry this publish appended is dropped — the last one that matches it — so
+ * the record is left exactly as the publish found it, and a retry appends once
+ * instead of doubling what an auditor counts.
+ */
+export async function removeReleasePublication(rootDir: string, entry: ReleasePublication): Promise<ReleasePublication[]> {
   const recorded = await readReleasePublications(rootDir, entry.digest);
-  if (recorded.some((publication) => samePublication(publication, entry))) return recorded;
-  const publications = [...recorded, entry];
+  const last = recorded.map((publication) => samePublication(publication, entry)).lastIndexOf(true);
+  if (last < 0) return recorded;
+  const publications = recorded.filter((_, index) => index !== last);
   await writeFile(recordPath(rootDir, entry.digest), `${JSON.stringify(publications, null, 2)}\n`, 'utf8');
   return publications;
 }

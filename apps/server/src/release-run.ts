@@ -1,7 +1,7 @@
 import { rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
-import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ReleasePublication, type ServedFace } from '@pwb/export';
+import { appendReleasePublication, loadFontSources, ReleaseVetoError, removeReleasePublication, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ReleasePublication, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
 import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
@@ -42,8 +42,20 @@ export interface ReleaseContext {
   applier: Applier;
   adopt(version: VersionRecord): Promise<void>;
   record(type: string, payload: Record<string, unknown>): Promise<void>;
-  /** Publishing the bundle is what closes the finalization gate; there is no second approval. */
-  approveFinalization(approverRole: ReleaseApprover, rationale: string, manifest: ReleaseManifest): Promise<void>;
+  /**
+   * Publishing the bundle is what closes the finalization gate; there is no
+   * second approval. The publication belongs to that acceptance: the record is
+   * written and its event logged inside it, before it commits, so an acceptance
+   * that does not commit leaves no publication and a publication that cannot be
+   * written leaves no acceptance.
+   */
+  approveFinalization(approverRole: ReleaseApprover, rationale: string, manifest: ReleaseManifest, publication: PublicationCommit): Promise<void>;
+}
+
+/** The publication an acceptance carries: the record to write, and the event that says so. */
+export interface PublicationCommit {
+  write(): Promise<void>;
+  event: { type: string; payload: Record<string, unknown> };
 }
 
 /**
@@ -83,12 +95,7 @@ export interface ReleaseSnapshot {
   refinedFromVersionId: string;
   report: ReleaseGateReport;
   catalog: typeof VETO_CATALOG;
-  /**
-   * The bundle this run published. `recordPending` says the bytes and the
-   * acceptance are both durable but the publication record beside them is not
-   * yet written, so the release is published and its provenance is owed.
-   */
-  published?: { directory: string; digest: string; recordPending?: true };
+  published?: { directory: string; digest: string };
 }
 
 function providers(name: ModelProviderName): { critic: ReleaseCriticProvider; refiner: ReleaseRefinerProvider; summarizer: ReleaseSummarizerProvider } {
@@ -118,7 +125,6 @@ export class ReleaseRun {
   private compiled: CompiledSite | undefined;
   private context: ReleaseContext | undefined;
   private preparing = false;
-  private pendingPublication: { entry: ReleasePublication; directory: string; versionId: string; escalations: string[] } | undefined;
 
   constructor(private readonly runId: string, private readonly options: ReleaseRunOptions) {}
 
@@ -200,50 +206,38 @@ export class ReleaseRun {
       throw new ReleasePublishRefusedError(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
     // A bundle on disk is a published release, so it never outlives the
-    // acceptance of it: the bytes are written first and the gate is approved in
-    // one commit, and a publish that dies before that commit takes its bytes
-    // with it rather than leaving them behind with the run still needing
-    // review. A bundle that was already there — the same bytes published before
+    // acceptance of it. The bytes are written first, and then one acceptance
+    // carries everything else: the approval and its events, the publication
+    // record and the event that says the release published, all landing
+    // together or not at all. Whatever a failed publish wrote — the record
+    // entry, the bundle — is taken back with it, so the retry starts from the
+    // state the captain last saw and can never record the same publication
+    // twice. A bundle that was already there — the same bytes published before
     // — is never touched: its own record is what stands for it.
     const directory = join(this.options.releaseRoot, current.digest);
     const preexisting = await stat(directory).then(() => true, () => false);
     const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot);
+    const entry: ReleasePublication = {
+      digest: manifest.digest,
+      approvedVersionId: current.report.approvedVersionId,
+      releasedVersionId: current.versionId,
+      irHash: current.report.irHash,
+      approverRole,
+      rationale: reason,
+      acceptedEscalations: escalations,
+    };
+    let recorded = false;
     try {
-      await this.context.approveFinalization(approverRole, reason, manifest);
+      await this.context.approveFinalization(approverRole, reason, manifest, {
+        write: async () => { await appendReleasePublication(this.options.releaseRoot, entry); recorded = true; },
+        event: { type: 'release.published', payload: { digest: manifest.digest, versionId: current.versionId, approverRole, rationale: reason, escalations } },
+      });
     } catch (error) {
+      if (recorded) await removeReleasePublication(this.options.releaseRoot, entry).catch(() => undefined);
       if (!preexisting) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
-    // Past the commit the release is published, so nothing is removed again.
-    // The record of who accepted it is written last and is owed until it lands:
-    // publishing this digest again writes it, and appending it twice is not a
-    // second publication.
-    this.pendingPublication = {
-      directory,
-      versionId: current.versionId,
-      escalations,
-      entry: {
-        digest: manifest.digest,
-        approvedVersionId: current.report.approvedVersionId,
-        releasedVersionId: current.versionId,
-        irHash: current.report.irHash,
-        approverRole,
-        rationale: reason,
-        acceptedEscalations: escalations,
-      },
-    };
-    this.snapshotValue = { ...current, published: { directory, digest: manifest.digest, recordPending: true } };
-    await this.recordPublication();
+    this.snapshotValue = { ...current, published: { directory, digest: manifest.digest } };
     return manifest;
-  }
-
-  /** Writes the publication record a published bundle is still owed, if any. */
-  async recordPublication(): Promise<void> {
-    const pending = this.pendingPublication;
-    if (!pending || !this.context || !this.snapshotValue) return;
-    await appendReleasePublication(this.options.releaseRoot, pending.entry);
-    await this.context.record('release.published', { digest: pending.entry.digest, versionId: pending.versionId, approverRole: pending.entry.approverRole, rationale: pending.entry.rationale, escalations: pending.escalations });
-    this.pendingPublication = undefined;
-    this.snapshotValue = { ...this.snapshotValue, published: { directory: pending.directory, digest: pending.entry.digest } };
   }
 }
