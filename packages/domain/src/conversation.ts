@@ -192,7 +192,7 @@ function normalizeForEcho(text: string): string {
  * one token, or a captain would be told they invented their own words.
  */
 function echoedToken(match: string): string {
-  return normalizeForEcho(match).trim().replace(/^[;{(\[]+/, '').replace(/[.,;:!?)\]}'"]+$/, '').trim();
+  return normalizeForEcho(match).trim().replace(/^[;{]+/, '').replace(/[.,;:!?)\]}'"]+$/, '').trim();
 }
 
 function tokensOf(pattern: RegExp, text: string): string[] {

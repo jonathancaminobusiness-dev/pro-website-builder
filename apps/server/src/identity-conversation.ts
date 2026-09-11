@@ -627,6 +627,7 @@ export class BriefingConversation {
 
   private reopenRefusal(): string {
     if (this.data.state === 'final') return 'O briefing desta execução já foi confirmado; confirme uma nova revisão para mudá-lo, em vez de abrir outra conversa.';
+    if (this.data.messages.length === 0) return 'Esta conversa ainda está vazia, então não há nada para reabrir: escreva nela quando quiser começar.';
     return 'Esta conversa ainda está aberta; cancele-a antes de abrir outra nesta execução.';
   }
 

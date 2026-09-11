@@ -287,6 +287,21 @@ describe('briefing conversation state machine', () => {
     expect(conversation.snapshot().revision).toBe(1);
   });
 
+  it('tells a captain reopening an empty conversation that there is nothing to reopen, even after a cancel', async () => {
+    const { conversation } = harness([succeeded(RECOMMENDATION)]);
+
+    await expect(conversation.reopen({ idempotencyKey: nextKey() })).rejects.toThrow(/nada para reabrir/);
+    // Cancelling an untouched conversation is a no-op, so the advice to cancel
+    // first would send the captain in a circle; the round they already have is
+    // the empty one they can write in.
+    await conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    await expect(conversation.reopen({ idempotencyKey: nextKey() })).rejects.toThrow(/nada para reabrir/);
+
+    const opened = await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    expect(opened.state).toBe('recommendation');
+    expect(conversation.snapshot().revision).toBe(1);
+  });
+
   it('opens exactly one new conversation when the same reopen key is retried', async () => {
     const { conversation } = harness([succeeded(RECOMMENDATION)]);
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
