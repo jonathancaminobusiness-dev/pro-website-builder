@@ -507,14 +507,14 @@ describe('phase 0 fixture run', () => {
     const dbPath = join(dir, 'gate3.sqlite');
     const releaseRoot = join(dir, 'releases');
     const first = openDatabase(dbPath);
-    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    const original = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(first), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
     await original.initialize('run-gate3-restart');
     await original.runNext();
     await original.approve('identity', 'captain');
     first.sqlite.close();
 
     const second = openDatabase(dbPath);
-    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    const restored = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(second), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
     expect(await restored.restore('run-gate3-restart')).toBe(true);
     expect(restored.releaseEnabled()).toBe(true);
 
@@ -534,15 +534,15 @@ describe('phase 0 fixture run', () => {
     const dbPath = join(dir, 'sibling.sqlite');
     const first = openDatabase(dbPath);
     const repository = new ProjectRepository(first);
-    const older = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const older = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     await older.initialize('run-older');
     await older.runNext();
-    const fresh = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const fresh = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     await fresh.initialize('run-fresh');
     first.sqlite.close();
 
     const second = openDatabase(dbPath);
-    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const restored = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     expect(await restored.restore('run-fresh')).toBe(true);
     expect(restored.snapshot().discardedStage).toBeUndefined();
     second.sqlite.close();
@@ -552,14 +552,14 @@ describe('phase 0 fixture run', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-rejected-'));
     const dbPath = join(dir, 'rejected.sqlite');
     const first = openDatabase(dbPath);
-    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const original = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     await original.initialize('run-rejected');
     await original.runNext();
     await original.reject('identity', 'captain');
     first.sqlite.close();
 
     const second = openDatabase(dbPath);
-    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const restored = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     expect(await restored.restore('run-rejected')).toBe(true);
     expect(restored.snapshot().discardedStage).toBeUndefined();
 
@@ -567,7 +567,7 @@ describe('phase 0 fixture run', () => {
     await restored.runNext();
     second.sqlite.close();
     const third = openDatabase(dbPath);
-    const again = new FixtureRun({ repository: new ProjectRepository(third), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const again = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(third), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     expect(await again.restore('run-rejected')).toBe(true);
     expect(again.snapshot().discardedStage).toBe('identity');
     third.sqlite.close();
@@ -586,13 +586,13 @@ describe('phase 0 fixture run', () => {
       },
     };
     const first = openDatabase(dbPath);
-    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    const original = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: varying });
     await original.initialize('run-stale');
     const abandoned = (await original.runNext()).currentVersion.id;
     first.sqlite.close();
 
     const second = openDatabase(dbPath);
-    const resumed = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    const resumed = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: varying });
     expect(await resumed.restore('run-stale')).toBe(true);
     expect(resumed.snapshot().discardedStage).toBe('identity');
     expect((await resumed.runNext()).currentVersion.id).not.toBe(abandoned);
@@ -600,7 +600,7 @@ describe('phase 0 fixture run', () => {
     second.sqlite.close();
 
     const third = openDatabase(dbPath);
-    const again = new FixtureRun({ repository: new ProjectRepository(third), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    const again = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(third), release: releaseOptions(join(dir, 'exports')), provider: varying });
     expect(await again.restore('run-stale')).toBe(true);
     const after = again.snapshot();
     expect(after.approvals.filter((entry) => entry.decision === 'approved')).toHaveLength(1);
@@ -613,7 +613,7 @@ describe('phase 0 fixture run', () => {
     const dbPath = join(dir, 'finalization.sqlite');
     const releaseRoot = join(dir, 'releases');
     const first = openDatabase(dbPath);
-    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    const original = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(first), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
     await original.initialize('run-finalization');
     await atFinalizationGate(original);
     await completeEvidence(original, join(releaseRoot, '..', 'evidence'));
@@ -633,7 +633,7 @@ describe('phase 0 fixture run', () => {
     first.sqlite.close();
 
     const second = openDatabase(dbPath);
-    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    const restored = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(second), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
     expect(await restored.restore('run-finalization')).toBe(true);
     expect(restored.snapshot().discardedStage).toBeUndefined();
     second.sqlite.close();

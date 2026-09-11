@@ -24,7 +24,7 @@ test.describe('pipeline run memory', () => {
     await page.reload();
 
     // No new run is created: the screen re-read the one it remembered.
-    await expect(page.getByRole('button', { name: 'Reiniciar briefing' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Novo briefing' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Aprovar gate' })).toBeVisible();
     await expect(page.locator('.stage-row.active')).toHaveCount(1);
     await expect(preview.first()).toHaveJSProperty('src', before);

@@ -101,7 +101,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-discarded-'));
     const dbPath = join(dir, 'discarded.sqlite');
     const first = openDatabase(dbPath);
-    const seeded = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const seeded = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     await seeded.initialize('pending-run');
     expect((await seeded.runNext()).status).toBe('needs_review');
     first.sqlite.close();
@@ -111,8 +111,8 @@ describe('local API', () => {
     const runs = new Map<string, FixtureRun>();
     const server = createApiServer({
       runs,
-      createRun: async (id) => { const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
-      loadRun: async (id) => { const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); if (!await run.restore(id)) return undefined; runs.set(id, run); return run; },
+      createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
+      loadRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); if (!await run.restore(id)) return undefined; runs.set(id, run); return run; },
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
