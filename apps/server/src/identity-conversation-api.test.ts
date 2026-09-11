@@ -112,13 +112,14 @@ describe('briefing conversation API', () => {
     await post(server.origin, briefingConversationPath('conversa-briefing'), { message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
 
     await post(server.origin, briefingConversationConfirmPath('conversa-briefing'), { briefing: 'Clínica de bairro preventiva, com autoridade clínica e proximidade cotidiana.', idempotencyKey: 'confirm-1' });
-    const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-briefing`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string; conversation?: BriefingConversationSnapshot };
+    const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-briefing`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string };
+    const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-briefing')}`, { headers: { origin: STUDIO_ORIGIN } }));
 
     // The execution carries exactly the text the captain signed; the gaps the
     // fixture leaves open travel beside it, in the confirmation record.
     expect(run.briefing).toBe('Clínica de bairro preventiva, com autoridade clínica e proximidade cotidiana.');
-    expect(run.conversation?.confirmations[0]?.openGaps.length).toBeGreaterThan(0);
-    expect(run.conversation?.state).toBe('final');
+    expect(conversation.confirmations[0]?.openGaps.length).toBeGreaterThan(0);
+    expect(conversation.state).toBe('final');
   });
 
   it('never duplicates a turn when the same idempotency key is retried', async () => {
@@ -179,10 +180,12 @@ describe('briefing conversation API', () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-legada');
 
-    const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-legada`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string; conversation?: BriefingConversationSnapshot };
+    const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-legada`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string };
+    const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-legada')}`, { headers: { origin: STUDIO_ORIGIN } }));
 
     expect(run.briefing).toBe(IDENTITY_BRIEFING);
-    expect(run.conversation).toBeUndefined();
+    expect(conversation.state).toBe('entry');
+    expect(conversation.messages).toEqual([]);
   });
 
   it('generates no preview and no version while the conversation runs', async () => {
@@ -194,13 +197,14 @@ describe('briefing conversation API', () => {
     await post(server.origin, briefingConversationPath('conversa-sem-preview'), { message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
     await post(server.origin, briefingConversationConfirmPath('conversa-sem-preview'), { briefing: 'Clínica de bairro preventiva.', idempotencyKey: 'confirm-1' });
 
-    const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-sem-preview`, { headers: { origin: STUDIO_ORIGIN } })).json() as { status: string; directions: unknown[]; previewVersionId?: string; gate: { state: string }; conversation?: BriefingConversationSnapshot };
+    const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-sem-preview`, { headers: { origin: STUDIO_ORIGIN } })).json() as { status: string; directions: unknown[]; previewVersionId?: string; gate: { state: string } };
+    const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-sem-preview')}`, { headers: { origin: STUDIO_ORIGIN } }));
 
     expect(run.status).toBe('queued');
     expect(run.directions).toEqual([]);
     expect(run.previewVersionId).toBeUndefined();
     expect(run.gate.state).toBe('open');
-    expect(run.conversation?.directions).toHaveLength(3);
+    expect(conversation.directions).toHaveLength(3);
   });
 });
 

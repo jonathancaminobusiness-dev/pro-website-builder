@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createFixtureIR, flattenTokens, type Approval, type BriefingConversationSnapshot, type TokenValue } from '@pwb/domain';
+import { createFixtureIR, flattenTokens, type Approval, type TokenValue } from '@pwb/domain';
 import { Applier, DEFAULT_MAX_ACTIVE_CLAUDE, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
@@ -87,8 +87,6 @@ export interface IdentityRunSnapshot {
   status: IdentityRunStatus;
   baseVersionId: string;
   briefing: string;
-  /** The briefing conversation of this execution, if one was ever started on it. */
-  conversation?: BriefingConversationSnapshot;
   brief?: IdentityStageResult['brief'];
   directions: IdentityDirectionView[];
   divergence?: { passed: boolean; blockedPairs: string[]; pairs: Array<{ a: string; b: string; distinctAxes: string[]; hueOnlyColor: boolean }> };
@@ -128,7 +126,6 @@ export class IdentityRun {
   private abort: AbortController | undefined;
   private briefing: string;
   private readonly conversationRun: BriefingConversation;
-  private conversationStarted = false;
   private readonly deadlines: IdentityStageDeadlines;
 
   constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
@@ -136,7 +133,7 @@ export class IdentityRun {
     this.conversationRun = new BriefingConversation({
       runId: options.runId,
       provider: options.provider,
-      persist: async (snapshot) => { this.conversationStarted = true; await options.repository.saveConversation(options.runId, JSON.stringify(snapshot)); },
+      persist: async (snapshot) => { await options.repository.saveConversation(options.runId, JSON.stringify(snapshot)); },
       // The conversation produces the execution's briefing, so a confirmation
       // moves the run onto it. A stage that has already run keeps the briefing
       // it ran with: the revision is recorded, not applied retroactively.
@@ -194,7 +191,6 @@ export class IdentityRun {
     // The conversation is rebuilt from the execution before anything else reads
     // it, so a restarted server serves the same transcript, state and summary.
     this.conversationRun.restore(run.conversation);
-    this.conversationStarted = run.conversation !== undefined;
     this.stage = this.newStage();
     for (const version of await this.options.repository.listVersions(run.projectId)) {
       if (this.store.get(version.id)) continue;
@@ -414,7 +410,6 @@ export class IdentityRun {
       status: this.status,
       baseVersionId: this.root.id,
       briefing: this.briefing,
-      ...(this.conversationStarted ? { conversation: this.conversationRun.snapshot() } : {}),
       ...(this.result ? { brief: this.result.brief } : {}),
       directions: this.result ? this.result.candidates.map((candidate) => this.viewOf(candidate, decided === candidate.directionId ? this.store.get(this.stage.approvedVersionId!) : undefined)) : [],
       ...(this.result ? { divergence: { passed: this.result.divergence.passed, blockedPairs: this.result.divergence.blockedPairs, pairs: this.result.divergence.pairs.map((pair) => ({ a: pair.a, b: pair.b, distinctAxes: pair.distinctAxes, hueOnlyColor: pair.hueOnlyColor })) } } : {}),

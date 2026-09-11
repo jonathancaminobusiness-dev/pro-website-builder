@@ -44,7 +44,7 @@ function succeeded(artifact: Record<string, unknown>): AgentResult {
   return { taskId: 'identity-briefing-conversation-1', status: 'succeeded', summary: 'ok', artifact };
 }
 
-function harness(answers: Answer[], options: { maxQuestions?: number; initialText?: () => string | undefined; persist?: (snapshot: BriefingConversationSnapshot) => Promise<void> } = {}): Harness {
+function harness(answers: Answer[], options: { maxQuestions?: number; initialText?: () => string | undefined; persist?: (snapshot: BriefingConversationSnapshot) => Promise<void>; onConfirmed?: (briefing: string, revision: number) => void } = {}): Harness {
   const tasks: AgentTask[] = [];
   const persisted: BriefingConversationSnapshot[] = [];
   const provider: ModelProvider = {
@@ -63,12 +63,18 @@ function harness(answers: Answer[], options: { maxQuestions?: number; initialTex
     newId: (() => { let n = 0; return () => `msg-${(n += 1)}`; })(),
     ...(options.maxQuestions === undefined ? {} : { maxQuestions: options.maxQuestions }),
     ...(options.initialText === undefined ? {} : { initialText: options.initialText }),
+    ...(options.onConfirmed === undefined ? {} : { onConfirmed: options.onConfirmed }),
   });
   return { conversation, tasks, persisted };
 }
 
 let key = 0;
 const nextKey = (): string => `key-${(key += 1)}`;
+
+/** The moves one emitted prompt tells the model it may ask for; the prompt is the generated interface the turn delivers. */
+function advertisedMoves(brief: string): string[] {
+  return /pode pedir é: (.+)\./.exec(brief)?.[1]?.split(', ') ?? [];
+}
 
 describe('briefing conversation state machine', () => {
   it('opens on the captain text, normalizes its edges and answers with a first reading', async () => {
@@ -159,11 +165,42 @@ describe('briefing conversation state machine', () => {
 
     const adjusted = await conversation.send({ message: 'Não é bem isso: o centro é a prevenção.', action: 'correct', idempotencyKey: nextKey() });
 
-    const advertised = /pode pedir é: (.+)\./.exec(tasks[1]!.brief)?.[1]?.split(', ') ?? [];
-    expect(advertised).toEqual(briefingTurnNextStates('confirmation', false));
+    const advertised = advertisedMoves(tasks[1]!.brief);
+    expect(advertised).toEqual(briefingTurnNextStates('confirmation', { closing: false, mustConclude: false }));
     expect(advertised).not.toContain('final');
     expect(adjusted.state).toBe('question');
     expect(tasks).toHaveLength(2);
+  });
+
+  it('revises the summary when the captain corrects it after the question cap, instead of falling into safe mode', async () => {
+    const revised = turn({ intent: 'confirmation', nextState: 'confirmation', message: 'Corrigido.', summary: 'Clínica de bairro preventiva, com a prevenção no centro.' });
+    const { conversation, tasks } = harness([succeeded(RECOMMENDATION), succeeded(QUESTION), succeeded(CONFIRMATION), succeeded(revised)], { maxQuestions: 1 });
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    await conversation.send({ message: 'Prevenção é o centro.', action: 'answer', idempotencyKey: nextKey() });
+    const offered = await conversation.send({ message: 'Segurança clínica sem perder o carinho.', action: 'answer', idempotencyKey: nextKey() });
+    expect(offered.state).toBe('confirmation');
+    expect(offered.limitReached).toBe(true);
+
+    const adjusted = await conversation.send({ message: 'Não é bem isso: o centro é a prevenção.', action: 'correct', idempotencyKey: nextKey() });
+
+    expect(adjusted.state).toBe('confirmation');
+    expect(adjusted.fallback).toBe(false);
+    expect(adjusted.summary).toBe('Clínica de bairro preventiva, com a prevenção no centro.');
+    expect(tasks).toHaveLength(4);
+    expect(advertisedMoves(tasks[3]!.brief)).toEqual(['confirmation']);
+  });
+
+  it('never advertises another question from the question state, where the validator refuses one', async () => {
+    const { conversation, tasks } = harness([succeeded(RECOMMENDATION), succeeded(QUESTION), succeeded(RECOMMENDATION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    await conversation.send({ message: 'Prevenção é o centro.', action: 'answer', idempotencyKey: nextKey() });
+
+    const answered = await conversation.send({ message: 'Segurança clínica sem perder o carinho.', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(advertisedMoves(tasks[2]!.brief)).toEqual(briefingTurnNextStates('question', { closing: false, mustConclude: false }));
+    expect(advertisedMoves(tasks[2]!.brief)).not.toContain('question');
+    expect(answered.state).toBe('recommendation');
+    expect(answered.fallback).toBe(false);
   });
 
   it('cancels without touching the execution or a briefing already confirmed', async () => {
@@ -489,6 +526,34 @@ describe('briefing conversation durability', () => {
     expect(recovered.messages).toHaveLength(2);
     expect(persisted).toHaveLength(1);
     expect(tasks).toHaveLength(2);
+  });
+
+  it('moves the execution briefing only after the conversation is written, never before', async () => {
+    const confirmed: Array<{ briefing: string; revision: number }> = [];
+    const { conversation } = harness([succeeded(CONFIRMATION), succeeded(FINAL)], {
+      persist: async (snapshot) => { if (snapshot.confirmations.length > 0) throw new Error('SQLITE_BUSY'); },
+      onConfirmed: (briefing, revision) => { confirmed.push({ briefing, revision }); },
+    });
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    await expect(conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: nextKey() })).rejects.toThrow(/SQLITE_BUSY/);
+
+    expect(confirmed).toEqual([]);
+    expect(conversation.state).toBe('confirmation');
+    expect(conversation.confirmedBriefing).toBeUndefined();
+    expect(conversation.snapshot().confirmations).toEqual([]);
+  });
+
+  it('keeps the turn the execution already recorded when the briefing write fails afterwards', async () => {
+    const { conversation, persisted } = harness([succeeded(CONFIRMATION), succeeded(FINAL)], {
+      onConfirmed: () => { throw new Error('updateRunBriefing falhou'); },
+    });
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    await expect(conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: nextKey() })).rejects.toThrow(/updateRunBriefing/);
+
+    expect(conversation.state).toBe('final');
+    expect(conversation.snapshot()).toEqual(persisted.at(-1));
   });
 
   it('offers a safe-mode summary the captain can confirm, even from an entry text that fills the briefing limit', async () => {
