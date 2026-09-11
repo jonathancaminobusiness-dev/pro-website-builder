@@ -838,13 +838,12 @@ describe('briefing conversation contract', () => {
     for (const state of ['entry', 'recommendation', 'question', 'confirmation'] as const) expect(canSendBriefingMessage(state)).toBe(true);
     for (const state of ['final', 'cancelled', 'failed'] as const) expect(canSendBriefingMessage(state)).toBe(false);
     expect(BRIEFING_CONVERSATION_TRANSITIONS.cancelled).toEqual([]);
-    expect(canBriefingConversationTransition('question', 'recommendation')).toBe(true);
-    expect(canBriefingConversationTransition('confirmation', 'question')).toBe(true);
+    expect(canBriefingConversationTransition('question', 'recommendation', { mustConclude: false })).toBe(true);
+    expect(canBriefingConversationTransition('confirmation', 'question', { mustConclude: false })).toBe(true);
     // A summary answers a corrected summary only where the machine has nothing
     // else to offer: below the cap the correction path is a question, at the
     // cap it is another summary — and the predicate says so in the same context
     // the engine decides it, so the two can never disagree.
-    expect(canBriefingConversationTransition('confirmation', 'confirmation')).toBe(false);
     expect(canBriefingConversationTransition('confirmation', 'confirmation', { mustConclude: false })).toBe(false);
     expect(canBriefingConversationTransition('confirmation', 'confirmation', { mustConclude: true })).toBe(true);
     for (const state of BRIEFING_CONVERSATION_STATES) {
@@ -856,8 +855,8 @@ describe('briefing conversation contract', () => {
     }
     expect(briefingTurnNextStates('confirmation', { closing: false, mustConclude: false })).toEqual(['question']);
     expect(briefingTurnNextStates('confirmation', { closing: false, mustConclude: true })).toEqual(['confirmation']);
-    expect(canBriefingConversationTransition('final', 'question')).toBe(false);
-    expect(canBriefingConversationTransition('final', 'final')).toBe(true);
+    expect(canBriefingConversationTransition('final', 'question', { mustConclude: false })).toBe(false);
+    expect(canBriefingConversationTransition('final', 'final', { mustConclude: false })).toBe(true);
     expect(BRIEFING_CONVERSATION_MAX_QUESTIONS).toBe(6);
     // Reopening is not a transition: it is the next round, and only the two
     // states that closed one without signing a briefing may open it.

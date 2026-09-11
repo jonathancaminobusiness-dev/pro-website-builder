@@ -55,9 +55,11 @@ export const BRIEFING_CONVERSATION_TRANSITIONS: Readonly<Record<BriefingConversa
  * move it does not carry becomes legal — a corrected summary is answered with
  * another summary, because asking is no longer available — so the predicate
  * takes the same `mustConclude` the turn does and the Studio validating a
- * snapshot can never refuse a state the server legitimately produced.
+ * snapshot can never refuse a state the server legitimately produced. The
+ * context has no default, because a caller that forgets it would be answered
+ * "below the cap" — the one disagreement this parameter exists to remove.
  */
-export function canBriefingConversationTransition(from: BriefingConversationState, to: BriefingConversationState, context: { mustConclude: boolean } = { mustConclude: false }): boolean {
+export function canBriefingConversationTransition(from: BriefingConversationState, to: BriefingConversationState, context: { mustConclude: boolean }): boolean {
   if (from === 'confirmation' && to === 'confirmation') return context.mustConclude;
   return BRIEFING_CONVERSATION_TRANSITIONS[from].includes(to);
 }
