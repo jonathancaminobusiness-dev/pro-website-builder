@@ -37,6 +37,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // second instance would decide Gate 1 from a ledger the first has already
   // moved on from.
   const identityLoading = new Map<string, Promise<IdentityRun | undefined>>();
+  const fixtureLoading = new Map<string, Promise<FixtureRun | undefined>>();
   const newIdentityRun = (id: string, briefing?: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir, ...(briefing !== undefined ? { briefing } : {}), ...(identityDeadlines ? { deadlines: identityDeadlines } : {}) });
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
@@ -93,10 +94,16 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     loadRun: async (id) => {
       const existing = runs.get(id);
       if (existing) return existing;
-      const run = new FixtureRun({ repository, provider, release });
-      if (!await run.restore(id)) return undefined;
-      runs.set(id, run);
-      return run;
+      const inFlight = fixtureLoading.get(id);
+      if (inFlight) return inFlight;
+      const loading = (async () => {
+        const run = new FixtureRun({ repository, provider, release });
+        if (!await run.restore(id)) return undefined;
+        runs.set(id, run);
+        return run;
+      })();
+      fixtureLoading.set(id, loading);
+      try { return await loading; } finally { fixtureLoading.delete(id); }
     },
     identity: {
       runs: identityRuns,

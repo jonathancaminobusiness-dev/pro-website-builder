@@ -7,6 +7,7 @@ import { FakeModelProvider } from '@pwb/providers';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
+import { startServer } from './index.js';
 
 const studio = { origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' };
 
@@ -190,5 +191,36 @@ describe('local API', () => {
     expect((await fetch(`${origin}/api/runs/prepare-race/release`, { method: 'POST', headers: studio })).status).toBe(200);
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     db.sqlite.close();
+  });
+  it('builds one run when two cold requests advance it at once after a restart', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-cold-stage-'));
+    const dbPath = join(dir, 'cold.sqlite');
+    const releaseRoot = join(dir, 'releases');
+    const seedDb = openDatabase(dbPath);
+    const seeded = new FixtureRun({ repository: new ProjectRepository(seedDb), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await seeded.initialize('cold-staged');
+    await seeded.runNext();
+    await seeded.approve('identity', 'captain');
+    seedDb.sqlite.close();
+
+    const server = await startServer({ dbPath, releaseRoot, evidenceDir: join(dir, 'evidence'), renderCacheDir: join(dir, 'cache'), apiPort: 0, previewPort: 0, modelProvider: 'fake' });
+    const address = server.api.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    try {
+      // Nothing is cached yet, so both requests would each restore their own run
+      // object; two of them would each stage the run from a ledger the other has
+      // already moved on from, and the later write would hide the other's work —
+      // including the release the captain then prepares and publishes.
+      const answers = await Promise.all([
+        fetch(`${origin}/api/runs/cold-staged/stage`, { method: 'POST', headers: studio }),
+        fetch(`${origin}/api/runs/cold-staged/stage`, { method: 'POST', headers: studio }),
+      ]);
+      expect(answers.map((answer) => answer.status)).toEqual([200, 200]);
+      const staged = await Promise.all(answers.map(async (answer) => ((await answer.json()) as { currentVersion: { id: string } }).currentVersion.id));
+      expect(new Set(staged).size).toBe(1);
+      const read = (await (await fetch(`${origin}/api/runs/cold-staged`)).json()) as { currentVersion: { id: string }; approvals: unknown[] };
+      expect(read.currentVersion.id).toBe(staged[0]);
+      expect(read.approvals).toHaveLength(1);
+    } finally { await server.close(); }
   });
 });
