@@ -93,20 +93,22 @@ corepack pnpm --filter @pwb/studio dev
 
 The server command builds its workspace dependencies before starting, so it also
 works immediately after `corepack pnpm install`, when package `dist/` folders do
-not exist yet. That build runs before the process listens: wait for the
-`pro-website-builder server listening on http://127.0.0.1:4310` line — on a cold
-checkout it is about forty seconds — before asking the Studio for anything.
+not exist yet. That build runs before the process listens — on a cold checkout
+it is about forty seconds — so the two commands can be started in either order:
+a Studio that opens first says `Aguardando o servidor em <origem>…` and reads
+the run it remembers as soon as the API answers, without a reload or a click.
+The wait is bounded; past its ceiling the screen names the cause it measured.
 
 Open the Studio at `http://127.0.0.1:5173`, not at `http://localhost:5173`. The
 server accepts exactly one Studio origin (`PWB_STUDIO_ORIGIN`, default
 `http://127.0.0.1:5173`), and `localhost` is a different origin to a browser, so
-every request from it is refused by the origin check. Both failures — no server
-listening and an origin the server refuses — reach a browser as the same opaque
-fetch error, and Safari words either of them as `Fetch API cannot load … due to
-access control checks`, which reads like a CORS problem even when nothing is
-listening at all. The Studio tells them apart itself: its banner either names
-the API origin and the command that starts it, or names the origin that was
-refused and the two ways to fix it.
+every request from it is refused by the origin check. That refusal and a server
+that is not listening reach a browser as the same opaque fetch error, and Safari
+words either of them as `Fetch API cannot load … due to access control checks`,
+which reads like a CORS problem even when nothing is listening at all. The
+Studio tells them apart by asking `/health` — waiting is the remedy for one and
+useless for the other — and only an origin the server keeps refusing is reported
+as one, with both ways to fix it.
 
 The pipeline screen drives one fixture run. Its first button loads the fixed briefing and then reads `Novo briefing`, because it creates another run rather than restarting the one on screen. While a queued run's stage is in flight the screen offers `Cancelar execução` (`POST /api/runs/<id>/cancel`), and a cancelled run offers `Retomar execução` (`POST /api/runs/<id>/restart`) in place of the stage action, which resumes it from the same immutable revision — neither needs a hand-written request any more. The screen holds a snapshot rather than a subscription, so it re-reads `GET /api/runs/<id>` after each of those actions and whenever the tab returns to the foreground; a change made outside it therefore appears without a reload.
 

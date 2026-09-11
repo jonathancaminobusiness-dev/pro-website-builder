@@ -52,6 +52,7 @@ function renderGate(next: IdentityGateSnapshot, busy = false, inFlight = false):
     onCreate: () => undefined,
     onOpen: () => undefined,
     unreachableRunId: '',
+    awaitingApi: '',
     onRetry: () => undefined,
     onStart: () => undefined,
     onCancel: () => undefined,

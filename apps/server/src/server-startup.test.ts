@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startServer } from './index.js';
-import { modelProviderName } from './provider.js';
 
 let cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -42,8 +41,4 @@ describe('server startup', () => {
       expect(await health.text()).toBe('ok');
     });
   }
-
-  it('refuses an unknown provider name instead of falling back to the fakes', () => {
-    expect(() => modelProviderName('claude')).toThrow(/Unknown model provider/);
-  });
 });

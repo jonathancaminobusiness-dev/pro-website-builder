@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Gate2 from './Gate2.js';
 import Gate3Panel from './Gate3Panel.js';
 import IdentityGate, { type IdentityGateSnapshot } from './gate1/IdentityGate.js';
-import { failureMessage, isMissing, RequestError, requestJson } from './request.js';
+import { classifyConnectionFailure, connectionFailureMessage, failureMessage, isConnectionFailure, isMissing, RequestError, requestJson, waitForServer, waitingForServerMessage } from './request.js';
 
 interface Snapshot {
   runId: string;
@@ -72,6 +72,12 @@ export default function App() {
   const [identityError, setIdentityError] = useState('');
   /** The remembered run the screen is holding because the last read of it did not answer. */
   const [unreachableRunId, setUnreachableRunId] = useState('');
+  /**
+   * The server builds its dependencies before it listens, so the Studio can be
+   * open first. While that window lasts the screen waits for the API instead of
+   * accusing it, and says which origin it is waiting for.
+   */
+  const [awaitingApi, setAwaitingApi] = useState('');
   const [pollFailures, setPollFailures] = useState({ runId: '', count: 0 });
   const [pollTick, setPollTick] = useState(0);
   /**
@@ -200,13 +206,13 @@ export default function App() {
   // listening yet says nothing about whether the run exists, and the id is the
   // captain's one pointer back to a decided gate, so it is held and shown
   // instead of being replaced by the screen that offers to start a new one.
-  const readRememberedRun = useCallback((): void => {
+  const readRememberedRun = useCallback((afterWait = false): void => {
     const remembered = rememberedIdentityRun();
-    if (!remembered) { setUnreachableRunId(''); return; }
+    if (!remembered) { setUnreachableRunId(''); setAwaitingApi(''); return; }
     const generation = identityGeneration.current + 1;
     identityGeneration.current = generation;
     setRecoveryExhaustedRunId((current) => current === remembered ? '' : current);
-    setBusy(true); setIdentityError('');
+    setBusy(true); setIdentityError(''); setAwaitingApi('');
     const source: IdentityReadSource = { generation, epoch: startEpoch.current, kind: 'read' };
     void identityGet(remembered).then(
       (next) => { acceptIdentityRun(next, source); },
@@ -214,10 +220,34 @@ export default function App() {
         if (source.generation !== identityGeneration.current) return;
         if (isMissing(cause)) { forgetIdentityRun(); setUnreachableRunId(''); return; }
         setUnreachableRunId(remembered);
-        setIdentityError(failureMessage(cause));
+        // Nothing answered, which has two causes with different remedies. Only
+        // one of them — an API that is not listening yet — is fixed by waiting,
+        // and only a read that has not already waited waits again, so a server
+        // that answers while this one route keeps failing ends the attempt
+        // instead of being polled in silence.
+        if (!isConnectionFailure(cause)) { setIdentityError(failureMessage(cause)); return; }
+        void classifyConnectionFailure(API_ORIGIN).then((measured) => {
+          if (source.generation !== identityGeneration.current) return;
+          if (afterWait || measured !== 'unreachable') { setIdentityError(connectionFailureMessage(measured, API_ORIGIN)); return; }
+          setAwaitingApi(waitingForServerMessage(API_ORIGIN));
+          void waitForServer(API_ORIGIN).then((outcome) => {
+            if (source.generation !== identityGeneration.current) return;
+            setAwaitingApi('');
+            // The API answered: read the run again rather than leaving the
+            // captain on a screen that has to be told to try.
+            if (outcome === 'ready') { readRememberedRunRef.current(true); return; }
+            setIdentityError(connectionFailureMessage(outcome, API_ORIGIN));
+          });
+        });
       },
     ).finally(() => { if (source.generation === identityGeneration.current) setBusy(false); });
   }, [acceptIdentityRun, identityGet]);
+
+  // The wait ends by reading the run again, and the read that starts a wait is
+  // the same one: the loop closes through a ref so neither has to be declared
+  // before the other.
+  const readRememberedRunRef = useRef(readRememberedRun);
+  readRememberedRunRef.current = readRememberedRun;
 
   useEffect(() => { readRememberedRun(); }, [readRememberedRun]);
 
@@ -370,7 +400,7 @@ export default function App() {
 
   return <div className="studio-shell">
     <header className="topbar"><div><span className="eyebrow">FIRSTMATE / STUDIO LOCAL</span><h1>Compilador de identidade</h1></div><nav className="view-tabs" aria-label="Telas do estúdio">{views.map((item) => <button key={item.id} className={view === item.id ? 'selected' : ''} aria-current={view === item.id ? 'page' : undefined} onClick={() => setView(item.id)}>{item.label}</button>)}</nav><span className="local-pill">uso próprio · pt-BR</span><a className="gate2-link" href={GATE2_ROUTE}>Gate 2 · revisão do protótipo →</a></header>
-    {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} unreachableRunId={unreachableRunId} onCreate={createIdentityRun} onOpen={openIdentityRun} onRetry={readRememberedRun} onStart={startIdentityRun} onCancel={cancelIdentityRun} inFlight={executionInFlight} startRecoveryPending={startRecoveryPending} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
+    {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} unreachableRunId={unreachableRunId} awaitingApi={awaitingApi} onCreate={createIdentityRun} onOpen={openIdentityRun} onRetry={() => readRememberedRun()} onStart={startIdentityRun} onCancel={cancelIdentityRun} inFlight={executionInFlight} startRecoveryPending={startRecoveryPending} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
       <section className="intro-panel"><p className="eyebrow">A identidade é o contrato</p><h2>Da direção visual ao site final, uma fonte de verdade.</h2><p>O editor mostra propostas tipadas; o renderer determinístico cuida do resultado. Os três gates desta versão são do capitão.</p><button className="primary" onClick={create} disabled={busy}>{busy ? 'Preparando…' : snapshot ? 'Novo briefing' : 'Carregar briefing fixo'}</button></section>
       <section className="stage-panel"><div className="section-heading"><div><p className="eyebrow">Pipeline</p><h2>Três etapas, três decisões</h2></div>{snapshot && <span className={`status status-${snapshot.status}`}>{snapshot.status === 'needs_review' ? 'aguarda gate' : snapshot.status === 'rejected' ? 'rejeitado · reexecutar' : snapshot.status}</span>}</div><div className="stage-list">{stages.map((stage, index) => { const approval = snapshot?.approvals.find((item) => item.stage === stage.id); const active = snapshot?.currentStage === stage.id; return <div className={`stage-row ${active ? 'active' : ''}`} key={stage.id}><span className="stage-number">0{index + 1}</span><div><strong>{stage.label}</strong><small>{approval ? approval.decision === 'approved' ? 'Aprovado pelo capitão' : 'Rejeitado para revisão' : active ? 'Proposta pronta para revisão' : 'Bloqueada pelo gate anterior'}</small></div><span className="stage-dot" />{active && <span className="active-mark">●</span>}</div>; })}</div><div className="actions">{snapshot?.status === 'queued' && stageInFlight && <button className="secondary" onClick={() => control('cancel')} disabled={controlBusy}>{controlBusy ? 'Parando…' : 'Cancelar execução'}</button>}{snapshot?.status === 'needs_review' ? <><button className="secondary" onClick={() => review('reject')} disabled={busy}>Rejeitar proposta</button>{snapshot.currentStage === 'finalization' ? <span className="qa-chip">Aprovar é publicar o bundle no Gate 3 abaixo</span> : <button className="primary" onClick={() => review('approve')} disabled={busy}>Aprovar gate</button>}</> : snapshot?.status === 'cancelled' ? <button className="primary" onClick={() => control('restart')} disabled={controlBusy}>{controlBusy ? 'Retomando…' : 'Retomar execução'}</button> : <button className="primary" onClick={runStage} disabled={!snapshot || busy || snapshot.status === 'succeeded'}>{busy ? 'Executando…' : snapshot?.status === 'succeeded' ? 'Release publicado' : snapshot?.status === 'rejected' ? 'Refazer etapa' : 'Executar próxima etapa'}</button>}</div></section>
       <section className="review-panel"><div className="section-heading"><div><p className="eyebrow">Revisão visual</p><h2>Preview isolado</h2></div><span className="qa-chip">linter: {snapshot?.lintErrorCount ?? 0} erros</span></div>{snapshot ? <><div className="route-tabs">{snapshot.rendered.routes.map((item) => <button key={item.route} className={route === item.route ? 'selected' : ''} onClick={() => setRoute(item.route)}>{item.route}</button>)}</div><iframe title="Preview do site" src={previewUrl} sandbox="" className="preview-frame" /></> : <div className="empty-state"><span>△</span><p>Carregue o briefing para abrir o primeiro contrato de identidade.</p></div>}</section>

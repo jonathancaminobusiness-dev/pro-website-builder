@@ -64,6 +64,8 @@ export interface IdentityGateProps {
   onOpen: (runId: string) => void;
   /** A remembered run the last read could not reach; the screen holds it rather than offering a fresh start. */
   unreachableRunId: string;
+  /** Set while the API is being waited for: the server may still be starting, so nothing is being accused yet. */
+  awaitingApi: string;
   onRetry: () => void;
   onStart: () => void;
   /** A start request or the stage/raster lane is in flight; pending starts keep cancellation available until the next server snapshot. */
@@ -175,7 +177,8 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
     {!snapshot && props.unreachableRunId && <div className="empty-state" role="status">
       <span>◎</span>
       <p>A execução <code>{props.unreachableRunId}</code> não pôde ser lida agora. Ela continua registrada no servidor; a decisão e as versões dela não se perderam.</p>
-      <button className="primary" onClick={props.onRetry} disabled={props.busy}>{props.busy ? 'Lendo…' : 'Tentar novamente'}</button>
+      {props.awaitingApi && <p className="gate-check">{props.awaitingApi}</p>}
+      <button className="primary" onClick={props.onRetry} disabled={props.busy || props.awaitingApi !== ''}>{props.busy ? 'Lendo…' : props.awaitingApi ? 'Aguardando…' : 'Tentar novamente'}</button>
       {openRunForm('Abrir outra execução')}
     </div>}
 
