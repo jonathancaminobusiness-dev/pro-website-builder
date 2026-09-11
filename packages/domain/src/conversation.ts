@@ -444,6 +444,16 @@ export const briefingConversationSnapshotSchema = z.object({
    * a timeout is exactly the case a restart would otherwise duplicate.
    */
   appliedKeys: z.array(z.string()).default([]),
+  /**
+   * Set only when the execution carries a conversation the server could not
+   * read back: the row exists and is not empty, and neither JSON nor this
+   * schema accepts it. Every other field then describes nothing — they are the
+   * defaults of a conversation that was never had — so a reader that ignores
+   * this one would mistake a damaged execution for a legacy one. It is never
+   * persisted: a conversation is either readable or refuses to write over what
+   * it could not read.
+   */
+  unreadable: z.object({ reason: z.string() }).optional(),
 }).strict();
 export type BriefingConversationSnapshot = z.infer<typeof briefingConversationSnapshotSchema>;
 

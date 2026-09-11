@@ -279,6 +279,24 @@ describe('briefing conversation state machine', () => {
     expect(opened.state).toBe('recommendation');
   });
 
+  it('marks a record it cannot read as unreadable instead of answering as a conversation nobody had', async () => {
+    const { conversation, tasks } = harness([succeeded(RECOMMENDATION)]);
+
+    conversation.restore('{ isto não é json');
+
+    const damaged = conversation.snapshot();
+    expect(damaged.unreadable?.reason).toMatch(/JSON/);
+    expect(damaged.state).toBe('entry');
+    await expect(conversation.send({ message: 'Olá.', action: 'answer', idempotencyKey: nextKey() })).rejects.toThrow(/não pôde ser lida/);
+    await expect(conversation.confirm({ briefing: 'Clínica de bairro preventiva, com acompanhamento.', idempotencyKey: nextKey() })).rejects.toThrow(/não pôde ser lida/);
+    expect(tasks).toEqual([]);
+
+    const reopened = await conversation.reopen({ idempotencyKey: nextKey() });
+    expect(reopened.unreadable).toBeUndefined();
+    const opened = await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    expect(opened.state).toBe('recommendation');
+  });
+
   it('refuses to reopen a conversation that is still open', async () => {
     const { conversation } = harness([succeeded(RECOMMENDATION)]);
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });

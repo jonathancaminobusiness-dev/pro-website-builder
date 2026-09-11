@@ -6,7 +6,7 @@ import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { approvalOf, identityHash, identityLint, identityStageDeadlineMs as calculateIdentityStageDeadlineMs, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, resolveIdentityStageDeadlines, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 import { BriefingValidationError, IDENTITY_BRIEFING, INVALID_IDENTITY_BRIEFING, LEGACY_INVALID_BRIEFING_MESSAGE, normalizeIdentityBriefing } from './identity-briefing.js';
-import { BriefingConversation, ConversationError } from './identity-conversation.js';
+import { BriefingConversation, ConversationError, unreadableConversationReason } from './identity-conversation.js';
 
 export { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -410,6 +410,10 @@ export class IdentityRun {
    */
   private refuseUnconfirmedBriefing(): void {
     const conversation = this.conversationRun;
+    // A conversation the server could not read back is not a legacy execution:
+    // it may be the cancelled round whose transcript is still on disk, so the
+    // stage waits until the captain opens a round this process can read.
+    if (conversation.unreadable !== undefined) throw new StageError(unreadableConversationReason(conversation.unreadable));
     if (!conversation.opened || conversation.state === 'final') return;
     throw new StageError(UNCONFIRMED_BRIEFING[conversation.state] ?? OPEN_BRIEFING);
   }

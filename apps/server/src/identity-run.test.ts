@@ -204,6 +204,38 @@ describe('identity run', () => {
     expect(started.directions).toHaveLength(3);
   });
 
+  it('refuses to start on an execution whose conversation cannot be read, instead of curating the creation briefing', async () => {
+    const repository = new ProjectRepository(database);
+    const inner = new FakeIdentityProvider();
+    const tasks: string[] = [];
+    const provider: ModelProvider = {
+      async propose(task, signal) { tasks.push(task.id); return inner.propose(task, signal); },
+    };
+    const runId = 'identity-conversa-ilegivel';
+    const run = new IdentityRun({ runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+    await run.conversation.send({ action: 'cancel', idempotencyKey: 'cancel-1' });
+    // The row a build whose conversation contract moved on would leave behind:
+    // still on disk, still holding the cancelled round, no longer parseable.
+    await repository.saveConversation(runId, JSON.stringify({ ...run.conversation.snapshot(), messages: [{ escrito: 'por outra versão' }] }));
+
+    const restored = new IdentityRun({ runId, repository, provider });
+    expect(await restored.restore()).toBe(true);
+
+    await expect(restored.start()).rejects.toThrow(/não pôde ser lida/);
+    // The cancelled round never advanced to the curator, and the damaged record
+    // is reported rather than answered as an execution that never had a chat.
+    expect(tasks).not.toContain('identity-curator');
+    expect(restored.snapshot().directions).toEqual([]);
+    expect(restored.conversation.snapshot().unreadable?.reason).toContain('messages');
+    await expect(restored.conversation.send({ message: 'Mais uma coisa.', action: 'answer', idempotencyKey: 'turn-x' })).rejects.toThrow(/não pôde ser lida/);
+
+    const reopened = await restored.conversation.reopen({ idempotencyKey: 'reopen-1' });
+    expect(reopened.unreadable).toBeUndefined();
+    await expect(restored.start()).rejects.toThrow(/ainda está aberta/);
+  });
+
   it('keeps the stage refused after a reopen until the next conversation signs a briefing', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({ runId: 'identity-conversa-reaberta', repository, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });

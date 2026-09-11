@@ -38,6 +38,23 @@ const HISTORY_WINDOW = 12;
 /** Idempotency keys kept per execution. A conversation is short; this is generous and bounded. */
 const KEY_MEMORY = 100;
 
+/** The first field the persisted conversation got wrong, worded for the captain rather than for a schema. */
+function parseProblem(issues: ReadonlyArray<{ path: Array<string | number>; message: string }>): string {
+  const first = issues[0];
+  if (!first) return 'o texto salvo não corresponde ao contrato da conversa';
+  const field = first.path.join('.');
+  return field ? `o campo ${field} do registro salvo é inválido (${first.message})` : first.message;
+}
+
+/**
+ * Why a damaged execution refuses, and what the captain can still do about it.
+ * Gate 1 and the conversation routes answer with the same sentence, because it
+ * is the same fact: nothing on this execution was signed that anyone can read.
+ */
+export function unreadableConversationReason(reason: string): string {
+  return `A conversa de briefing desta execução não pôde ser lida (${reason}), então nenhum briefing confirmado pode ser recuperado dela. Abra outra conversa nesta execução para recomeçar.`;
+}
+
 /** A refusal the captain can act on, answered as 400/409 rather than as a fault. */
 export class ConversationError extends Error {
   constructor(message: string, readonly status: 400 | 409 = 400) {
@@ -144,6 +161,8 @@ export class BriefingConversation {
   private queue: Promise<unknown> = Promise.resolve();
   /** How many turns this conversation has written to the execution; a written turn is never rolled back. */
   private commits = 0;
+  /** Set by `restore` when the execution's row exists but no readable conversation could be built from it. */
+  private unreadableReason: string | undefined;
   private readonly timeoutMs: number;
   private readonly maxQuestions: number;
   private readonly now: () => Date;
@@ -158,13 +177,25 @@ export class BriefingConversation {
     this.newId = options.newId ?? (() => randomUUID());
   }
 
-  /** Rebuilds the conversation from the row the execution persisted. Unreadable state is not a reason to lose the execution. */
+  /**
+   * Rebuilds the conversation from the row the execution persisted.
+   *
+   * A row that exists but cannot be read is not silently dropped. Dropping it
+   * would leave the defaults of a conversation nobody had — which is exactly
+   * what a legacy execution looks like — so a cancelled round would come back
+   * as a briefing the stage may start on, and the first write would replace a
+   * transcript still on disk. The execution is marked unreadable instead: it
+   * refuses to spend a turn, refuses to confirm, and starts nothing until the
+   * captain opens the next round over it.
+   */
   restore(serialized: string | null | undefined): void {
     if (!serialized) return;
     let parsed: unknown;
-    try { parsed = JSON.parse(serialized) as unknown; } catch { return; }
+    try { parsed = JSON.parse(serialized) as unknown; }
+    catch { this.unreadableReason = 'o texto salvo não é um JSON válido'; return; }
     const snapshot = briefingConversationSnapshotSchema.safeParse(parsed);
-    if (!snapshot.success) return;
+    if (!snapshot.success) { this.unreadableReason = parseProblem(snapshot.error.issues); return; }
+    this.unreadableReason = undefined;
     const record = snapshot.data;
     this.data = {
       state: record.state,
@@ -188,6 +219,8 @@ export class BriefingConversation {
   }
 
   get state(): BriefingConversationState { return this.data.state; }
+  /** Why this execution's persisted conversation could not be read, when it could not. */
+  get unreadable(): string | undefined { return this.unreadableReason; }
   /** The briefing the captain confirmed, if any; the execution runs the identity stage on this. */
   get confirmedBriefing(): string | undefined { return this.data.briefing; }
 
@@ -227,6 +260,7 @@ export class BriefingConversation {
       directions: structuredClone(this.data.directions),
       ...(this.data.briefing === undefined ? {} : { briefing: this.data.briefing }),
       appliedKeys: [...this.data.appliedKeys],
+      ...(this.unreadableReason === undefined ? {} : { unreadable: { reason: this.unreadableReason } }),
     };
   }
 
@@ -263,6 +297,7 @@ export class BriefingConversation {
 
   private async runSend(input: { message?: string | undefined; action: BriefingMessageAction; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
+    this.refuseUnreadable();
     // The execution answers before the conversation does, so a captain on a
     // frozen execution reads the same refusal from both routes instead of being
     // sent to a revision the confirmation would refuse.
@@ -311,6 +346,7 @@ export class BriefingConversation {
 
   private async runConfirm(input: { briefing: string; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
+    this.refuseUnreadable();
     this.options.guardTurn?.();
     if (!canConfirmBriefing(this.data.state)) throw new ConversationError(this.confirmRefusal(), 409);
     let briefing: string;
@@ -370,6 +406,15 @@ export class BriefingConversation {
     // execution, or one whose briefing is frozen because it already holds
     // identity work, has nothing to gain from a round it could never close.
     this.options.guardTurn?.();
+    // The one route an unreadable execution still answers: the captain cannot
+    // read what was said, so they say it again in a round this server wrote.
+    if (this.unreadableReason !== undefined) {
+      const damaged = this.unreadableReason;
+      this.data = emptyState();
+      this.unreadableReason = undefined;
+      this.append({ author: 'system', text: `A conversa anterior desta execução não pôde ser lida (${damaged}), então esta é uma conversa nova; o que foi dito antes não é recuperável.`, state: 'entry' });
+      return await this.commit(input.idempotencyKey);
+    }
     if (!canReopenBriefingConversation(this.data.state)) throw new ConversationError(this.reopenRefusal(), 409);
 
     const closed: BriefingConversationRevision = {
@@ -617,6 +662,10 @@ export class BriefingConversation {
     this.data.appliedKeys = appliedKeys;
     this.commits += 1;
     return snapshot;
+  }
+
+  private refuseUnreadable(): void {
+    if (this.unreadableReason !== undefined) throw new ConversationError(unreadableConversationReason(this.unreadableReason), 409);
   }
 
   private closedReason(): string {
