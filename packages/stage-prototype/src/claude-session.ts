@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
-import { claudeModelFlags, correctionPrompt, resolveClaudeInvocation, type ClaudeEffort, type ClaudeInvocation } from '@pwb/providers';
+import { claudeModelFlags, correctionPrompt } from '@pwb/providers';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,10 +14,6 @@ export type ClaudeExecutor = (executable: string, args: string[], options: { sig
 
 export interface ClaudeSessionOptions {
   executable?: string;
-  /** Overrides `PWB_CLAUDE_MODEL`; left unset the environment, then `DEFAULT_CLAUDE_MODEL`, decides. */
-  model?: string;
-  /** Overrides `PWB_CLAUDE_EFFORT`; left unset the environment, then `DEFAULT_CLAUDE_EFFORT`, decides. */
-  effort?: ClaudeEffort;
   timeoutMs?: number;
   maxTurns?: number;
   deniedTools?: string;
@@ -56,7 +52,6 @@ export class ClaudeSession implements StructuredSession {
   private readonly timeoutMs: number;
   private readonly maxTurns: number;
   private readonly deniedTools: string;
-  private readonly invocation: ClaudeInvocation;
   private readonly execute: ClaudeExecutor;
 
   constructor(options: ClaudeSessionOptions = {}) {
@@ -64,8 +59,6 @@ export class ClaudeSession implements StructuredSession {
     this.timeoutMs = options.timeoutMs ?? 5 * 60_000;
     this.maxTurns = options.maxTurns ?? 4;
     this.deniedTools = options.deniedTools ?? WORKER_DENIED_TOOLS;
-    // Resolved once, at construction: a session never inherits the machine's default model.
-    this.invocation = resolveClaudeInvocation(options);
     this.execute = options.execute ?? (async (executable, args, run) => {
       const { stdout } = await execFileAsync(executable, args, {
         shell: false, timeout: run.timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...(run.signal ? { signal: run.signal } : {}),
@@ -84,7 +77,7 @@ export class ClaudeSession implements StructuredSession {
           // has never seen the answer it is correcting, and the CLI takes a UUID and nothing else.
           '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.maxTurns),
           '--disallowed-tools', this.deniedTools,
-          ...claudeModelFlags(this.invocation),
+          ...claudeModelFlags(),
         ], { ...(input.signal ? { signal: input.signal } : {}), timeoutMs: Math.min(this.timeoutMs, input.deadlineMs) });
         const raw: unknown = JSON.parse(stdout);
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 import { CLAUDE_RUNNER_TIMEOUT_MS, execFileExecutor } from './claude-runner.js';
-import { claudeModelFlags, resolveClaudeInvocation } from './claude-model.js';
+import { claudeModelFlags } from './claude-model.js';
 import type { ClaudeRunnerOptions } from './model.js';
 
 /**
@@ -92,7 +92,7 @@ export class ClaudeJsonRunner implements JsonModelRunner {
 
   /** `execute` is injected by tests; production spawns the owner's local Claude Code binary with no shell. */
   constructor(options: ClaudeRunnerOptions = {}) {
-    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, execute: executeClaudeJson, ...options, ...resolveClaudeInvocation(options) };
+    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, execute: executeClaudeJson, ...options };
   }
 
   async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
@@ -108,7 +108,7 @@ export class ClaudeJsonRunner implements JsonModelRunner {
         '--no-session-persistence',
         '--max-turns', String(this.options.maxTurns),
         '--disallowed-tools', JSON_RUNNER_DENIED_TOOLS,
-        ...claudeModelFlags(this.options),
+        ...claudeModelFlags(),
       ], { timeoutMs: Math.min(this.options.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
       const raw: unknown = JSON.parse(stdout);
       return raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;

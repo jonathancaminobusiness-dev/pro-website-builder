@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
 import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
-import { claudeModelFlags, resolveClaudeInvocation } from './claude-model.js';
+import { claudeModelFlags } from './claude-model.js';
 import type { ClaudeExecutor, ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
@@ -28,9 +28,7 @@ export class ClaudeRunner implements ModelProvider {
   private readonly options: Required<ClaudeRunnerOptions>;
 
   constructor(options: ClaudeRunnerOptions = {}) {
-    // Resolved once, at construction: a worker never inherits the machine's default model.
-    const invocation = resolveClaudeInvocation(options);
-    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, execute: executeClaude, ...options, ...invocation };
+    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, execute: executeClaude, ...options };
   }
 
   async propose(task: AgentTask, signal?: AbortSignal): Promise<AgentResult> {
@@ -51,7 +49,7 @@ export class ClaudeRunner implements ModelProvider {
           '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(stageResultJsonSchemas[task.stage]),
           '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.options.maxTurns),
           '--disallowed-tools', CLAUDE_RUNNER_DENIED_TOOLS,
-          ...claudeModelFlags(this.options),
+          ...claudeModelFlags(),
         ], { timeoutMs: this.options.timeoutMs, ...(signal ? { signal } : {}) });
         const raw: unknown = JSON.parse(stdout);
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;

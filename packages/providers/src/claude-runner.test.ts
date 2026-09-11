@@ -1,8 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createFixtureIR, idempotencyKey, type AgentTask } from '@pwb/domain';
 import { ClaudeJsonRunner, ClaudeRunner, CLAUDE_RUNNER_DENIED_TOOLS, JSON_RUNNER_DENIED_TOOLS, JsonRunnerError, type ClaudeExecutor } from './index.js';
-
-afterEach(() => { vi.unstubAllEnvs(); });
 
 const task: AgentTask = {
   id: 'task-claude', attempt: 1, stage: 'identity', role: 'director', state: 'queued', lane: 'claude',
@@ -111,26 +109,10 @@ describe('Claude runner boundary', () => {
   });
 
   it('names the model and the effort on every invocation, so no worker inherits the machine default', async () => {
-    vi.stubEnv('PWB_CLAUDE_MODEL', undefined);
-    vi.stubEnv('PWB_CLAUDE_EFFORT', undefined);
     const { calls, execute } = recorder([result]);
     await new ClaudeRunner({ execute }).propose(task);
     expect(flag(calls[0]!.args, '--model')).toBe('claude-opus-5');
     expect(flag(calls[0]!.args, '--effort')).toBe('high');
-  });
-
-  it('takes an override of either one from the environment', async () => {
-    vi.stubEnv('PWB_CLAUDE_MODEL', 'claude-sonnet-5');
-    vi.stubEnv('PWB_CLAUDE_EFFORT', 'xhigh');
-    const { calls, execute } = recorder([result]);
-    await new ClaudeRunner({ execute }).propose(task);
-    expect(flag(calls[0]!.args, '--model')).toBe('claude-sonnet-5');
-    expect(flag(calls[0]!.args, '--effort')).toBe('xhigh');
-  });
-
-  it('refuses to construct a runner over a malformed effort rather than spawning without one', () => {
-    vi.stubEnv('PWB_CLAUDE_EFFORT', 'highest');
-    expect(() => new ClaudeRunner({ execute: recorder([result]).execute })).toThrow(/PWB_CLAUDE_EFFORT/);
   });
 
   it('lets an abort through instead of turning it into a result the gate would read', async () => {
@@ -158,20 +140,12 @@ describe('Claude JSON runner boundary', () => {
     expect(calls[0]!.args).not.toContain('--api-key');
   });
 
-  it('names the same model and effort as the proposal runner, defaults and overrides alike', async () => {
-    vi.stubEnv('PWB_CLAUDE_MODEL', undefined);
-    vi.stubEnv('PWB_CLAUDE_EFFORT', undefined);
+  it('names the same model and effort as the proposal runner', async () => {
     const calls: string[][] = [];
     const execute: ClaudeExecutor = async (_executable, args) => { calls.push(args); return { stdout: JSON.stringify({ answer: 'ok' }), stderr: '' }; };
     await new ClaudeJsonRunner({ execute }).run({ prompt: 'fixture', schema: {}, deadlineMs: 1_000 });
     expect(flag(calls[0]!, '--model')).toBe('claude-opus-5');
     expect(flag(calls[0]!, '--effort')).toBe('high');
-
-    vi.stubEnv('PWB_CLAUDE_MODEL', 'claude-sonnet-5');
-    vi.stubEnv('PWB_CLAUDE_EFFORT', 'low');
-    await new ClaudeJsonRunner({ execute }).run({ prompt: 'fixture', schema: {}, deadlineMs: 1_000 });
-    expect(flag(calls[1]!, '--model')).toBe('claude-sonnet-5');
-    expect(flag(calls[1]!, '--effort')).toBe('low');
   });
 
   it('names what went wrong: an unreadable answer, a kill, and a process that would not start', async () => {

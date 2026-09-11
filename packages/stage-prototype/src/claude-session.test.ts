@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ClaudeSession, ClaudeSessionError, CRITIC_DENIED_TOOLS, WORKER_DENIED_TOOLS, type ClaudeExecutor } from './claude-session.js';
 
 /**
@@ -37,7 +37,6 @@ function flag(args: string[], name: string): string | undefined {
 
 const ask = { schema: { type: 'object' }, deadlineMs: 60_000 };
 
-afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('Claude structured session', () => {
   it('corrects the model with the violations it actually committed, not with a generic schema complaint', async () => {
@@ -90,25 +89,11 @@ describe('Claude structured session', () => {
     expect(calls[0]!.args.join(' ')).not.toMatch(/--api-key|--token|ANTHROPIC_API_KEY/i);
   });
 
-  it('names the model and the effort, defaulting to Opus 5 at high effort and taking the environment override', async () => {
-    vi.stubEnv('PWB_CLAUDE_MODEL', undefined);
-    vi.stubEnv('PWB_CLAUDE_EFFORT', undefined);
+  it('names the model and the effort, so a session never inherits the machine default', async () => {
     const first = recorder([{ sectionId: 'home-hero', nodeIds: ['home-hero-root', 'home-hero-title'] }]);
     await new ClaudeSession({ execute: first.execute }).ask({ ...ask, prompt: 'fixture', parse: (value) => value });
     expect(flag(first.calls[0]!.args, '--model')).toBe('claude-opus-5');
     expect(flag(first.calls[0]!.args, '--effort')).toBe('high');
-
-    vi.stubEnv('PWB_CLAUDE_MODEL', 'claude-sonnet-5');
-    vi.stubEnv('PWB_CLAUDE_EFFORT', 'max');
-    const second = recorder([{ ok: true }]);
-    await new ClaudeSession({ execute: second.execute }).ask({ ...ask, prompt: 'fixture', parse: (value) => value });
-    expect(flag(second.calls[0]!.args, '--model')).toBe('claude-sonnet-5');
-    expect(flag(second.calls[0]!.args, '--effort')).toBe('max');
-  });
-
-  it('refuses to open a session over a malformed effort rather than spawning without one', () => {
-    vi.stubEnv('PWB_CLAUDE_EFFORT', 'highest');
-    expect(() => new ClaudeSession({ execute: recorder([{}]).execute })).toThrow(/PWB_CLAUDE_EFFORT/);
   });
 
   it('keeps the kill distinct from the failure, so a timeout is not reported as an unknown error', async () => {
