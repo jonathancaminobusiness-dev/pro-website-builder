@@ -12,7 +12,10 @@ const NOW = new Date('2026-09-11T10:00:00.000Z');
 const VISUAL_STAGE_COPY = ['ver proposta', 'gerar identidade', 'abrir preview'];
 
 function state(snapshot: ConversationSnapshot | null, ...actions: ConversationAction[]): ConversationUiState {
-  return actions.reduce(conversationReducer, conversationReducer(initialConversationState(), { type: 'resumed', snapshot }));
+  const opened = snapshot === null
+    ? conversationReducer(initialConversationState(), { type: 'resumed', snapshot: null })
+    : conversationReducer(initialConversationState(), { type: 'settled', snapshot });
+  return actions.reduce(conversationReducer, opened);
 }
 
 function render(next: ConversationUiState): string {
@@ -270,7 +273,7 @@ describe('briefing conversation panel', () => {
         conversationReducer(initialConversationState(), { type: 'begin', intent: { kind: 'resume' } }),
         { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
       ),
-      { type: 'retry' },
+      { type: 'begin', intent: { kind: 'resume' } },
     );
     const markup = render(retrying);
 
@@ -289,6 +292,18 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('Abrindo a conversa desta execução…');
     expect(markup.match(/Tentar novamente/g)).toHaveLength(1);
     expect(markup).not.toContain('Reabrir do ponto salvo');
+  });
+
+  it('keeps the way out of the conversation live when a read failed', () => {
+    const markup = render(state(
+      conversationSnapshot({ state: 'recommendation', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 }),
+      { type: 'begin', intent: { kind: 'resume' } },
+      { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
+    ));
+
+    expect(markup).toContain('Cancelar conversa');
+    expect(markup).not.toContain('disabled=""');
+    expect(markup).toContain('Tentar novamente');
   });
 
   it('offers only a replay when the failed request was a read of the conversation', () => {
