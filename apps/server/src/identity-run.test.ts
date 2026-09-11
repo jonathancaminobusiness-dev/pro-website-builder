@@ -278,6 +278,41 @@ describe('identity run', () => {
     expect(persisted?.conversation).toContain('confirmedAt');
   });
 
+  it('holds a start behind a confirmation already writing, so the fan-out runs on the signed briefing', async () => {
+    const repository = new ProjectRepository(database);
+    let release = (): void => {};
+    let writing = (): void => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const reached = new Promise<void>((resolve) => { writing = resolve; });
+    const guarded = Object.create(repository) as ProjectRepository;
+    guarded.saveConversation = async (id, conversation, briefing) => {
+      if (briefing !== undefined) { writing(); await held; }
+      await repository.saveConversation(id, conversation, briefing);
+    };
+    const runId = 'identity-largada-na-confirmacao';
+    const run = new IdentityRun({ runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+
+    const confirming = run.conversation.confirm({ briefing: 'Clínica de bairro preventiva, com acompanhamento contínuo.', idempotencyKey: 'confirm-1' });
+    await reached;
+    const starting = run.start();
+    release();
+    await confirming;
+    const started = await starting;
+
+    expect(started.briefing).toBe('Clínica de bairro preventiva, com acompanhamento contínuo.');
+    expect(started.directions).toHaveLength(3);
+    expect((await repository.getRun(runId))?.briefing).toBe('Clínica de bairro preventiva, com acompanhamento contínuo.');
+
+    // The gate decides on the fan-out the captain is looking at, which only
+    // holds if no stage was swapped in under the one that ran.
+    const approved = await run.approve({ directionId: started.directions[0]!.directionId, approverRole: 'captain', rationale: 'Gate 1 aprovado pelo capitão.' });
+
+    expect(approved.gate.state).toBe('closed');
+    expect(approved.handoff?.versionId).toBeTruthy();
+  });
+
   it('refuses a turn on a frozen execution but still lets the captain close the chat', async () => {
     const repository = new ProjectRepository(database);
     const conversationTasks: string[] = [];

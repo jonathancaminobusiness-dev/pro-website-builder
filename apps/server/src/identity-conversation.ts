@@ -76,6 +76,12 @@ export interface BriefingConversationOptions {
    */
   guardTurn?: (turn: { cancelling: boolean }) => void;
   /**
+   * Runs the confirmation's write and hand-off as one critical section. The
+   * execution takes the same section to claim its stage, so a start can never
+   * land between the freeze check and the briefing that check protects.
+   */
+  confirmSection?: <T>(work: () => Promise<T>) => Promise<T>;
+  /**
    * The briefing the execution carries, read at the moment a turn needs it. The
    * plan creates the execution from the captain's first text, so the opening
    * turn may carry no message at all and start from that text instead of asking
@@ -140,8 +146,10 @@ export class BriefingConversation {
   private readonly maxQuestions: number;
   private readonly now: () => Date;
   private readonly newId: () => string;
+  private readonly confirmSection: <T>(work: () => Promise<T>) => Promise<T>;
 
   constructor(private readonly options: BriefingConversationOptions) {
+    this.confirmSection = options.confirmSection ?? (async (work) => await work());
     this.timeoutMs = options.timeoutMs ?? BRIEFING_CONVERSATION_TURN_TIMEOUT_MS;
     this.maxQuestions = options.maxQuestions ?? BRIEFING_CONVERSATION_MAX_QUESTIONS;
     this.now = options.now ?? (() => new Date());
@@ -301,13 +309,18 @@ export class BriefingConversation {
       this.data.error = { code: turn.failure.code, message: `${turn.failure.message} O briefing foi confirmado mesmo assim; as três direções conceituais podem ser pedidas de novo.` };
       this.append({ author: 'system', text: this.data.error.message, state: 'final', fallback: true });
     }
-    // Asked again at the moment the briefing is applied, and not redundant with
-    // the ask before the turn: a stop or a stage start can land inside the
-    // up-to-60-second closing turn, and this is the ask that sees it.
-    this.options.guardTurn?.({ cancelling: false });
-    const snapshot = await this.commit(input.idempotencyKey, briefing);
-    await this.options.onConfirmed?.(briefing, revision);
-    return snapshot;
+    // The write and the hand-off run inside the execution's own critical
+    // section, and the guard is asked again there: the ask before the turn
+    // cannot see a stop or a stage start that lands inside the up-to-60-second
+    // closing turn, and this one cannot be overtaken by a start, because the
+    // execution takes the same section to claim its stage. Both asks stay:
+    // refusing before the turn is what keeps the captain from paying for it.
+    return await this.confirmSection(async () => {
+      this.options.guardTurn?.({ cancelling: false });
+      const snapshot = await this.commit(input.idempotencyKey, briefing);
+      await this.options.onConfirmed?.(briefing, revision);
+      return snapshot;
+    });
   }
 
   // ------------------------------------------------------- the model turn

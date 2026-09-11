@@ -137,10 +137,12 @@ export class IdentityRun {
       provider: options.provider,
       persist: async (snapshot, confirmedBriefing) => { await options.repository.saveConversation(options.runId, JSON.stringify(snapshot), confirmedBriefing); },
       // No turn is bought on an execution that could never take its answer, and
-      // the same rule is asked again when the briefing is actually applied: a
-      // turn takes up to a minute, and the captain can start the stage inside
-      // it. The second ask is not redundant with the first — it is the one that
-      // protects a running fan-out from being replaced under it.
+      // the same rule is asked again inside the section the confirmation writes
+      // and applies in — the section `start` also takes to claim the stage. A
+      // turn takes up to a minute and the captain can start the stage inside
+      // it, so the second ask is not redundant with the first: it is the one
+      // that protects a running fan-out from being replaced under it.
+      confirmSection: (work) => this.exclusive(work),
       guardTurn: (turn) => {
         this.refuseIfCancelled('create another one to work on a briefing.');
         if (!turn.cancelling && this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
@@ -257,26 +259,43 @@ export class IdentityRun {
     await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: CHECKPOINT_EVENT, payload: payload as unknown as Record<string, unknown> }));
   }
 
+  /**
+   * Everything that decides which briefing this execution runs on, one at a
+   * time: the claim a start makes on the stage, and the write-and-apply of a
+   * confirmation. Holding them apart is what makes the freeze meaningful — a
+   * start that reads `briefingIsFrozen() === false` can no longer slip between
+   * that answer and the briefing being applied.
+   */
+  private lane: Promise<unknown> = Promise.resolve();
+
+  private exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.lane.then(work, work);
+    this.lane = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
   /** The one entry point that spends model turns. Nothing else in this class starts a worker. */
   async start(): Promise<IdentityRunSnapshot> {
     this.refuseIfCancelled('create another one to run the identity stage.');
-    // A failure is not the end of the run: the captain can ask again here, on
-    // the same terms a restarted process already offers.
-    if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
-    if (this.started) { await this.inFlight; return this.snapshot(); }
-    this.started = true;
-    this.status = 'running';
-    this.abort = new AbortController();
-    this.failure = undefined;
-    this.inFlight = this.runStage(this.abort.signal).then(async (result) => {
-      this.result = result;
-      await this.persistCandidates(result);
-      this.status = 'needs_review';
-      await this.checkpoint();
-    }).catch(async (error: unknown) => {
-      this.failure = error instanceof Error ? error.message : 'The identity stage failed.';
-      this.status = 'failed';
-      await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.stage.failed', payload: { reason: this.failure } }));
+    await this.exclusive(async () => {
+      // A failure is not the end of the run: the captain can ask again here, on
+      // the same terms a restarted process already offers.
+      if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
+      if (this.started) return;
+      this.started = true;
+      this.status = 'running';
+      this.abort = new AbortController();
+      this.failure = undefined;
+      this.inFlight = this.runStage(this.abort.signal).then(async (result) => {
+        this.result = result;
+        await this.persistCandidates(result);
+        this.status = 'needs_review';
+        await this.checkpoint();
+      }).catch(async (error: unknown) => {
+        this.failure = error instanceof Error ? error.message : 'The identity stage failed.';
+        this.status = 'failed';
+        await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.stage.failed', payload: { reason: this.failure } }));
+      });
     });
     await this.inFlight;
     return this.snapshot();
