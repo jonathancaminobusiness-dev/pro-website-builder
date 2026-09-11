@@ -135,7 +135,7 @@ export class IdentityRun {
     this.conversationRun = new BriefingConversation({
       runId: options.runId,
       provider: options.provider,
-      persist: async (snapshot) => { await options.repository.saveConversation(options.runId, JSON.stringify(snapshot)); },
+      persist: async (snapshot, confirmedBriefing) => { await options.repository.saveConversation(options.runId, JSON.stringify(snapshot), confirmedBriefing); },
       // No turn is bought on an execution that could never take its answer, and
       // the same rule is asked again when the briefing is actually applied: a
       // turn takes up to a minute, and the captain can start the stage inside
@@ -145,11 +145,9 @@ export class IdentityRun {
         this.refuseIfCancelled('create another one to work on a briefing.');
         if (this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
       },
-      onConfirmed: async (briefing) => {
-        if (this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
+      onConfirmed: (briefing) => {
         this.briefing = briefing;
         this.stage = this.newStage();
-        await options.repository.updateRunBriefing(options.runId, briefing);
       },
       initialText: () => this.briefing,
     });

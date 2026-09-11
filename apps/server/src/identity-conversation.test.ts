@@ -24,6 +24,8 @@ interface Harness {
   conversation: BriefingConversation;
   tasks: AgentTask[];
   persisted: BriefingConversationSnapshot[];
+  /** What every write carried: the turn, and the briefing a confirmation signed in the same write. */
+  writes: Array<{ snapshot: BriefingConversationSnapshot; confirmedBriefing?: string }>;
 }
 
 function turn(overrides: Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>): Record<string, unknown> {
@@ -48,6 +50,7 @@ function succeeded(artifact: Record<string, unknown>): Answer {
 function harness(answers: Answer[], options: { maxQuestions?: number; initialText?: () => string | undefined; persist?: (snapshot: BriefingConversationSnapshot) => Promise<void>; onConfirmed?: (briefing: string, revision: number) => void } = {}): Harness {
   const tasks: AgentTask[] = [];
   const persisted: BriefingConversationSnapshot[] = [];
+  const writes: Array<{ snapshot: BriefingConversationSnapshot; confirmedBriefing?: string }> = [];
   const provider: ModelProvider = {
     async propose(task) {
       tasks.push(structuredClone(task));
@@ -59,14 +62,14 @@ function harness(answers: Answer[], options: { maxQuestions?: number; initialTex
   const conversation = new BriefingConversation({
     runId: 'run-conversa',
     provider,
-    persist: async (snapshot) => { await options.persist?.(snapshot); persisted.push(snapshot); },
+    persist: async (snapshot, confirmedBriefing) => { await options.persist?.(snapshot); writes.push({ snapshot, ...(confirmedBriefing === undefined ? {} : { confirmedBriefing }) }); persisted.push(snapshot); },
     now: () => new Date('2026-09-11T12:00:00.000Z'),
     newId: (() => { let n = 0; return () => `msg-${(n += 1)}`; })(),
     ...(options.maxQuestions === undefined ? {} : { maxQuestions: options.maxQuestions }),
     ...(options.initialText === undefined ? {} : { initialText: options.initialText }),
     ...(options.onConfirmed === undefined ? {} : { onConfirmed: options.onConfirmed }),
   });
-  return { conversation, tasks, persisted };
+  return { conversation, tasks, persisted, writes };
 }
 
 let key = 0;
@@ -590,7 +593,7 @@ describe('briefing conversation durability', () => {
     expect(tasks).toHaveLength(2);
   });
 
-  it('signs nothing when the conversation write fails, and closes on the same key once it succeeds', async () => {
+  it('signs nothing and applies nothing when the confirmation write fails, and closes on the same key once it succeeds', async () => {
     const confirmed: Array<{ briefing: string; revision: number }> = [];
     let writes = 0;
     const { conversation } = harness([succeeded(CONFIRMATION), succeeded(FINAL), succeeded(FINAL)], {
@@ -605,37 +608,32 @@ describe('briefing conversation durability', () => {
     expect(conversation.state).toBe('confirmation');
     expect(conversation.confirmedBriefing).toBeUndefined();
     expect(conversation.snapshot().confirmations).toEqual([]);
+    expect(confirmed).toEqual([]);
 
     const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried });
 
     expect(closed.state).toBe('final');
     expect(closed.confirmations.map((entry) => entry.revision)).toEqual([1]);
-    expect(confirmed).toEqual([{ briefing: 'Clínica de bairro preventiva.', revision: 1 }, { briefing: 'Clínica de bairro preventiva.', revision: 1 }]);
+    expect(confirmed).toEqual([{ briefing: 'Clínica de bairro preventiva.', revision: 1 }]);
   });
 
-  it('re-drives the whole confirmation on the same key when the briefing write failed', async () => {
-    let writes = 0;
-    const { conversation, persisted } = harness([succeeded(CONFIRMATION), succeeded(FINAL), succeeded(FINAL)], {
-      onConfirmed: () => { writes += 1; if (writes === 1) throw new Error('updateRunBriefing falhou'); },
+  it('signs the briefing in the same write as the confirmation, and hands it to the execution only after that write', async () => {
+    const applied: string[] = [];
+    const { conversation, writes } = harness([succeeded(CONFIRMATION), succeeded(FINAL)], {
+      persist: async (snapshot) => { if (snapshot.confirmations.length > 0) applied.push('write'); },
+      onConfirmed: (briefing) => { applied.push(`apply:${briefing}`); },
     });
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
-    const retried = nextKey();
 
-    await expect(conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried })).rejects.toThrow(/updateRunBriefing/);
+    const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: nextKey() });
 
-    // The write is what the confirmation is for, so a failed one leaves nothing
-    // signed: the conversation is still offering its summary and the key is free.
-    expect(conversation.state).toBe('confirmation');
-    expect(conversation.confirmedBriefing).toBeUndefined();
-    expect(conversation.snapshot().confirmations).toEqual([]);
-    expect(persisted.at(-1)?.confirmations).toEqual([]);
-
-    const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried });
-
-    expect(writes).toBe(2);
-    expect(closed.state).toBe('final');
-    expect(closed.confirmations).toHaveLength(1);
-    expect(conversation.snapshot()).toEqual(persisted.at(-1));
+    const last = writes.at(-1)!;
+    expect(last.confirmedBriefing).toBe('Clínica de bairro preventiva.');
+    expect(last.snapshot.confirmations).toHaveLength(1);
+    expect(last.snapshot.appliedKeys).toContain(closed.appliedKeys.at(-1));
+    expect(applied).toEqual(['write', 'apply:Clínica de bairro preventiva.']);
+    // Every other turn moves no briefing, so nothing else carries one.
+    expect(writes.filter((entry) => entry.confirmedBriefing !== undefined)).toHaveLength(1);
   });
 
   it('refuses an answer bound to another turn and corrects rather than writing it into this one', async () => {

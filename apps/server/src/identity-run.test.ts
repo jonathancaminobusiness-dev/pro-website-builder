@@ -216,6 +216,68 @@ describe('identity run', () => {
     expect(tasks).toEqual([]);
   });
 
+  it('honours a stop that lands inside the closing turn instead of applying the briefing anyway', async () => {
+    const repository = new ProjectRepository(database);
+    const fake = new FakeIdentityProvider();
+    let release = (): void => {};
+    let reached = (): void => {};
+    const closing = new Promise<void>((resolve) => { release = resolve; });
+    const closingTurn = new Promise<void>((resolve) => { reached = resolve; });
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-briefing-conversation') && task.brief.includes('O capitão confirmou o briefing.')) { reached(); await closing; }
+        return fake.propose(task, signal);
+      },
+    };
+    const runId = 'identity-parada-no-fechamento';
+    const run = new IdentityRun({ runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+
+    const confirming = run.conversation.confirm({ briefing: 'Briefing assinado durante a parada.', idempotencyKey: 'confirm-1' });
+    await closingTurn;
+    await run.cancel();
+    release();
+
+    await expect(confirming).rejects.toThrow(/cancelled/);
+    expect(run.snapshot().status).toBe('cancelled');
+    expect(run.snapshot().briefing).toBe('Clínica veterinária de bairro, preventiva.');
+    expect(run.conversation.snapshot().confirmations).toEqual([]);
+    expect((await repository.getRun(runId))?.briefing).toBe('Clínica veterinária de bairro, preventiva.');
+  });
+
+  it('leaves the execution untouched when the confirmation write fails, and moves both on the retry', async () => {
+    const repository = new ProjectRepository(database);
+    let failing = true;
+    const guarded = Object.create(repository) as ProjectRepository;
+    guarded.saveConversation = async (id, conversation, briefing) => {
+      if (failing && briefing !== undefined) throw new Error('SQLITE_BUSY');
+      await repository.saveConversation(id, conversation, briefing);
+    };
+    const runId = 'identity-confirmacao-sem-disco';
+    const run = new IdentityRun({ runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+    const retried = 'confirm-1';
+
+    await expect(run.conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried })).rejects.toThrow(/SQLITE_BUSY/);
+
+    expect(run.snapshot().briefing).toBe('Clínica veterinária de bairro, preventiva.');
+    expect(run.conversation.snapshot().confirmations).toEqual([]);
+    const stored = await repository.getRun(runId);
+    expect(stored?.briefing).toBe('Clínica veterinária de bairro, preventiva.');
+    expect(stored?.conversation).not.toContain('confirmedAt');
+
+    failing = false;
+    const closed = await run.conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried });
+
+    expect(closed.confirmations).toHaveLength(1);
+    expect(run.snapshot().briefing).toBe('Clínica de bairro preventiva.');
+    const persisted = await repository.getRun(runId);
+    expect(persisted?.briefing).toBe('Clínica de bairro preventiva.');
+    expect(persisted?.conversation).toContain('confirmedAt');
+  });
+
   it('keeps the briefing editable after the stage failed, with the same answer before and after a restart', async () => {
     const repository = new ProjectRepository(database);
     const fake = new FakeIdentityProvider();
