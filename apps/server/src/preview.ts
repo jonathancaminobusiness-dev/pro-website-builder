@@ -45,6 +45,12 @@ export function createPreviewServer(getRendered: (versionId: string) => Rendered
   const faces = async (): Promise<FacePlan> => {
     if (fontsDir === undefined) return NO_FACES;
     const key = await fontManifestKey(fontsDir);
+    // The faces could not be identified, so nothing this origin served can still
+    // be vouched for: the plan behind those documents is dropped along with the
+    // record of having served them. Otherwise every request answers 500 while
+    // `servedFaces` keeps handing Gate 3 a plan the preview no longer serves,
+    // and the gate calls that a match.
+    if (key === 'unreadable') { cached = undefined; served.clear(); }
     if (key !== 'unreadable' && cached?.key === key) return cached.plan;
     const hosted = selfHostFaces(await loadFontSources(fontsDir), (bytes) => createHash('sha256').update(bytes).digest('hex'));
     for (const file of hosted.files) built.set(file.path, Buffer.from(file.contents));
