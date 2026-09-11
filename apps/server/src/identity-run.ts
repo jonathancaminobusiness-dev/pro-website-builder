@@ -246,13 +246,22 @@ export class IdentityRun {
     await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: CHECKPOINT_EVENT, payload: payload as unknown as Record<string, unknown> }));
   }
 
-  /** The one entry point that spends model turns. Nothing else in this class starts a worker. */
-  async start(): Promise<IdentityRunSnapshot> {
+  /**
+   * The one entry point that spends model turns. Nothing else in this class
+   * starts a worker.
+   *
+   * It answers as soon as the fan-out is under way, with the `running`
+   * snapshot, and never holds its caller for the stage deadline — which is
+   * counted in tens of minutes, far beyond any HTTP client's patience. What the
+   * stage becomes is read from the snapshot, through the polling the studio
+   * already does; `settled()` is how a caller that owns the process waits.
+   */
+  async begin(): Promise<IdentityRunSnapshot> {
     this.refuseIfTerminal('create another one to run the identity stage.');
     // A failure is not the end of the run: the captain can ask again here, on
     // the same terms a restarted process already offers.
     if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
-    if (this.started) { await this.inFlight; return this.snapshot(); }
+    if (this.started) return this.snapshot();
     this.started = true;
     this.status = 'running';
     this.abort = new AbortController();
@@ -267,6 +276,15 @@ export class IdentityRun {
       this.status = 'failed';
       await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.stage.failed', payload: { reason: this.failure } }));
     });
+    return this.snapshot();
+  }
+
+  /** Resolves when the in-flight fan-out has settled, whatever it settled as. */
+  async settled(): Promise<void> { await this.inFlight; }
+
+  /** Starts the stage and waits for it, for callers that own the process rather than an HTTP response. */
+  async start(): Promise<IdentityRunSnapshot> {
+    await this.begin();
     await this.inFlight;
     return this.snapshot();
   }

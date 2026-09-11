@@ -926,15 +926,51 @@ describe('identity api', () => {
 
   const post = (origin: string, path: string, payload: unknown) => fetch(`${origin}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: STUDIO_ORIGIN }, body: JSON.stringify(payload) });
 
+  // `start` answers as soon as the fan-out is under way, so a test that wants to
+  // decide the gate reads the run the way the studio does: by polling it.
+  async function settled(origin: string, runId: string): Promise<{ status: string; directions: unknown[]; divergence: { passed: boolean } }> {
+    for (let attempt = 0; attempt < 2000; attempt += 1) {
+      const response = await fetch(`${origin}/api/identity/runs/${runId}`, { headers: { origin: STUDIO_ORIGIN } });
+      const snapshot = await response.json() as { status: string; directions: unknown[]; divergence: { passed: boolean } };
+      if (snapshot.status !== 'running' && snapshot.status !== 'queued') return snapshot;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`Identity run ${runId} never settled.`);
+  }
+
+  async function startAndSettle(origin: string, runId: string): Promise<{ status: string; directions: unknown[]; divergence: { passed: boolean } }> {
+    const started = await post(origin, `/api/identity/runs/${runId}/start`, { approverRole: 'captain' });
+    expect(started.status).toBe(200);
+    return settled(origin, runId);
+  }
+
+  it('answers a start immediately with the running snapshot instead of holding the stage deadline', async () => {
+    await withServer(async (origin) => {
+      await post(origin, '/api/identity/runs', { runId: 'immediate-start' });
+      const started = await post(origin, '/api/identity/runs/immediate-start/start', { approverRole: 'captain' });
+      expect(started.status).toBe(200);
+      // The whole point: the response carries `running`, not the finished fan-out.
+      const startedBody = await started.json() as { status: string; directions: unknown[] };
+      expect(startedBody.status).toBe('running');
+      expect(startedBody.directions).toEqual([]);
+
+      // A second start while the first is still in flight is the same answer, not a second fan-out.
+      const again = await post(origin, '/api/identity/runs/immediate-start/start', { approverRole: 'captain' });
+      expect((await again.json() as { status: string }).status).not.toBe('queued');
+
+      const finished = await settled(origin, 'immediate-start');
+      expect(finished.status).toBe('needs_review');
+      expect(finished.directions).toHaveLength(3);
+    });
+  });
+
   it('drives one run from creation to an approved gate and back open', async () => {
     await withServer(async (origin) => {
       const created = await post(origin, '/api/identity/runs', { runId: 'api-run' });
       expect(created.status).toBe(201);
       expect((await created.json() as { status: string }).status).toBe('queued');
 
-      const started = await post(origin, '/api/identity/runs/api-run/start', { approverRole: 'captain' });
-      const startedBody = await started.json() as { status: string; directions: Array<{ directionId: string }>; divergence: { passed: boolean } };
-      expect(started.status).toBe(200);
+      const startedBody = await startAndSettle(origin, 'api-run');
       expect(startedBody.status).toBe('needs_review');
       expect(startedBody.directions).toHaveLength(3);
       expect(startedBody.divergence.passed).toBe(true);
@@ -974,7 +1010,7 @@ describe('identity api', () => {
   it('rejects a token change that carries anything but a value', async () => {
     await withServer(async (origin) => {
       await post(origin, '/api/identity/runs', { runId: 'bad-token' });
-      await post(origin, '/api/identity/runs/bad-token/start', { approverRole: 'captain' });
+      await startAndSettle(origin, 'bad-token');
       await post(origin, '/api/identity/runs/bad-token/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
       // The caller does not get to declare the token's type; it sends the value the approved token takes.
       const response = await post(origin, '/api/identity/runs/bad-token/token', { approverRole: 'captain', tokenPath: 'color.ink', value: { $value: '#000000', $type: 'dimension' } });
@@ -985,7 +1021,7 @@ describe('identity api', () => {
   it('answers 400 when the captain approves a blocked direction without an override', async () => {
     await withServer(async (origin) => {
       await post(origin, '/api/identity/runs', { runId: 'blocked-gate' });
-      await post(origin, '/api/identity/runs/blocked-gate/start', { approverRole: 'captain' });
+      await startAndSettle(origin, 'blocked-gate');
       await post(origin, '/api/identity/runs/blocked-gate/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
       await post(origin, '/api/identity/runs/blocked-gate/token', { approverRole: 'captain', tokenPath: 'type.display', value: 'Inter-only hero, Georgia, serif' });
       const refused = await post(origin, '/api/identity/runs/blocked-gate/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'Mesmo assim.' });
@@ -997,7 +1033,7 @@ describe('identity api', () => {
   it('refuses a value the approved token cannot take with a 400 and the reason', async () => {
     await withServer(async (origin) => {
       await post(origin, '/api/identity/runs', { runId: 'typed-token' });
-      await post(origin, '/api/identity/runs/typed-token/start', { approverRole: 'captain' });
+      await startAndSettle(origin, 'typed-token');
       await post(origin, '/api/identity/runs/typed-token/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
       const response = await post(origin, '/api/identity/runs/typed-token/token', { approverRole: 'captain', tokenPath: 'space.md', value: '#ff7a00' });
       expect(response.status).toBe(400);
@@ -1011,7 +1047,7 @@ describe('identity api', () => {
     const first = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
     const firstOrigin = `http://127.0.0.1:${(first.api.address() as AddressInfo).port}`;
     await post(firstOrigin, '/api/identity/runs', { runId: 'restarted' });
-    await post(firstOrigin, '/api/identity/runs/restarted/start', { approverRole: 'captain' });
+    await startAndSettle(firstOrigin, 'restarted');
     await first.close();
 
     const second = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
@@ -1039,7 +1075,7 @@ describe('identity api', () => {
     const first = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
     const firstOrigin = `http://127.0.0.1:${(first.api.address() as AddressInfo).port}`;
     await post(firstOrigin, '/api/identity/runs', { runId: 'contended' });
-    await post(firstOrigin, '/api/identity/runs/contended/start', { approverRole: 'captain' });
+    await startAndSettle(firstOrigin, 'contended');
     await first.close();
 
     const second = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
