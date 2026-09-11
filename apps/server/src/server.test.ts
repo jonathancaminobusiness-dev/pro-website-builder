@@ -156,6 +156,45 @@ describe('local API', () => {
     db.sqlite.close();
   });
 
+  it('answers 409 with its reason to a publish the release refuses, so the studio can tell a stale release from a broken server', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-publish-'));
+    const db = openDatabase(join(dir, 'publish.sqlite'));
+    const runs = new Map<string, FixtureRun>();
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    const publish = (body: Record<string, unknown>) => fetch(`${origin}/api/runs/publish-refusal/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify(body) });
+    await fetch(`${origin}/api/runs`, { method: 'POST', headers: studio, body: JSON.stringify({ runId: 'publish-refusal' }) });
+    for (const stage of ['identity', 'prototype'] as const) {
+      await fetch(`${origin}/api/runs/publish-refusal/stage`, { method: 'POST', headers: studio });
+      await fetch(`${origin}/api/runs/publish-refusal/approve`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', stage }) });
+    }
+    await fetch(`${origin}/api/runs/publish-refusal/stage`, { method: 'POST', headers: studio });
+
+    // Nothing was prepared in this execution, so there is no bundle to publish.
+    const unprepared = await publish({ approverRole: 'captain', digest: 'a'.repeat(64) });
+    expect(unprepared.status).toBe(409);
+    expect(((await unprepared.json()) as { error: string }).error).toMatch(/release/i);
+
+    const prepared = (await (await fetch(`${origin}/api/runs/publish-refusal/release`, { method: 'POST', headers: studio })).json()) as { digest: string };
+    // The captain approved a bundle this run no longer holds: a conflict with a
+    // reason naming both digests, not an opaque 500.
+    const stale = await publish({ approverRole: 'captain', digest: 'b'.repeat(64) });
+    expect(stale.status).toBe(409);
+    expect(((await stale.json()) as { error: string }).error).toContain(prepared.digest);
+    // The refusal left the gate publishable, and the right digest still works.
+    // An open point the captain never accepted in writing is the same kind of
+    // refusal, and names what is still open.
+    const unaccepted = await publish({ approverRole: 'captain', digest: prepared.digest });
+    expect(unaccepted.status).toBe(409);
+    expect(((await unaccepted.json()) as { error: string }).error).toMatch(/aceitar por escrito/);
+    // Every refusal left the gate publishable, and the accepted publish works.
+    expect((await publish({ approverRole: 'captain', digest: prepared.digest, rationale: 'o capitão aceita os pontos em aberto por escrito' })).status).toBe(200);
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    db.sqlite.close();
+  });
+
   it('answers 409 to a second release preparation while the first is still in flight', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-prepare-'));
     const db = openDatabase(join(dir, 'prepare.sqlite'));

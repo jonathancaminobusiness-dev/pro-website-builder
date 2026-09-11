@@ -3,7 +3,7 @@ import { createFixtureIR, type AgentTask, type Approval } from '@pwb/domain';
 import type { ReleaseManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type ScheduleResult, type VersionRecord, VersionStore } from '@pwb/orchestrator';
-import { ReleaseRun, type ReleaseApprover, type ReleaseContext, type ReleaseRunOptions, type ReleaseSnapshot } from './release-run.js';
+import { ReleasePublishRefusedError, ReleaseRun, type ReleaseApprover, type ReleaseContext, type ReleaseRunOptions, type ReleaseSnapshot } from './release-run.js';
 import type { ModelProvider } from '@pwb/providers';
 import { modelAlias, type ModelProviderName } from './provider.js';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
@@ -185,9 +185,9 @@ export class FixtureRun {
   async publishRelease(digest: string, rationale?: string, approverRole: ReleaseApprover = 'captain'): Promise<ReleaseManifest> {
     this.requireInitialized();
     if (!this.releaseRun) throw new Error('A finalização não está habilitada nesta execução.');
-    if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new Error('Stage finalization is not awaiting approval.');
+    if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new ReleasePublishRefusedError('Stage finalization is not awaiting approval.');
     this.requireClean('finalization', this.currentVersion);
-    if (this.releaseRun.snapshot()?.refinedFromVersionId !== this.finalizationVersion?.id) throw new Error('O release preparado não é o da proposta que está no gate; prepare o release novamente antes de publicar.');
+    if (this.releaseRun.snapshot()?.refinedFromVersionId !== this.finalizationVersion?.id) throw new ReleasePublishRefusedError('O release preparado não é o da proposta que está no gate; prepare o release novamente antes de publicar.');
     this.status = 'queued';
     try { return await this.releaseRun.publish(approverRole, digest, rationale); }
     catch (error) { if (this.status === 'queued') this.status = 'needs_review'; throw error; }

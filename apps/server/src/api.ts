@@ -1,10 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { ReleaseVetoError, type ReleaseManifest } from '@pwb/export';
 import { randomUUID } from 'node:crypto';
 import type { FixtureRun } from './fixture-run.js';
 import { handleIdentityRequest, type IdentityApiOptions } from './identity-api.js';
 import type { PrototypeRunRegistry } from './prototype-api.js';
 import { handlePrototypeRequest } from './prototype-routes.js';
-import { ReleasePrepareConflictError } from './release-run.js';
+import { ReleasePrepareConflictError, ReleasePublishRefusedError } from './release-run.js';
 import { RunConflictError } from './run-conflict.js';
 import { STUDIO_ORIGIN } from './security.js';
 
@@ -81,7 +82,18 @@ export function createApiServer(options: ApiOptions): Server {
         const input = await body(request);
         if (input.approverRole !== 'captain') { send(response, 403, { error: 'Only the captain can approve v1 gates.' }); return; }
         if (typeof input.digest !== 'string') { send(response, 400, { error: 'O digest do bundle aprovado é obrigatório.' }); return; }
-        const manifest = await run.publishRelease(input.digest, typeof input.rationale === 'string' ? input.rationale : undefined);
+        // A publish the release refuses is a conflict, never a server failure:
+        // the report moved on, a veto stands, or an open point was never
+        // accepted in writing. The Studio has to be able to tell those from a
+        // broken server, so they answer 409 with their own reason, the way a
+        // blocked prepare already does.
+        let manifest: ReleaseManifest;
+        try { manifest = await run.publishRelease(input.digest, typeof input.rationale === 'string' ? input.rationale : undefined); }
+        catch (error) {
+          if (error instanceof ReleasePublishRefusedError) { send(response, 409, { error: error.message }); return; }
+          if (error instanceof ReleaseVetoError) { send(response, 409, { error: error.message, vetoes: error.vetoes }); return; }
+          throw error;
+        }
         send(response, 200, { manifest, snapshot: run.releaseSnapshot(), run: run.snapshot() });
         return;
       }

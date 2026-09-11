@@ -61,6 +61,20 @@ export class ReleasePrepareConflictError extends Error {
   constructor(runId: string) { super(`O release do run ${runId} já está sendo preparado.`); this.name = 'ReleasePrepareConflictError'; }
 }
 
+/**
+ * A publish the release itself refuses: the bundle the captain approved is not
+ * the one this run now holds, a veto still stands, an open point was never
+ * accepted in writing, or nothing was prepared at all.
+ *
+ * None of these is a server failure — the state moved, or never allowed the
+ * publish — so the API answers them the way it already answers a blocked
+ * prepare, and the Studio can tell "the release changed" from "the server
+ * broke" instead of reading 500 for both.
+ */
+export class ReleasePublishRefusedError extends Error {
+  constructor(message: string) { super(message); this.name = 'ReleasePublishRefusedError'; }
+}
+
 export interface ReleaseSnapshot {
   runId: string;
   digest: string;
@@ -167,16 +181,16 @@ export class ReleaseRun {
   async publish(approverRole: string, digest: string, rationale?: string): Promise<ReleaseManifest> {
     if (approverRole !== 'captain' && approverRole !== 'fixture') throw new Error('Só o capitão aprova o gate de release.');
     const current = this.snapshotValue;
-    if (!current || !this.compiled || !this.context) throw new Error('O release ainda não foi preparado nesta execução.');
-    if (digest !== current.digest) throw new Error(`O capitão aprovou o bundle ${digest}, e o release atual é ${current.digest}.`);
+    if (!current || !this.compiled || !this.context) throw new ReleasePublishRefusedError('O release ainda não foi preparado nesta execução.');
+    if (digest !== current.digest) throw new ReleasePublishRefusedError(`O capitão aprovou o bundle ${digest}, e o release atual é ${current.digest}.`);
     if (current.report.blocked) throw new ReleaseVetoError(current.report.vetoes);
     const escalations = current.report.escalations;
     const reason = rationale?.trim() ?? '';
     if (escalations.length > 0 && approverRole !== 'captain') {
-      throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que só o capitão pode aceitar por escrito: ${escalations.join(' ')}`);
+      throw new ReleasePublishRefusedError(`O release tem ${escalations.length} ponto(s) em aberto que só o capitão pode aceitar por escrito: ${escalations.join(' ')}`);
     }
     if (escalations.length > 0 && reason === '') {
-      throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
+      throw new ReleasePublishRefusedError(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
     const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot);
     await appendReleasePublication(this.options.releaseRoot, {
