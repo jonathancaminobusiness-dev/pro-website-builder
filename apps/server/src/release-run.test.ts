@@ -109,7 +109,7 @@ describe('Gate 3 over the local API', () => {
     // The evidence is incomplete, so the captain accepts the gap in writing and
     // the run records what they accepted.
     const withoutReason = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest }) });
-    expect(withoutReason.status).toBe(500);
+    expect(withoutReason.status).toBe(409);
     expect((await withoutReason.json() as { error: string }).error).toMatch(/aceitar por escrito/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
 
@@ -349,7 +349,7 @@ describe('Gate 3 over the local API', () => {
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(prepared.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
     const blocked = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest }) });
-    expect(blocked.status).toBe(500);
+    expect(blocked.status).toBe(409);
 
     const approve = await fetch(`${origin}/api/runs/${runId}/approve`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', stage: 'finalization' }) });
     expect(approve.status).toBe(409);
@@ -411,7 +411,7 @@ describe('Gate 3 over the local API', () => {
     expect(run.snapshot().currentVersion.id).not.toBe(prepared.versionId);
 
     const stale = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
-    expect(stale.status).toBe(500);
+    expect(stale.status).toBe(409);
     expect((await stale.json() as { error: string }).error).toMatch(/prepare o release novamente/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
     expect(run.snapshot().status).toBe('needs_review');
@@ -455,7 +455,7 @@ describe('Gate 3 over the local API', () => {
     const { origin, runId, releaseRoot } = await harness();
     await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
     const stale = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: 'a-digest-from-an-older-report' }) });
-    expect(stale.status).toBe(500);
+    expect(stale.status).toBe(409);
     expect((await stale.json() as { error: string }).error).toMatch(/aprovou o bundle/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
   });
@@ -468,7 +468,7 @@ describe('Gate 3 over the local API', () => {
     expect(prepared.report.blocked).toBe(true);
     expect(prepared.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
     const blocked = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest }) });
-    expect(blocked.status).toBe(500);
+    expect(blocked.status).toBe(409);
     expect((await blocked.json() as { error: string }).error).toMatch(/CRITICAL_AA_REGRESSION/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
   });
