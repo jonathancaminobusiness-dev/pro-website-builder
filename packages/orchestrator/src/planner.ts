@@ -1,15 +1,48 @@
 import { hashJson, stageRoles, stageWritablePaths, type AgentTask, type DesignIR } from '@pwb/domain';
 import type { VersionStore } from './applier.js';
+import { DEFAULT_MAX_ACTIVE_CLAUDE } from './scheduler.js';
 
 export interface RunPlan { runId: string; tasks: AgentTask[]; edges: [string, string][]; }
 
 const readablePaths = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
-// Identity has a serial refinement and a second critic read after the initial
-// fan-out. Its stage budget must cover that critical path after the
-// accessibility critics' ten-minute default, while each worker still keeps its
-// own deadline for fail-fast recovery.
-export const stageDeadlinesMs: Record<AgentTask['stage'], number> = { identity: 45 * 60_000, prototype: 15 * 60_000, finalization: 20 * 60_000 };
+const identityDirections = 3;
+const identityRegularCriticMs = 3 * 60_000;
+const identityAccessibilityCriticMs = 10 * 60_000;
+const identityRefinerMs = 8 * 60_000;
+const identityArtDirectorMs = 5 * 60_000;
+
+function repeated(value: number, count: number): number[] {
+  return Array.from({ length: count }, () => value);
+}
+
+function claudeLaneDurationMs(durations: number[]): number {
+  const laneEndTimes = Array.from({ length: DEFAULT_MAX_ACTIVE_CLAUDE }, () => 0);
+  for (const duration of durations) {
+    const lane = laneEndTimes.indexOf(Math.min(...laneEndTimes));
+    laneEndTimes[lane]! += duration;
+  }
+  return Math.max(...laneEndTimes);
+}
+
+const identityInitialCriticMs = claudeLaneDurationMs([
+  ...repeated(identityRegularCriticMs, identityDirections + 1),
+  ...repeated(identityAccessibilityCriticMs, identityDirections),
+]);
+const identitySecondCriticMs = claudeLaneDurationMs([
+  ...repeated(identityRegularCriticMs, identityDirections),
+  ...repeated(identityAccessibilityCriticMs, identityDirections),
+]);
+const identityStageDeadlineMs = [
+  4 * 60_000,
+  7 * 60_000,
+  identityInitialCriticMs,
+  identityDirections * identityRefinerMs,
+  identitySecondCriticMs,
+  claudeLaneDurationMs(repeated(identityArtDirectorMs, identityDirections)),
+].reduce((total, duration) => total + duration, 0);
+
+export const stageDeadlinesMs: Record<AgentTask['stage'], number> = { identity: identityStageDeadlineMs, prototype: 15 * 60_000, finalization: 20 * 60_000 };
 
 function valueAt(ir: DesignIR, path: string): unknown {
   let current: unknown = ir;
