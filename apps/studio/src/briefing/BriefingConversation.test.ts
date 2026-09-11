@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { RequestError } from '../request.js';
 import BriefingConversation from './BriefingConversation.js';
 import { ConversationContractError, type ConversationSnapshot } from './contract.js';
-import { answerTurn, clarifyingQuestion, CONSOLIDATED_SUMMARY, conceptualDirections, confirmationTurn, conversationSnapshot, entryTurn, questionTurn, recommendationTurn } from './conversation-fixture.js';
+import { answerTurn, clarifyingQuestion, CONSOLIDATED_SUMMARY, conceptualDirections, confirmationTurn, conversationSnapshot, entryTurn, followUpQuestion, followUpQuestionTurn, questionTurn, recommendationTurn } from './conversation-fixture.js';
 import { classifyFailure, conversationReducer, initialConversationState, type ConversationAction, type ConversationUiState } from './machine.js';
 
 const NOW = new Date('2026-09-11T10:00:00.000Z');
@@ -83,7 +83,7 @@ describe('briefing conversation panel', () => {
   });
 
   it('keeps the history readable and corrects only the turn the open field holds', () => {
-    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), answerTurn('Carinho no atendimento.'), questionTurn()], question: clarifyingQuestion(), messageCount: 3 })));
+    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion())], question: clarifyingQuestion(), messageCount: 3 })));
 
     expect(markup).toContain('role="log"');
     expect(markup).toContain('aria-label="Histórico da conversa de briefing"');
@@ -96,6 +96,18 @@ describe('briefing conversation panel', () => {
     expect(withControl).toHaveLength(1);
     expect(withControl[0]).toContain('Carinho no atendimento.');
     expect(withControl[0]).not.toContain('Somos uma clínica de bairro.');
+  });
+
+  it('offers no correction of an answer the conversation has already moved past', () => {
+    const markup = render(state(conversationSnapshot({
+      state: 'question',
+      turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion()), followUpQuestionTurn()],
+      question: followUpQuestion(),
+      messageCount: 4,
+    })));
+
+    expect(markup).toContain('Qual prova de acompanhamento');
+    expect(markup).not.toContain('Corrigir esta resposta');
   });
 
   it('offers no correction over an open question the captain has not answered yet', () => {
@@ -321,7 +333,7 @@ describe('briefing conversation panel', () => {
 
   it('freezes every writer of a locked field, not just the keyboard', () => {
     const failed = state(
-      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), answerTurn('Carinho no atendimento.')], question: clarifyingQuestion(), messageCount: 2 }),
+      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), answerTurn('Carinho no atendimento.', clarifyingQuestion())], question: clarifyingQuestion(), messageCount: 2 }),
       { type: 'draft', value: 'Segurança clínica.' },
       { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' } } },
       { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },

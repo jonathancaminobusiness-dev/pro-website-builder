@@ -226,16 +226,24 @@ export interface ConversationAffordances {
  * control that would post it as the answer to something else.
  */
 export function correctableTurnId(state: ConversationUiState, can: ConversationAffordances): string | null {
-  const turns = state.snapshot?.turns;
-  if (turns === undefined) return null;
-  const intent = can.asking ? 'answer' : can.entryOpen ? 'entry' : null;
-  if (intent === null) return null;
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
-    if (turn !== undefined && turn.role === 'captain' && turn.intent === intent) return turn.id;
+  const snapshot = state.snapshot;
+  if (snapshot === null) return null;
+  const openQuestionId = can.asking ? snapshot.question?.id : undefined;
+  if (!can.asking && !can.entryOpen) return null;
+  for (let index = snapshot.turns.length - 1; index >= 0; index -= 1) {
+    const turn = snapshot.turns[index];
+    if (turn === undefined || turn.role !== 'captain') continue;
+    if (openQuestionId === undefined) {
+      if (turn.intent === 'entry') return turn.id;
+    } else if (turn.intent === 'answer' && turn.question?.id === openQuestionId) {
+      return turn.id;
+    }
   }
   return null;
 }
+
+/** The longest wait `setTimeout` can hold: beyond it the callback fires at once. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
  * How long until the time ceiling changes what the panel may offer. The screen
@@ -247,7 +255,10 @@ export function limitRefreshDelayMs(state: ConversationUiState, now: Date): numb
   const expiresAt = state.snapshot?.limits.expiresAt;
   if (expiresAt === undefined) return null;
   const delay = Date.parse(expiresAt) - now.getTime();
-  return delay > 0 ? delay : null;
+  if (!(delay > 0)) return null;
+  // A wait longer than `setTimeout` can hold overflows into an immediate wake,
+  // so a distant ceiling is waited for in bounded steps instead.
+  return Math.min(delay, MAX_TIMEOUT_MS);
 }
 
 export function affordances(state: ConversationUiState, now: Date): ConversationAffordances {

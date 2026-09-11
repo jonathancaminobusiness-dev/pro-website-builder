@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RequestError } from '../request.js';
 import { ConversationContractError } from './contract.js';
-import { clarifyingQuestion, CONSOLIDATED_SUMMARY, answerTurn, confirmationTurn, conversationSnapshot, entryTurn, questionTurn, recommendationTurn } from './conversation-fixture.js';
+import { clarifyingQuestion, CONSOLIDATED_SUMMARY, answerTurn, confirmationTurn, conversationSnapshot, entryTurn, followUpQuestion, followUpQuestionTurn, questionTurn, recommendationTurn } from './conversation-fixture.js';
 import {
   affordances,
   classifyFailure,
@@ -357,10 +357,21 @@ describe('summary seeding', () => {
 });
 
 describe('correctable turn', () => {
-  it('names the latest answer while a question is open, never the entry text', () => {
-    const state = opened({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), answerTurn('Carinho no atendimento.'), questionTurn()], question: clarifyingQuestion(), messageCount: 3 });
+  it('names the answer to the open question, never the entry text', () => {
+    const state = opened({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion())], question: clarifyingQuestion(), messageCount: 3 });
 
     expect(correctableTurnId(state, affordances(state, NOW))).toBe('turn-answer');
+  });
+
+  it('never corrects an answer to a question the conversation has already moved past', () => {
+    const state = opened({
+      state: 'question',
+      turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion()), followUpQuestionTurn()],
+      question: followUpQuestion(),
+      messageCount: 4,
+    });
+
+    expect(correctableTurnId(state, affordances(state, NOW))).toBeNull();
   });
 
   it('names nothing while a question the captain never answered is the only field on screen', () => {
@@ -396,7 +407,20 @@ describe('time ceiling refresh', () => {
     const passed = opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T09:00:00.000Z' }, messageCount: 2 });
 
     expect(limitRefreshDelayMs(passed, NOW)).toBeNull();
+    expect(limitRefreshDelayMs(opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: NOW.toISOString() }, messageCount: 2 }), NOW)).toBeNull();
     expect(limitRefreshDelayMs(opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 }), NOW)).toBeNull();
     expect(limitRefreshDelayMs(initialConversationState(), NOW)).toBeNull();
+  });
+});
+
+describe('a ceiling further away than a timer can hold', () => {
+  it('waits in a step the platform can actually schedule', () => {
+    const distant = opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2027-09-11T10:00:00.000Z' }, messageCount: 2 });
+
+    const delay = limitRefreshDelayMs(distant, NOW);
+
+    expect(delay).toBe(2_147_483_647);
+    expect(delay).toBeLessThanOrEqual(2_147_483_647);
+    expect(affordances(distant, NOW).atLimit).toBe(false);
   });
 });

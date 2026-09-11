@@ -30,12 +30,14 @@ export interface FakeConversationOptions {
   breakNextResponse?: boolean;
   /** Answer every conversation read with 404, the way a server without the endpoints does. */
   absent?: boolean;
+  /** The identity run's status, so a test that must sit idle is not re-rendered by the Studio's own polling. */
+  runStatus?: string;
 }
 
-function identityRun(runId: string, briefing: string): Record<string, unknown> {
+function identityRun(runId: string, briefing: string, status: string): Record<string, unknown> {
   return {
     runId,
-    status: 'queued',
+    status,
     baseVersionId: 'version-root',
     briefing,
     directions: [],
@@ -87,11 +89,15 @@ export class FakeConversationApi {
 
     if (path.endsWith('/api/identity/runs') && method === 'POST') {
       this.briefing = String((request.postDataJSON() as { briefing?: string }).briefing ?? '');
-      await json(route, 200, identityRun(this.runId, this.briefing));
+      await json(route, 200, this.identity());
       return;
     }
-    if (method === 'GET') { await json(route, 200, identityRun(this.runId, this.briefing)); return; }
-    await json(route, 200, identityRun(this.runId, this.briefing));
+    if (method === 'GET') { await json(route, 200, this.identity()); return; }
+    await json(route, 200, this.identity());
+  }
+
+  private identity(): Record<string, unknown> {
+    return identityRun(this.runId, this.briefing, this.options.runStatus ?? 'queued');
   }
 
   /** The state machine, plus the ledger that makes a repeated key a no-op rather than a second turn. */
@@ -120,7 +126,7 @@ export class FakeConversationApi {
     } else {
       const captainTurn: ConversationTurn = intent === 'skip'
         ? { id: 'turn-skip', role: 'captain', message: 'Pulei esta pergunta.', intent: 'skip', facts: [], hypotheses: [], unknowns: [], nextState: 'confirmation' }
-        : answerTurn(message);
+        : answerTurn(message, current.question);
       const studioTurn = confirmationTurn();
       next = {
         ...current,

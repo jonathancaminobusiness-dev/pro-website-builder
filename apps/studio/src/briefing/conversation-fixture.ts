@@ -40,8 +40,22 @@ export function questionTurn(): ConversationTurn {
   return { id: 'turn-question', role: 'studio', message: clarifyingQuestion().prompt, intent: 'question', question: clarifyingQuestion(), facts: [], hypotheses: [], unknowns: [], nextState: 'question' };
 }
 
-export function answerTurn(message: string): ConversationTurn {
-  return { id: 'turn-answer', role: 'captain', message, intent: 'answer', facts: [], hypotheses: [], unknowns: [], nextState: 'confirmation' };
+/** The question a captain answer names is the question it answered: a correction can only ever go back into that one. */
+export function answerTurn(message: string, question?: ConversationQuestion): ConversationTurn {
+  return { id: 'turn-answer', role: 'captain', message, intent: 'answer', ...(question ? { question } : {}), facts: [], hypotheses: [], unknowns: [], nextState: 'confirmation' };
+}
+
+/** A second clarifying question, so a test can tell the open one from the one already answered. */
+export function followUpQuestion(): ConversationQuestion {
+  return {
+    id: 'question-proof',
+    prompt: 'Qual prova de acompanhamento a marca pode mostrar: retorno agendado, histórico do animal ou plano de prevenção?',
+    why: 'A prova escolhida decide o que as três direções mostram como evidência.',
+  };
+}
+
+export function followUpQuestionTurn(): ConversationTurn {
+  return { id: 'turn-question-proof', role: 'studio', message: followUpQuestion().prompt, intent: 'question', question: followUpQuestion(), facts: [], hypotheses: [], unknowns: [], nextState: 'question' };
 }
 
 export const CONSOLIDATED_SUMMARY = 'Clínica veterinária de bairro, preventiva, para cães e gatos. A identidade deve equilibrar autoridade clínica e proximidade cotidiana, com acompanhamento como prova. Exclusões: hospital frio e pet shop genérico.';

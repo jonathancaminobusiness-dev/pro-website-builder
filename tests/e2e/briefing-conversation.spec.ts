@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { answerTurn, clarifyingQuestion, CONSOLIDATED_SUMMARY, entryTurn, questionTurn, recommendationTurn } from '../../apps/studio/src/briefing/conversation-fixture.js';
+import { answerTurn, clarifyingQuestion, CONSOLIDATED_SUMMARY, entryTurn, followUpQuestion, followUpQuestionTurn, questionTurn, recommendationTurn } from '../../apps/studio/src/briefing/conversation-fixture.js';
 import { FakeConversationApi, type FakeConversationOptions } from './fake-conversation-api.js';
 
 const ENTRY = 'Somos uma clínica veterinária de bairro. Queremos cuidar de cães e gatos com prevenção, sem parecer hospital frio nem pet shop genérico.';
@@ -244,7 +244,7 @@ test('corrects the answer the open question is asking for, never the entry text'
       state: 'question',
       briefing: ENTRY,
       messageCount: 3,
-      turns: [entryTurn(ENTRY), recommendationTurn(), answerTurn('Carinho no atendimento.'), questionTurn()],
+      turns: [entryTurn(ENTRY), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion())],
       question: clarifyingQuestion(),
     },
   });
@@ -265,6 +265,57 @@ test('corrects the answer the open question is asking for, never the entry text'
   const answers = api.writes.filter((write) => write.body.intent === 'answer');
   expect(answers).toHaveLength(1);
   expect(answers[0]?.body.message).toBe('Carinho no atendimento, sem abrir mão da segurança clínica.');
+});
+
+test('never corrects an answer into a question the conversation has already moved past', async ({ page }) => {
+  await openConversation(page, {
+    initial: {
+      state: 'question',
+      briefing: ENTRY,
+      messageCount: 4,
+      turns: [entryTurn(ENTRY), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion()), followUpQuestionTurn()],
+      question: followUpQuestion(),
+    },
+  });
+  const chat = page.locator('.briefing-chat');
+
+  await expect(chat.locator('#briefing-chat-question')).toHaveText(followUpQuestion().prompt);
+  // The answer on screen belongs to the question already answered, so it has no
+  // field here to go back into: correcting it would answer a different question.
+  await expect(chat.getByRole('button', { name: 'Corrigir esta resposta' })).toHaveCount(0);
+});
+
+test('crosses the time ceiling on its own, with nothing on screen touched', async ({ page }) => {
+  const start = new Date('2026-09-11T10:00:00.000Z');
+  await page.clock.install({ time: start });
+  const api = new FakeConversationApi({
+    // A settled run is not polled, so the only thing that can change the panel
+    // is the ceiling the panel itself is waiting for.
+    runStatus: 'cancelled',
+    initial: {
+      state: 'question',
+      briefing: ENTRY,
+      messageCount: 2,
+      turns: [entryTurn(ENTRY), recommendationTurn(), questionTurn()],
+      question: clarifyingQuestion(),
+      limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: new Date(start.getTime() + 10 * 60_000).toISOString() },
+    },
+  });
+  await api.install(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByLabel('Briefing do projeto').fill(ENTRY);
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+
+  const chat = page.locator('.briefing-chat');
+  await expect(chat.getByRole('button', { name: 'Pular esta pergunta' })).toBeVisible();
+  await expect(chat.getByText('limite atingido')).toHaveCount(0);
+
+  await page.clock.fastForward('10:01');
+
+  await expect(chat.getByText('limite atingido')).toBeVisible();
+  await expect(chat.getByRole('button', { name: 'Pular esta pergunta' })).toHaveCount(0);
+  await expect(page.getByLabel(/Briefing final, editável/)).toBeVisible();
 });
 
 test('reads the ceiling from the contract and closes manually once it is reached', async ({ page }) => {
