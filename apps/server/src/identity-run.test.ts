@@ -865,6 +865,25 @@ describe('identity run', () => {
     await expect(run.reject({ directionId: 'editorial-material', approverRole: 'designer', rationale: 'não' })).rejects.toThrow(/Only the captain/);
   });
 
+  it('finds the Gate 1 that approved a version the identity moved on from', async () => {
+    // A token change after the gate closed writes a descendant and leaves the
+    // approval on the version it was decided upon; the identity the run hands on
+    // is that descendant, and it is the only version id a client is ever shown.
+    const repository = new ProjectRepository(database);
+    const decided = createFixtureIR();
+    const moved = createFixtureIR();
+    moved.identity.decisions[0]!.rationale = 'Token ajustado depois do gate.';
+    await repository.createProject({ id: decided.meta.projectId, name: 'Identity stage project' });
+    await repository.createRun({ id: 'identity-moved', projectId: decided.meta.projectId });
+    await repository.saveVersion({ id: decided.meta.versionId, projectId: decided.meta.projectId, hash: 'h-decided', ir: decided });
+    await repository.saveVersion({ id: 'v-moved', projectId: decided.meta.projectId, parentId: decided.meta.versionId, hash: 'h-moved', ir: moved });
+    await repository.createApproval({ id: 'identity-moved-identity-approval-0', runId: 'identity-moved', projectId: decided.meta.projectId, stage: 'identity', approverRole: 'captain', versionId: decided.meta.versionId, versionHash: 'h-decided', decision: 'approved', rationale: 'Gate 1 decidido.' });
+
+    expect(repository.identityApprovalRun(decided.meta.versionId)).toBe('identity-moved');
+    expect(repository.identityApprovalRun('v-moved')).toBe('identity-moved');
+    expect(repository.identityApprovalRun('v-que-ninguem-decidiu')).toBeUndefined();
+  });
+
   it('refuses to return a direction once the gate is decided', async () => {
     const run = newRun('identity-decided-once');
     await run.initialize();

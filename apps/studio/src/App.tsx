@@ -13,6 +13,8 @@ interface Snapshot {
   currentVersion: { id: string; hash: string };
   rendered: { routes: Array<{ route: string; title: string; html: string }> };
   approvals: Array<{ stage: string; decision: string; versionId: string }>;
+  /** The release gate's own verdict on this run's document; the screen never re-derives it. */
+  releaseGate: { identityVersionId?: string; prototypeVersionId?: string; blocker?: string };
   exportManifest?: { digest: string; routes: Array<{ route: string; path: string }> };
 
   lintErrorCount: number;
@@ -283,9 +285,10 @@ export default function App() {
     // back from a decision there has to read the chain again, or the line and
     // its button would still describe the run as it was before the decision.
   }, [chainRunId, identity?.handoff?.versionId, hash]);
-  // Where Gate 2 stands is its newest decision, the way the release gate reads it.
-  const chainPrototype = [...(chainRun?.approvals ?? [])].reverse().find((entry) => entry.stage === 'prototype');
-  const prototypeApproved = chainPrototype?.decision === 'approved';
+  // Which decisions count is a fact about the version graph, which this screen
+  // does not hold: the gate's own verdict travels on the snapshot.
+  const chainGate = chainRun?.releaseGate;
+  const prototypeVersionId = chainGate?.prototypeVersionId;
   const runChainStage = (): void => {
     if (!chainRunId) return;
     setChainBusy(true); setChainError('');
@@ -351,10 +354,11 @@ export default function App() {
         {chainRunId
           ? <><p className="chain-line">{chainStale
               ? <>Cadeia identidade → protótipo <code>{chainRunId}</code>: a identidade mudou depois do Gate 1; aprove-a de novo antes de medir o protótipo e publicar.</>
-              : <>Cadeia identidade → protótipo: Gate 1 <code>{chainRunId}</code> aprovou a versão <code>{identity!.handoff!.versionId}</code>{prototypeApproved ? <> e o Gate 2 aprovou <code>{chainPrototype!.versionId}</code>, que desce dela</> : chainPrototype ? <>; o Gate 2 devolveu <code>{chainPrototype.versionId}</code> para revisão</> : <>; o Gate 2 ainda não aprovou nenhuma revisão desta identidade</>}.</>}</p>
+              : <>Cadeia identidade → protótipo: Gate 1 <code>{chainRunId}</code> aprovou a versão <code>{identity!.handoff!.versionId}</code>{prototypeVersionId ? <> e o Gate 2 aprovou <code>{prototypeVersionId}</code>, que desce dela</> : <>, e o Gate 2 ainda não aprovou nenhuma revisão que desça dela</>}.</>}</p>
+            {!chainStale && !prototypeVersionId && chainGate?.blocker && <p className="chain-line">{chainGate.blocker}</p>}
             <div className="actions">
-              <button className="secondary" onClick={runChainStage} disabled={chainBusy || chainStale || !prototypeApproved || chainRun?.currentStage === 'finalization'}>{chainBusy ? 'Executando…' : 'Executar a etapa de finalização'}</button>
-              {!chainStale && !prototypeApproved && <span className="qa-chip"><a href={GATE2_ROUTE}>Meça e aprove o protótipo no Gate 2</a></span>}
+              <button className="secondary" onClick={runChainStage} disabled={chainBusy || chainStale || !prototypeVersionId || chainRun?.currentStage === 'finalization'}>{chainBusy ? 'Executando…' : 'Executar a etapa de finalização'}</button>
+              {!chainStale && !prototypeVersionId && <span className="qa-chip"><a href={GATE2_ROUTE}>Meça e aprove o protótipo no Gate 2</a></span>}
             </div></>
           : <p className="chain-line">Nenhuma identidade aprovada neste navegador: o Gate 3 abaixo compila o briefing fixo desta demonstração. Aprove uma identidade no Gate 1 para publicar a sua.</p>}
         {chainError && <p className="error-banner" role="alert">{chainError}</p>}

@@ -218,7 +218,9 @@ it prepares and publishes that run. A run held in memory is reread from the ledg
 whenever it carries a decision it has not seen, because gates 1 and 2 close in
 their own runs and possibly in another process — and what a gate stands at is its
 newest decision *on the document being compiled*, so returning that revision for
-review reopens the gate while a decision on a sibling revision leaves it alone; two requests that reread it
+review reopens the gate while a decision on a sibling revision leaves it alone —
+and that verdict is what the run snapshot carries as `releaseGate`, so the studio
+states it instead of guessing it from the decision list; two requests that reread it
 together land on the same object, so a stage one of them starts is never orphaned
 by the other. Only the finalization stage of such a chain is this route's to run:
 `POST /api/runs/<identityRunId>/stage` and `/approve` answer `409` for the

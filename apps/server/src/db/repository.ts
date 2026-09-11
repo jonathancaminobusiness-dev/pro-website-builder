@@ -111,12 +111,21 @@ export class ProjectRepository {
 
   /**
    * The run whose Gate 1 approved this version, so a prototype run can be asked
-   * for by the approved version alone. The approvals table is the one place a
-   * closed gate is recorded, and Gate 1 writes exactly one approved row per
-   * decision, so the newest row wins if a version was approved twice.
+   * for by the approved version alone. The question is asked about the version's
+   * own history, not about the row alone: a token change after the gate closed
+   * moves the identity a run hands on forward while its approval stays on the
+   * version it was decided upon, and that descendant is still what that gate
+   * approved. The approvals table is the one place a closed gate is recorded, so
+   * the newest row on that lineage wins.
    */
   identityApprovalRun(versionId: string): string | undefined {
-    const row = this.db.sqlite.prepare("SELECT run_id AS runId FROM approvals WHERE stage = 'identity' AND decision = 'approved' AND version_id = ? ORDER BY rowid DESC LIMIT 1").get(versionId) as { runId: string } | undefined;
+    const row = this.db.sqlite.prepare(`WITH RECURSIVE lineage(id, parentId) AS (
+      SELECT id, parent_id FROM versions WHERE id = ?
+      UNION ALL SELECT versions.id, versions.parent_id FROM versions JOIN lineage ON versions.id = lineage.parentId
+    )
+    SELECT approvals.run_id AS runId FROM approvals JOIN lineage ON approvals.version_id = lineage.id
+    WHERE approvals.stage = 'identity' AND approvals.decision = 'approved'
+    ORDER BY approvals.rowid DESC LIMIT 1`).get(versionId) as { runId: string } | undefined;
     return row?.runId;
   }
 

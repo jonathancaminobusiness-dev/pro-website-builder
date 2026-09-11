@@ -28,6 +28,19 @@ export class ChainGateError extends Error {
   }
 }
 
+/**
+ * What the release gate says about the document this run holds, as a screen
+ * needs it. A client cannot answer this itself: which decisions count is decided
+ * by the version graph, and the snapshot carries one version, not the graph.
+ */
+export interface ReleaseGateState {
+  /** The version whose approval closes each chain gate for this document, when one does. */
+  identityVersionId?: string;
+  prototypeVersionId?: string;
+  /** Why Gate 3 may not run yet, or absent when it may. */
+  blocker?: string;
+}
+
 export interface FixtureSnapshot {
   runId: string;
   projectId: string;
@@ -36,6 +49,7 @@ export interface FixtureSnapshot {
   currentVersion: VersionRecord;
   rendered: RenderedDocument;
   approvals: Approval[];
+  releaseGate: ReleaseGateState;
   exportManifest?: ReleaseManifest;
   lintErrorCount: number;
 }
@@ -306,7 +320,24 @@ export class FixtureRun {
     return this.snapshot();
   }
 
-  snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
+  snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), releaseGate: this.releaseGateState(), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
+
+  /** The gate's own verdict on this document, so no reader has to re-derive it. */
+  private releaseGateState(): ReleaseGateState {
+    const lineage = this.ancestry(this.currentVersion);
+    const closed = (stage: Stage): string | undefined => {
+      const decided = this.decidedOn(stage, lineage);
+      return decided?.decision === 'approved' ? decided.versionId : undefined;
+    };
+    const identityVersionId = closed('identity');
+    const prototypeVersionId = closed('prototype');
+    const blocker = this.releaseBlocker();
+    return {
+      ...(identityVersionId ? { identityVersionId } : {}),
+      ...(prototypeVersionId ? { prototypeVersionId } : {}),
+      ...(blocker ? { blocker } : {}),
+    };
+  }
 
   /**
    * Why Gate 3 may not run yet, or nothing when it may.
