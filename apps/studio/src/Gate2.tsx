@@ -22,7 +22,15 @@ interface Report {
 }
 
 /** The Gate 1 execution a run was seeded from; the whole point of the run is to measure that identity. */
-interface Chain { identityRunId: string; identityVersionId: string; identityHash: string; projectId: string; failedImagery?: Array<{ id: string; reason: string }>; }
+interface Chain { identityRunId: string; identityVersionId: string; identityHash: string; projectId: string; seededImagery?: Array<{ id: string; status: 'generating' | 'placeholder' | 'ready' | 'failed'; note?: string }>; }
+
+/** What the raster lane left on each approved image, in the captain's words. */
+const imageryCopy: Record<string, string> = {
+  ready: 'gerada pelo Gate 1',
+  placeholder: 'sem provedor de imagem configurado',
+  generating: 'ainda em geração quando esta revisão começou',
+  failed: 'não foi gerada',
+};
 
 interface Progress {
   runId: string; status: 'queued' | 'running' | 'settled' | 'failed' | 'interrupted'; step: string; detail: string;
@@ -314,7 +322,9 @@ export default function Gate2(): ReactElement {
         </div>
         <div className="gate2-badges">
           {snapshot.chain && <span className={`qa-chip${result.identityHash === snapshot.chain.identityHash ? '' : ' identity-mismatch'}`} title={`Gate 1 · ${snapshot.chain.identityRunId}`}>{result.identityHash === snapshot.chain.identityHash ? 'identidade do Gate 1 medida nesta revisão' : 'a identidade desta revisão não é a do Gate 1'}</span>}
-          {snapshot.chain?.failedImagery?.length ? <span className="qa-chip identity-mismatch" title={snapshot.chain.failedImagery.map((asset) => `${asset.id}: ${asset.reason}`).join('\n')}>{snapshot.chain.failedImagery.length} imagem(ns) do Gate 1 não foram geradas e não estão nesta revisão</span> : null}
+          {snapshot.chain?.seededImagery?.map((asset) => (
+            <span key={asset.id} className={`qa-chip${asset.status === 'ready' ? '' : ' identity-mismatch'}`} {...(asset.note ? { title: asset.note } : {})}>{asset.id}: {imageryCopy[asset.status] ?? asset.status}</span>
+          ))}
           <span className={`status status-${result.gate}`}>{result.gate === 'vetoed' ? 'vetado pelo QA' : 'aguarda decisão'}</span>
           <span className="qa-chip" title={result.stopDetail}>parou por: {stopReasonCopy[result.stopReason] ?? result.stopReason}</span>
           <a className="gate2-back" href="#/">← pipeline</a>

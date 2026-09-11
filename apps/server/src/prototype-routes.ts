@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { SeedNotReadyError, type Gate2Snapshot, type IssueDecision, type PrototypeRunRegistry } from './prototype-api.js';
+import { Gate1NotApprovedError, type Gate2Snapshot, type IssueDecision, type PrototypeRunRegistry } from './prototype-api.js';
 
 export interface PrototypeResponse { status: number; payload: unknown; }
 type ReadBody = (request: IncomingMessage) => Promise<Record<string, unknown>>;
@@ -27,7 +27,7 @@ export async function handlePrototypeRequest(registry: PrototypeRunRegistry, req
     const seed = { identityRunId: text(input, 'identityRunId'), versionId: text(input, 'versionId') };
     try { return { status: 201, payload: await registry.create(runId, seed) }; }
     catch (error) {
-      if (error instanceof SeedNotReadyError) return { status: 409, payload: { error: error.message } };
+      if (error instanceof Gate1NotApprovedError) return { status: 409, payload: { error: error.message } };
       throw error;
     }
   }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { agentTaskSchema, hashJson, stageRoles, type Approval, type DesignIR } from '@pwb/domain';
+import { agentTaskSchema, designIRSchema, hashJson, stageRoles, type Approval, type DesignIR } from '@pwb/domain';
 import { Applier, DEFAULT_MAX_ACTIVE_CLAUDE, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { identityHash } from '@pwb/stage-identity';
@@ -57,12 +57,12 @@ export interface PrototypeChain {
   identityHash: string;
   projectId: string;
   /**
-   * Imagery Gate 1 approved and the raster lane could not deliver. It is not in
-   * the document — an asset with no bytes and no provider licence would reach
-   * the public bundle as a licence warning — so the run says what is missing
-   * instead of leaving the captain to notice the gap.
+   * The imagery Gate 1 approved, as it stood when this run was seeded. Gate 2
+   * never waits on the raster lane: what the lane delivered is in the document
+   * with its bytes, and what it did not is in the document as the placeholder it
+   * is, so the review shows what this revision actually has.
    */
-  failedImagery?: Array<{ id: string; reason: string }>;
+  seededImagery?: Array<{ id: string; status: DesignIR['assets']['items'][number]['status']; note?: string }>;
 }
 
 /** Which approved identity a run is asked to start from; one of the two names it. */
@@ -71,18 +71,8 @@ export interface PrototypeRunRequest {
   versionId?: string;
 }
 
-/** A seed the prototype stage cannot be started from yet; every one of these is a 409. */
-export class SeedNotReadyError extends Error {}
-
 /** Gate 2 was asked to run on an identity Gate 1 has not approved, or no longer approves. */
-export class Gate1NotApprovedError extends SeedNotReadyError {}
-
-/**
- * The approved direction's imagery is still on the raster lane. Gate 1 returns
- * the decision before the images exist, and a revision measured over unfinished
- * placeholders is not the identity the captain approved.
- */
-export class ImageryStillShootingError extends SeedNotReadyError {}
+export class Gate1NotApprovedError extends Error {}
 
 /**
  * The gate of a review that is already decided. A decision writes a permanent
@@ -178,20 +168,38 @@ interface PersistedRun {
  * fixture's stand-ins.
  */
 function withApprovedImagery(seed: IdentitySeed): DesignIR {
-  // Only an image the lane finished has bytes and a provider licence; a
-  // placeholder in the document would publish as a licence warning.
-  const shot = seed.assets.filter((asset) => asset.status === 'ready');
-  if (shot.length === 0) return seed.ir;
+  if (seed.assets.length === 0) return seed.ir;
   const items = new Map(seed.ir.assets.items.map((asset) => [asset.id, asset]));
-  for (const asset of shot) items.set(asset.id, asset);
+  for (const asset of seed.assets) items.set(asset.id, asset);
   return { ...seed.ir, assets: { items: [...items.values()] } };
 }
 
-/** What the lane could not deliver, in the words the failure was recorded with. */
-function failedImagery(seed: IdentitySeed): Array<{ id: string; reason: string }> {
-  return seed.assets
-    .filter((asset) => asset.status === 'failed')
-    .map((asset) => ({ id: asset.id, reason: asset.provenance.termsNote ?? 'A geração da imagem não foi concluída.' }));
+/** Every approved image with the status it carries, so the review states what it has. */
+function seededImagery(seed: IdentitySeed): NonNullable<PrototypeChain['seededImagery']> {
+  return seed.assets.map((asset) => ({
+    id: asset.id,
+    status: asset.status,
+    ...(asset.status === 'ready' || asset.provenance.termsNote === undefined ? {} : { note: asset.provenance.termsNote }),
+  }));
+}
+
+/**
+ * The document this run is measured over, as a version of its own. It is the
+ * approved identity when Gate 1 generated no imagery, and otherwise a child of
+ * it whose id derives from its own bytes: the same id may not name two
+ * documents, and the ledger row has to be what Gate 2 actually measured.
+ */
+function seededRoot(store: VersionStore, applier: Applier, seed: IdentitySeed): VersionRecord {
+  const document = withApprovedImagery(seed);
+  if (document === seed.ir) return applier.createRoot(seed.ir);
+  const parsed = designIRSchema.parse(document);
+  const versionId = `v-${hashJson(parsed).slice(0, 12)}`;
+  const existing = store.get(versionId);
+  if (existing) return existing;
+  const ir = { ...parsed, meta: { ...parsed.meta, versionId } };
+  const root: VersionRecord = { id: versionId, hash: hashJson(ir), parentId: seed.versionId, ir };
+  store.save(root);
+  return root;
 }
 
 /** One sentence per stage event, so a run that takes minutes says what it is doing. */
@@ -248,14 +256,13 @@ export class PrototypeRunRegistry {
     const seed = await this.resolveSeed(request);
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
-    // The seeded document already carries its own version id, so the root of this
-    // run is the very version Gate 1 approved and every revision it produces
-    // descends from it — carrying the imagery that gate generated, which the
-    // identity stage could not write into the document itself.
-    const base = applier.createRoot(withApprovedImagery(seed));
+    // Every revision this run produces descends from what Gate 1 approved: from
+    // that version itself, or from the child that carries the imagery the
+    // identity stage could not write into the document.
+    const base = seededRoot(store, applier, seed);
     const startedAt = new Date().toISOString();
-    const missing = failedImagery(seed);
-    const chain: PrototypeChain = { identityRunId: seed.identityRunId, identityVersionId: seed.versionId, identityHash: seed.identityHash, projectId: seed.projectId, ...(missing.length > 0 ? { failedImagery: missing } : {}) };
+    const imagery = seededImagery(seed);
+    const chain: PrototypeChain = { identityRunId: seed.identityRunId, identityVersionId: seed.versionId, identityHash: seed.identityHash, projectId: seed.projectId, ...(imagery.length > 0 ? { seededImagery: imagery } : {}) };
     const record: PrototypeRunRecord = {
       runId, store, decisions: [], chain,
       progress: { runId, chain, status: 'queued', step: 'prototype.run.queued', detail: 'Na fila: o servidor mede uma revisão por vez.', startedAt, updatedAt: startedAt },
@@ -285,8 +292,6 @@ export class PrototypeRunRegistry {
     if (seed.stale) throw new Gate1NotApprovedError('A identidade mudou depois do Gate 1: aprove-a de novo antes de medir o protótipo.');
     const asked = request.versionId?.trim();
     if (asked && asked !== seed.versionId) throw new Gate1NotApprovedError(`O Gate 1 desta execução aprovou a versão ${seed.versionId}, e não ${asked}.`);
-    const shooting = seed.assets.filter((asset) => asset.status === 'generating' || asset.status === 'placeholder');
-    if (shooting.length > 0) throw new ImageryStillShootingError(`As imagens da direção aprovada ainda estão sendo geradas (${shooting.map((asset) => asset.id).join(', ')}); peça a execução de novo quando elas terminarem.`);
     return seed;
   }
 

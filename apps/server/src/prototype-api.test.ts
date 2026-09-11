@@ -10,7 +10,7 @@ import { DerivedEvidenceSource, type EvidenceSource } from '@pwb/stage-prototype
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
-import { IdentityRun } from './identity-run.js';
+import { IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
 import { PrototypeRunRegistry, type Gate2Snapshot, type IdentitySeed, type PrototypeRunRequest } from './prototype-api.js';
 
 const captain = { origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' };
@@ -298,9 +298,61 @@ describe('Gate 2 API', () => {
 });
 
 describe('Gate 2 runs on the identity Gate 1 approved', () => {
-  it('waits for the raster lane and then composes over the image it delivered', async () => {
-    // The whole path the product takes: Gate 1 decides, the lane shoots, and the
-    // prototype starts from the identity carrying what the lane delivered.
+  /** A Gate 1 execution over one ledger, with whatever raster provider the host has. */
+  async function decidedIdentity(repository: ProjectRepository, runId: string, raster: HiggsfieldMcpProvider): Promise<IdentityRun> {
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), raster });
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
+    return run;
+  }
+
+  /** The reading `startServer` wires: the handoff and the approved document as they stand now. */
+  function handoffSeed(run: IdentityRun, runId: string): () => Promise<IdentitySeed> {
+    return async () => {
+      const handoff = run.snapshot().handoff!;
+      const document = run.approvedVersion()!;
+      return { identityRunId: runId, projectId: run.projectId, versionId: handoff.versionId, identityHash: handoff.identityHash, approvedAt: handoff.approvedAt, stale: handoff.stale, ir: document.ir, assets: handoff.assets };
+    };
+  }
+
+  /** The captain's own wait: the identity snapshot is polled until the lane stops shooting. */
+  async function imagerySettled(run: IdentityRun): Promise<IdentityRunSnapshot['assets']> {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      const assets = run.snapshot().assets;
+      if (assets.every((asset) => asset.status !== 'generating')) return assets;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error('The raster lane never settled.');
+  }
+
+  it('starts on the default deployment, where no raster provider is configured', async () => {
+    // `PWB_HIGGSFIELD_MCP_COMMAND` unset is the normal case: the lane settles the
+    // approved imagery as a placeholder, which is a state no waiting resolves.
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-placeholder-'));
+    const db = openDatabase(join(dir, 'placeholder.sqlite'));
+    const repository = new ProjectRepository(db);
+    const identityRun = await decidedIdentity(repository, 'identity-unconfigured', new HiggsfieldMcpProvider({ configured: false }));
+    const settledAssets = await imagerySettled(identityRun);
+    expect(settledAssets.map((asset) => asset.status)).toEqual(['placeholder']);
+
+    const api = await harness({ repository, identity: handoffSeed(identityRun, 'identity-unconfigured') });
+    try {
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-placeholder', identityRunId: 'identity-unconfigured' });
+      expect(created.status).toBe(201);
+      // Gate 2 never waits on the lane: the placeholder travels into the document
+      // as what it is, and the review says so.
+      expect(created.payload.chain!.seededImagery).toEqual([{ id: settledAssets[0]!.id, status: 'placeholder', note: settledAssets[0]!.provenance.termsNote }]);
+
+      const result = (await settled(api.origin, 'gate2-placeholder')).result!;
+      await post(api.origin, '/api/prototype/runs/gate2-placeholder/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Protótipo aprovado.' });
+      const versions = await repository.listVersions(identityRun.projectId);
+      const reviewed = versions.find((version) => version.id === result.after.versionId)!;
+      expect(reviewed.ir.assets.items.find((asset) => asset.id === settledAssets[0]!.id)).toMatchObject({ status: 'placeholder' });
+    } finally { await api.close(); db.sqlite.close(); }
+  });
+
+  it('composes over the image a slow lane delivered, and roots the run on its own version', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-imagery-'));
     const db = openDatabase(join(dir, 'imagery.sqlite'));
     const repository = new ProjectRepository(db);
@@ -310,32 +362,15 @@ describe('Gate 2 runs on the identity Gate 1 approved', () => {
       configured: true,
       transport: { callTool: async () => { await shooting; return { uri: 'data:image/png;base64,aGVybw==', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } },
     });
-    const identityRun = new IdentityRun({ runId: 'identity-imagery', repository, provider: new FakeIdentityProvider(), raster });
-    await identityRun.initialize();
-    await identityRun.start();
-    const approved = await identityRun.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
-    expect(approved.assets.map((asset) => asset.status)).toEqual(['generating']);
+    const identityRun = await decidedIdentity(repository, 'identity-imagery', raster);
+    expect(identityRun.snapshot().assets.map((asset) => asset.status)).toEqual(['generating']);
 
-    // The same reading the server wires: the handoff as it stands right now.
-    const api = await harness({
-      repository,
-      identity: async () => {
-        const handoff = identityRun.snapshot().handoff!;
-        const document = identityRun.approvedVersion()!;
-        return { identityRunId: 'identity-imagery', projectId: identityRun.projectId, versionId: handoff.versionId, identityHash: handoff.identityHash, approvedAt: handoff.approvedAt, stale: handoff.stale, ir: document.ir, assets: handoff.assets };
-      },
-    });
+    const api = await harness({ repository, identity: handoffSeed(identityRun, 'identity-imagery') });
     try {
-      // Measuring now would bake a placeholder with no bytes and no provider
-      // licence into every revision, and into the public bundle's licence list.
-      const early = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-shooting', identityRunId: 'identity-imagery' });
-      expect(early.status).toBe(409);
-      expect(early.payload.error).toMatch(/ainda estão sendo geradas/i);
-      expect(api.registry.has('gate2-shooting')).toBe(false);
-
+      // The lane finishes on its own; nothing cancels it and nothing waits on it
+      // to start Gate 2.
       release();
-      await identityRun.cancel();
-      const shot = identityRun.snapshot().handoff!.assets;
+      const shot = await imagerySettled(identityRun);
       expect(shot.map((asset) => asset.status)).toEqual(['ready']);
 
       const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-imagery', identityRunId: 'identity-imagery' });
@@ -343,30 +378,57 @@ describe('Gate 2 runs on the identity Gate 1 approved', () => {
       const result = (await settled(api.origin, 'gate2-imagery')).result!;
       await post(api.origin, '/api/prototype/runs/gate2-imagery/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Protótipo aprovado.' });
 
+      const versions = await repository.listVersions(identityRun.projectId);
+      const byId = new Map(versions.map((version) => [version.id, version]));
+      const reviewed = byId.get(result.after.versionId)!;
       // The revision the captain reviewed carries the delivered image, so the
       // bundle Gate 3 compiles ships it rather than the fixture's stand-in.
-      const versions = await repository.listVersions(identityRun.projectId);
-      const reviewed = versions.find((version) => version.id === result.after.versionId)!;
       expect(reviewed.ir.assets.items.find((asset) => asset.id === shot[0]!.id)).toMatchObject({ uri: shot[0]!.uri, status: 'ready' });
+
+      // The root is a version of its own, so the ledger row describes the very
+      // document Gate 2 measured instead of two documents sharing one id.
+      const lineage: string[] = [];
+      for (let current = reviewed; current; current = current.parentId ? byId.get(current.parentId)! : undefined!) {
+        lineage.push(current.id);
+        if (!current.parentId) break;
+      }
+      const identityVersionId = identityRun.snapshot().handoff!.versionId;
+      expect(lineage).toContain(identityVersionId);
+      const root = byId.get(lineage[lineage.indexOf(identityVersionId) - 1]!)!;
+      expect(root.id).not.toBe(identityVersionId);
+      expect(root.parentId).toBe(identityVersionId);
+      expect(root.ir.assets.items.find((asset) => asset.id === shot[0]!.id)).toMatchObject({ uri: shot[0]!.uri });
+      // And the identity's own row is untouched: it never carried the imagery.
+      expect(byId.get(identityVersionId)!.ir.assets.items.some((asset) => asset.id === shot[0]!.id)).toBe(false);
     } finally { await api.close(); db.sqlite.close(); }
   });
 
-  it('keeps an image the lane could not deliver out of the document and says so', async () => {
-    const failed = generatedImagery({ status: 'failed', provenance: { ...generatedImagery().provenance, license: 'pending provider terms', termsNote: 'Higgsfield MCP returned no image: sem resposta.' } });
-    const api = await harness({ identity: async () => approvedIdentity({ assets: [failed] }) });
-    try {
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-failed-imagery', identityRunId: 'identity-chain' });
-      expect(created.status).toBe(201);
-      // A licence nobody granted never reaches the public bundle; the run names
-      // what is missing instead.
-      expect(created.payload.chain!.failedImagery).toEqual([{ id: failed.id, reason: failed.provenance.termsNote }]);
+  it('starts from a chain whose imagery the ended process left in flight', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-restart-imagery-'));
+    const db = openDatabase(join(dir, 'restart.sqlite'));
+    const repository = new ProjectRepository(db);
+    let release = (): void => {};
+    const shooting = new Promise<void>((resolve) => { release = resolve; });
+    const raster = new HiggsfieldMcpProvider({
+      configured: true,
+      transport: { callTool: async () => { await shooting; return { uri: 'data:image/png;base64,aGVybw==', license: 'provider terms 2026' }; } },
+    });
+    const identityRun = await decidedIdentity(repository, 'identity-restart', raster);
+    expect(identityRun.snapshot().assets.map((asset) => asset.status)).toEqual(['generating']);
 
-      const result = (await settled(api.origin, 'gate2-failed-imagery')).result!;
-      await post(api.origin, '/api/prototype/runs/gate2-failed-imagery/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Protótipo aprovado.' });
-      const versions = await api.repository.listVersions(createFixtureIR().meta.projectId);
-      const reviewed = versions.find((version) => version.id === result.after.versionId)!;
-      expect(reviewed.ir.assets.items.map((asset) => asset.id)).not.toContain(failed.id);
-    } finally { await api.close(); }
+    // Another process reads the same ledger: what was in flight is settled as
+    // what became of it, so no revision is ever seeded from an image in limbo.
+    const restored = new IdentityRun({ runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    expect(restored.snapshot().assets.map((asset) => asset.status)).toEqual(['failed']);
+
+    const api = await harness({ repository, identity: handoffSeed(restored, 'identity-restart') });
+    try {
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-restart-imagery', identityRunId: 'identity-restart' });
+      expect(created.status).toBe(201);
+      expect(created.payload.chain!.seededImagery?.map((asset) => asset.status)).toEqual(['failed']);
+      expect((await settled(api.origin, 'gate2-restart-imagery')).result).toBeDefined();
+    } finally { release(); await api.close(); db.sqlite.close(); }
   });
 
   it('replaces the placeholder of the id it carries instead of doubling it', async () => {
