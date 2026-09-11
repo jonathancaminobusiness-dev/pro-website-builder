@@ -1,6 +1,6 @@
 import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
 import { renderBriefingCreateButton, renderBriefingEditor, renderBriefingReplacementConfirmation, renderBriefingReplacementOffer, type BriefingEditorElementFactory } from '@pwb/renderer/briefing-editor';
-import { createElement, useCallback, useEffect, useState, type ReactElement } from 'react';
+import { createElement, useCallback, useState, type ReactElement } from 'react';
 
 export interface IdentityDirectionView {
   directionId: string;
@@ -30,7 +30,7 @@ export interface IdentityDirectionView {
 
 export interface IdentityGateSnapshot {
   runId: string;
-  status: 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'reopened' | 'interrupted' | 'failed';
+  status: 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'unrecoverable' | 'reopened' | 'interrupted' | 'failed';
   baseVersionId: string;
   briefing: string;
   brief?: { audience: string; promise: string; proof: string[]; exclusions: string[]; evidence: Array<{ id: string; quote: string; source: string }>; unknowns: string[]; assumptions: Array<{ id: string; statement: string; risk: string }> };
@@ -85,10 +85,9 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [tokenPath, setTokenPath] = useState('color.accent');
   const [tokenValue, setTokenValue] = useState('#ff7a00');
   const [briefing, setBriefing] = useState(IDENTITY_BRIEFING);
-
-  useEffect(() => {
-    if (snapshot) setBriefing(snapshot.briefing);
-  }, [snapshot?.runId, snapshot?.briefing]);
+  // The briefing a replacement run would be created with is always written from
+  // scratch: nothing the captain did not read and choose is ever posted.
+  const [replacementBriefing, setReplacementBriefing] = useState('');
 
   const openRunForm = (label: string): ReactElement => <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
     <label htmlFor="gate1-open-run">{label}</label>
@@ -119,11 +118,13 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !actionsBlocked
     ? renderBriefingReplacementConfirmation(briefingElementFactory, {
         replacing,
+        editor: renderBriefingEditor(briefingElementFactory, { value: replacementBriefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setReplacementBriefing }),
         disabled: props.busy,
+        createDisabled: replacementBriefing.trim() === '',
         onKeep: () => setConfirming(''),
-        onCreate: () => { setConfirming(''); props.onCreate(briefing.trim()); },
+        onCreate: () => props.onCreate(replacementBriefing.trim()),
       })
-    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => setConfirming(asking) });
+    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => { setReplacementBriefing(''); setConfirming(asking); } });
 
   const briefingEditor = renderBriefingEditor(briefingElementFactory, { value: briefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setBriefing });
   const briefingCreateButton = renderBriefingCreateButton(briefingElementFactory, { disabled: props.busy || briefing.trim() === '', onCreate: () => props.onCreate(briefing.trim()) });
@@ -144,6 +145,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const stopped = snapshot?.status === 'cancelled';
   const running = snapshotRunning;
   const failed = snapshot?.status === 'failed';
+  const unrecoverable = snapshot?.status === 'unrecoverable';
   const closed = snapshot?.gate.state === 'closed';
   const reopened = snapshot?.gate.state === 'reopened';
   const decided = closed || reopened;
@@ -183,8 +185,8 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
         {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
-        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
-          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || unrecoverable || snapshot.directions.length > 0}>
+          {unrecoverable ? 'Execução encerrada' : stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 
@@ -341,6 +343,7 @@ function statusLabel(status: IdentityGateSnapshot['status'] | undefined): string
     case 'needs_review': return 'aguarda gate';
     case 'approved': return 'aprovado';
     case 'cancelled': return 'cancelada';
+    case 'unrecoverable': return 'encerrada sem recuperação';
     case 'reopened': return 'reaberto';
     case 'interrupted': return 'interrompido pelo reinício';
     case 'failed': return 'falhou';

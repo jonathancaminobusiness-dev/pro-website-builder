@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { designIRSchema, hashJson, imagerySourceSchema, RASTER_IMAGERY_SOURCE, type AgentTask, type Approval, type DesignIR, type ImagerySource, type Patch } from '@pwb/domain';
-import { IDENTITY_BRIEFING } from '../identity-briefing.js';
+import { IDENTITY_BRIEFING, normalizeIdentityBriefing } from '../identity-briefing.js';
 import * as schema from './schema.js';
 
 export interface LocalDatabase { sqlite: Database.Database; orm: BetterSQLite3Database<typeof schema>; }
@@ -89,7 +89,8 @@ export class ProjectRepository {
 
   private write<T>(operation: () => T): Promise<T> { const next = this.writer.then(operation); this.writer = next.then(() => undefined, () => undefined); return next; }
   async createProject(input: ProjectInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.projects).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
-  async createRun(input: RunInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.runs).values({ id: input.id, projectId: input.projectId, briefing: input.briefing ?? IDENTITY_BRIEFING, createdAt: new Date().toISOString() }).run(); }); }
+  async createRun(input: RunInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.runs).values({ id: input.id, projectId: input.projectId, briefing: normalizeIdentityBriefing(input.briefing), createdAt: new Date().toISOString() }).run(); }); }
+  async updateRunBriefing(runId: string, briefing: string): Promise<void> { await this.write(() => { this.db.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run(briefing, runId); }); }
   async saveTask(task: AgentTask, runId: string): Promise<void> { await this.write(() => { this.db.orm.insert(schema.tasks).values({ id: task.id, runId, attempt: task.attempt, stage: task.stage, role: task.role, state: task.state, baseVersionId: task.baseVersionId, payload: JSON.stringify(task) }).run(); }); }
   async savePatch(patch: Patch, runId: string): Promise<void> { await this.write(() => { this.db.orm.insert(schema.patches).values({ id: hashJson(patch), runId, baseVersionId: patch.baseVersionId, payload: JSON.stringify(patch), createdAt: new Date().toISOString() }).run(); }); }
   async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(designIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }

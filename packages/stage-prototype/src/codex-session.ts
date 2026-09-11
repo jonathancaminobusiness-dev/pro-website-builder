@@ -21,9 +21,10 @@ export class CodexSession implements StructuredSession {
   async ask<T>(input: ClaudeAsk<T>): Promise<T> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const prompt = attempt === 0 ? input.prompt : `${input.prompt}\n\nYour previous answer did not match the supplied schema. Return only JSON matching it.`;
+      const request = { prompt, schema: input.schema, deadlineMs: input.deadlineMs, ...(input.allowlist ? { allowlist: input.allowlist } : {}) };
       try {
-        if (this.runner.runValidated) return await this.runner.runValidated({ prompt, schema: input.schema, deadlineMs: input.deadlineMs }, input.parse, input.signal);
-        return input.parse(await this.runner.run({ prompt, schema: input.schema, deadlineMs: input.deadlineMs }, input.signal));
+        if (this.runner.runValidated) return await this.runner.runValidated(request, input.parse, input.signal);
+        return input.parse(await this.runner.run(request, input.signal));
       } catch (error) {
         const details = error as { name?: unknown; code?: unknown };
         if (details.name === 'AbortError' || details.code === 'ABORT_ERR') throw error;

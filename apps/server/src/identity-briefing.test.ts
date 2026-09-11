@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { IDENTITY_BRIEFING } from './identity-briefing.js';
+import { BriefingValidationError, IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH, normalizeIdentityBriefing } from './identity-briefing.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 
 describe('briefing migration', () => {
@@ -24,5 +24,13 @@ describe('briefing migration', () => {
     expect((await repository.getRun('old-run'))?.briefing).toBe(IDENTITY_BRIEFING);
     expect((database.sqlite.pragma('user_version') as Array<{ user_version: number }>)[0]?.user_version).toBe(4);
     database.sqlite.close();
+  });
+
+  it('normalizes supplied values and rejects invalid server-layer input', () => {
+    expect(normalizeIdentityBriefing('  Nicho editorial.  ')).toBe('Nicho editorial.');
+    expect(normalizeIdentityBriefing(undefined)).toBe(IDENTITY_BRIEFING);
+    expect(() => normalizeIdentityBriefing(' \n\t ')).toThrow(BriefingValidationError);
+    expect(() => normalizeIdentityBriefing('a'.repeat(IDENTITY_BRIEFING_MAX_LENGTH + 1))).toThrow(BriefingValidationError);
+    expect(() => normalizeIdentityBriefing(42)).toThrow(BriefingValidationError);
   });
 });

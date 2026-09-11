@@ -5,7 +5,7 @@ import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { approvalOf, identityHash, identityLint, identityStageDeadlineMs as calculateIdentityStageDeadlineMs, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, resolveIdentityStageDeadlines, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
-import { IDENTITY_BRIEFING } from './identity-briefing.js';
+import { BriefingValidationError, IDENTITY_BRIEFING, INVALID_IDENTITY_BRIEFING, LEGACY_INVALID_BRIEFING_MESSAGE, normalizeIdentityBriefing } from './identity-briefing.js';
 
 export { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -17,7 +17,7 @@ async function ignoringDuplicate(write: Promise<void>): Promise<void> {
   }
 }
 
-export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'reopened' | 'interrupted' | 'failed';
+export type IdentityRunStatus = 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'unrecoverable' | 'reopened' | 'interrupted' | 'failed';
 
 /**
  * The one row a restarted server rebuilds a run from. Versions, approvals and
@@ -127,7 +127,7 @@ export class IdentityRun {
   private readonly deadlines: IdentityStageDeadlines;
 
   constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
-    this.briefing = options.briefing ?? IDENTITY_BRIEFING;
+    this.briefing = normalizeIdentityBriefing(options.briefing);
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
@@ -170,7 +170,22 @@ export class IdentityRun {
   async restore(): Promise<boolean> {
     const run = await this.options.repository.getRun(this.options.runId);
     if (!run) return false;
-    this.briefing = run.briefing ?? IDENTITY_BRIEFING;
+    let briefing: string;
+    try {
+      briefing = normalizeIdentityBriefing(run.briefing);
+    } catch (error) {
+      if (!(error instanceof BriefingValidationError)) throw error;
+      this.status = 'unrecoverable';
+      this.started = true;
+      this.briefing = INVALID_IDENTITY_BRIEFING;
+      this.failure = LEGACY_INVALID_BRIEFING_MESSAGE;
+      return true;
+    }
+    this.briefing = briefing;
+    // Canonicalizing the stored row is a convenience, not a precondition for
+    // reading the run: the normalized briefing is already the one in memory, so
+    // a write this process cannot do now is left to a later restore.
+    if (briefing !== run.briefing) await this.options.repository.updateRunBriefing(this.options.runId, briefing).catch(() => undefined);
     this.stage = this.newStage();
     for (const version of await this.options.repository.listVersions(run.projectId)) {
       if (this.store.get(version.id)) continue;
@@ -233,7 +248,7 @@ export class IdentityRun {
 
   /** The one entry point that spends model turns. Nothing else in this class starts a worker. */
   async start(): Promise<IdentityRunSnapshot> {
-    this.refuseIfCancelled('create another one to run the identity stage.');
+    this.refuseIfTerminal('create another one to run the identity stage.');
     // A failure is not the end of the run: the captain can ask again here, on
     // the same terms a restarted process already offers.
     if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
@@ -281,11 +296,22 @@ export class IdentityRun {
    * one either. Every route that would write to its ledger asks here, so the
    * rule has one definition rather than a copy per route.
    */
-  private refuseIfCancelled(what: string): void {
+  private refuseIfTerminal(what: string): void {
+    this.refuseIfUnrecoverable();
     if (this.status === 'cancelled') throw new StageError(`This run was cancelled; ${what}`);
   }
 
+  /**
+   * A legacy run whose persisted briefing is invalid has nothing to decide and
+   * nothing to stop, so every route refuses it. Stopping a run the captain
+   * already stopped stays the idempotent no-op it has always been.
+   */
+  private refuseIfUnrecoverable(): void {
+    if (this.status === 'unrecoverable') throw new StageError(this.failure ?? LEGACY_INVALID_BRIEFING_MESSAGE);
+  }
+
   async cancel(): Promise<IdentityRunSnapshot> {
+    this.refuseIfUnrecoverable();
     // What the stop is worth is decided before anything is awaited: a fan-out
     // that had already produced its result is the most expensive artefact in
     // the run, and awaiting first would let it finish and be discarded anyway.
@@ -308,7 +334,7 @@ export class IdentityRun {
   }
 
   async approve(input: { directionId: string; approverRole: string; rationale: string; overrideRationale?: string }): Promise<IdentityRunSnapshot> {
-    this.refuseIfCancelled('Gate 1 cannot be decided on it.');
+    this.refuseIfTerminal('Gate 1 cannot be decided on it.');
     const approval = await this.stage.approve({ ...input, ...(this.abort ? { signal: this.abort.signal } : {}) });
     const record: Approval = approvalOf(approval.record, this.approvals.length);
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
@@ -342,7 +368,7 @@ export class IdentityRun {
 
   async reject(input: { directionId: string; approverRole: string; rationale: string }): Promise<IdentityRunSnapshot> {
     if (input.approverRole !== 'captain') throw new StageError('Only the captain can reject Gate 1 in v1.');
-    this.refuseIfCancelled('Gate 1 cannot be decided on it.');
+    this.refuseIfTerminal('Gate 1 cannot be decided on it.');
     const candidate = this.candidate(input.directionId);
     const record: Approval = { id: `${this.options.runId}-identity-rejection-${this.approvals.length}`, stage: 'identity', approverRole: 'captain', versionId: candidate.versionId, versionHash: this.store.get(candidate.versionId)!.hash, decision: 'rejected', rationale: input.rationale, createdAt: new Date().toISOString() };
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
@@ -353,6 +379,7 @@ export class IdentityRun {
 
   /** Applies a token change to the approved identity, which is what reopens Gate 1. */
   async changeToken(input: { tokenPath: string; value: TokenValue; rationale: string }): Promise<IdentityRunSnapshot> {
+    this.refuseIfUnrecoverable();
     const changed = await this.stage.changeToken(input);
     const version = this.store.get(changed.versionId)!;
     await ignoringDuplicate(this.options.repository.saveVersion({ id: version.id, projectId: this.projectId, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir }));

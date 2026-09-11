@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
-import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from './identity-briefing.js';
+import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH, INVALID_IDENTITY_BRIEFING, LEGACY_INVALID_BRIEFING_MESSAGE } from './identity-briefing.js';
 import { STUDIO_ORIGIN } from './security.js';
 
 const servers: Array<{ close: () => Promise<void> }> = [];
@@ -123,5 +123,52 @@ describe('identity run creation', () => {
 
     expect(restored.status).toBe(200);
     expect((await restored.json() as { briefing: string }).briefing).toBe('Nicho editorial para oficinas de bairro.');
+  });
+
+  it('serves invalid legacy briefings as irrecoverable without deleting their rows', async () => {
+    const first = await identityServer();
+    const runIds = ['legacy-blank', 'legacy-too-long'];
+    for (const runId of runIds) expect((await postIdentity(first.origin, { runId })).status).toBe(201);
+    await first.close();
+    servers.splice(servers.findIndex((entry) => entry.close === first.cleanup), 1);
+
+    const legacy = openDatabase(join(first.directory, 'identity.sqlite'));
+    legacy.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run(' \n\t ', 'legacy-blank');
+    const overlong = 'a'.repeat(IDENTITY_BRIEFING_MAX_LENGTH + 1);
+    legacy.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run(overlong, 'legacy-too-long');
+    legacy.sqlite.close();
+
+    const second = await startServer({
+      dbPath: join(first.directory, 'identity.sqlite'),
+      renderCacheDir: join(first.directory, 'render-cache-2'),
+      releaseRoot: join(first.directory, 'releases-2'),
+      evidenceDir: join(first.directory, 'evidence-2'),
+      apiPort: 0,
+      previewPort: 0,
+      modelProvider: 'fake',
+    });
+    const port = (second.api.address() as AddressInfo).port;
+    servers.push({ close: async () => { await second.close(); await rm(first.directory, { recursive: true, force: true }); } });
+
+    for (const runId of runIds) {
+      const restored = await fetch(`http://127.0.0.1:${port}/api/identity/runs/${runId}`);
+      const snapshot = await restored.json() as { status: string; briefing: string; error?: string };
+      expect(restored.status).toBe(200);
+      expect(snapshot.status).toBe('unrecoverable');
+      expect(snapshot.error).toBe(LEGACY_INVALID_BRIEFING_MESSAGE);
+      expect(snapshot.briefing).toBe(INVALID_IDENTITY_BRIEFING);
+      expect(snapshot.briefing).not.toBe(IDENTITY_BRIEFING);
+      const retry = await fetch(`http://127.0.0.1:${port}/api/identity/runs/${runId}/start`, { method: 'POST', headers: { origin: STUDIO_ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify({ approverRole: 'captain' }) });
+      expect(retry.status).toBe(400);
+      expect(await retry.json()).toEqual({ error: LEGACY_INVALID_BRIEFING_MESSAGE });
+    }
+
+    const preserved = openDatabase(join(first.directory, 'identity.sqlite'));
+    try {
+      expect((preserved.sqlite.prepare('SELECT briefing FROM runs WHERE id = ?').get('legacy-blank') as { briefing: string }).briefing).toBe(' \n\t ');
+      expect((preserved.sqlite.prepare('SELECT briefing FROM runs WHERE id = ?').get('legacy-too-long') as { briefing: string }).briefing).toBe(overlong);
+    } finally {
+      preserved.sqlite.close();
+    }
   });
 });

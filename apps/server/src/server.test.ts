@@ -127,6 +127,35 @@ describe('local API', () => {
     second.sqlite.close();
   });
 
+  // The Studio drives these two routes from the pipeline screen, and it shows
+  // whatever a plain read of the run answers, so both the action and the
+  // following read have to report the same state.
+  it('stops and resumes a run, and answers a plain read with the state the action left', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-cancel-'));
+    const db = openDatabase(join(dir, 'cancel.sqlite'));
+    const runs = new Map<string, FixtureRun>();
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    const read = async (): Promise<string> => ((await (await fetch(`${origin}/api/runs/stoppable-run`)).json()) as { status: string }).status;
+    await fetch(`${origin}/api/runs`, { method: 'POST', headers: studio, body: JSON.stringify({ runId: 'stoppable-run' }) });
+    await fetch(`${origin}/api/runs/stoppable-run/stage`, { method: 'POST', headers: studio });
+    expect(await read()).toBe('needs_review');
+
+    const cancelled = await fetch(`${origin}/api/runs/stoppable-run/cancel`, { method: 'POST', headers: studio });
+    expect(cancelled.status).toBe(200);
+    expect(((await cancelled.json()) as { status: string }).status).toBe('cancelled');
+    expect(await read()).toBe('cancelled');
+
+    const resumed = await fetch(`${origin}/api/runs/stoppable-run/restart`, { method: 'POST', headers: studio });
+    expect(resumed.status).toBe(200);
+    expect(((await resumed.json()) as { status: string }).status).toBe('needs_review');
+    expect(await read()).toBe('needs_review');
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    db.sqlite.close();
+  });
+
   it('answers 409 to a second release preparation while the first is still in flight', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-prepare-'));
     const db = openDatabase(join(dir, 'prepare.sqlite'));
