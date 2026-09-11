@@ -180,7 +180,7 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
   return {
     ready: true,
     busy,
-    canSendEntry: !busy && !stopped && snapshot.state === 'entry' && typed,
+    canSendEntry: !busy && !stopped && !atLimit && snapshot.state === 'entry' && typed,
     canAnswer: !busy && asking && typed,
     canSkip: !busy && asking,
     canCancel: !busy && !stopped && snapshot.state !== 'failed',

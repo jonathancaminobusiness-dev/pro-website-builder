@@ -151,7 +151,7 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .chat-question-prompt { font-family: Georgia, serif; font-size: 1.08rem; line-height: 1.45; letter-spacing: -.02em; }
 .chat-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .chat-options button { padding: 8px 14px; font-size: .78rem; font-weight: 600; }
-.chat-compose .actions, .chat-question .actions, .chat-summary .actions { margin-top: 10px; flex-wrap: wrap; gap: 8px; }
+.chat-compose .actions, .chat-question .actions, .chat-summary .actions, .chat-exit { margin-top: 10px; flex-wrap: wrap; gap: 8px; }
 .chat-cancelled, .chat-closed { border-radius: 12px; padding: 12px 14px; margin-top: 14px; font-size: .84rem; line-height: 1.55; }
 .chat-cancelled { border: 1px solid #c98d7c; color: #8c3a2c; background: #f6e3da; }
 .chat-closed { border: 1px solid #a9c2b1; color: #3f6b52; background: #e2ede4; }
@@ -166,6 +166,6 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .chat-direction-note { margin-top: 12px; color: #879095; font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; }
 @media (max-width: 520px) {
   .briefing-chat .section-heading { flex-direction: column; align-items: flex-start; gap: 10px; }
-  .chat-compose .actions, .chat-question .actions, .chat-summary .actions, .chat-failure .actions { justify-content: flex-start; }
+  .chat-compose .actions, .chat-question .actions, .chat-summary .actions, .chat-failure .actions, .chat-exit { justify-content: flex-start; }
   .chat-options button, .chat-compose .actions button, .chat-question .actions button, .chat-summary .actions button { flex: 1 1 auto; }
 }

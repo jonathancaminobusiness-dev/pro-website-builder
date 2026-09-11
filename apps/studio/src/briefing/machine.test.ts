@@ -118,6 +118,15 @@ describe('conversation ui state', () => {
     expect(can.canConfirm).toBe(true);
   });
 
+  it('stops asking for the initial text once a ceiling was reached', () => {
+    const state = reduce(opened({ state: 'entry', briefing: 'Somos uma clínica veterinária de bairro.', messageCount: 6 }), { type: 'draft', value: 'Somos uma clínica veterinária de bairro.' });
+    const can = affordances(state, NOW);
+
+    expect(can.atLimit).toBe(true);
+    expect(can.canSendEntry).toBe(false);
+    expect(can.canConfirm).toBe(true);
+  });
+
   it('closes nothing further once the briefing is closed', () => {
     const can = affordances(opened({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T09:00:00.000Z', messageCount: 4 }), NOW);
 

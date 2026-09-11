@@ -102,6 +102,10 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // replacement offer reads is the summary the captain confirmed, not the text
   // that started the conversation.
   const closedBriefing = props.conversation?.closedBriefing ?? null;
+  // Closing the briefing is what enables the identity stage. A server with no
+  // conversation for this run says nothing about it, so the old flow starts the
+  // stage exactly as it did before.
+  const briefingOpen = props.conversation?.state.availability === 'available' && closedBriefing === null;
   useEffect(() => {
     if (closedBriefing) setBriefing(closedBriefing);
   }, [closedBriefing]);
@@ -212,8 +216,8 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
         {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
-        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
-          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || briefingOpen || snapshot.directions.length > 0}>
+          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : briefingOpen ? 'Feche o briefing para executar' : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 

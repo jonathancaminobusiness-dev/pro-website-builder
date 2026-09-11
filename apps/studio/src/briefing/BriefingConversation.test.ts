@@ -127,6 +127,47 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('Pular esta pergunta');
   });
 
+  it('offers an exit from a state that shows no composer at all', () => {
+    const markup = render(state(conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 })));
+
+    expect(markup).toContain('Cancelar conversa');
+    expect(markup).toContain('Reabrir do ponto salvo');
+    expect(markup).not.toContain('disabled="">Cancelar conversa');
+  });
+
+  it('keeps the exit available while the conversation is failed, with nothing left to cancel', () => {
+    const markup = render(state(conversationSnapshot({ state: 'failed', turns: [entryTurn('Somos uma clínica de bairro.')], error: 'o modelo não respondeu', messageCount: 1 })));
+
+    expect(markup).toContain('A conversa parou');
+    expect(markup).toContain('Reabrir do ponto salvo');
+    expect(markup).toContain('disabled="">Cancelar conversa');
+  });
+
+  it('offers a single way out of the conversation, wherever it stands', () => {
+    for (const snapshot of [
+      conversationSnapshot(),
+      conversationSnapshot({ state: 'question', question: clarifyingQuestion(), messageCount: 2 }),
+      conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
+    ]) {
+      expect(render(state(snapshot)).match(/Cancelar conversa/g)).toHaveLength(1);
+    }
+  });
+
+  it('hides the correction control where no field would receive the corrected text', () => {
+    const markup = render(state(conversationSnapshot({ state: 'confirmation', turns: [entryTurn('Somos uma clínica de bairro.'), confirmationTurn()], summary: CONSOLIDATED_SUMMARY, messageCount: 3 })));
+
+    expect(markup).toContain('id="briefing-chat-summary"');
+    expect(markup).not.toContain('Corrigir esta resposta');
+  });
+
+  it('shows the open question without inventing an ordinal the counter cannot give', () => {
+    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 })));
+
+    expect(markup).toContain('2/6 mensagens');
+    expect(markup).not.toContain('de no máximo');
+    expect(markup).not.toContain('Pergunta 3');
+  });
+
   it('says plainly that a cancelled conversation sent nothing to the curator', () => {
     const markup = render(state(conversationSnapshot({ state: 'cancelled', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 })));
 
