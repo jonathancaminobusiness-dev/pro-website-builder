@@ -30,7 +30,16 @@ function createOffRhythmControlIR(): DesignIR {
 /** What Gate 1 hands on, as the server reads it back: the approved document, under its own version id. */
 function approvedIdentity(overrides: Partial<IdentitySeed> = {}): IdentitySeed {
   const ir = createFixtureIR();
-  return { identityRunId: 'identity-chain', projectId: ir.meta.projectId, versionId: ir.meta.versionId, identityHash: identityHash(ir), approvedAt: new Date().toISOString(), stale: false, ir, ...overrides };
+  return { identityRunId: 'identity-chain', projectId: ir.meta.projectId, versionId: ir.meta.versionId, identityHash: identityHash(ir), approvedAt: new Date().toISOString(), stale: false, ir, assets: [], ...overrides };
+}
+
+/** An image the art director generated for the approved direction, as Gate 1 hands it on. */
+function generatedImagery(): DesignIR['assets']['items'][number] {
+  return {
+    id: 'identity-hero', kind: 'raster', uri: 'data:image/png;base64,aGVybw==', alt: 'Oficina em operação, luz lateral.',
+    provenance: { source: 'higgsfield', author: 'art-director', license: 'higgsfield-commercial', date: new Date().toISOString(), hash: 'h-hero', prompt: 'oficina em operação', model: 'soul' },
+    status: 'ready',
+  };
 }
 
 async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSource; identity?: (request: PrototypeRunRequest) => Promise<IdentitySeed | undefined> } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; repository: ProjectRepository; close: () => Promise<void> }> {
@@ -285,6 +294,27 @@ describe('Gate 2 API', () => {
 });
 
 describe('Gate 2 runs on the identity Gate 1 approved', () => {
+  it('composes over the imagery Gate 1 generated, not over the placeholders it replaces', async () => {
+    // The identity stage may not write `/assets`, so its imagery reaches the
+    // document only through the handoff this seed carries.
+    const hero = generatedImagery();
+    const seed = approvedIdentity({ assets: [hero] });
+    const api = await harness({ identity: async () => seed });
+    try {
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-imagery', identityRunId: 'identity-chain' });
+      const result = (await settled(api.origin, 'gate2-imagery')).result!;
+      await post(api.origin, '/api/prototype/runs/gate2-imagery/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Protótipo aprovado.' });
+
+      // The revision the captain reviewed carries it, so the bundle Gate 3
+      // compiles ships the identity's own image rather than the fixture's.
+      const versions = await api.repository.listVersions(seed.projectId);
+      const reviewed = versions.find((version) => version.id === result.after.versionId)!;
+      expect(reviewed.ir.assets.items.find((asset) => asset.id === hero.id)).toMatchObject({ uri: hero.uri, alt: hero.alt });
+      // And it replaced the placeholder of that id instead of doubling it.
+      expect(reviewed.ir.assets.items.filter((asset) => asset.id === hero.id)).toHaveLength(1);
+    } finally { await api.close(); }
+  });
+
   it('refuses to measure anything the captain has not approved in Gate 1', async () => {
     const api = await harness({ identity: async () => undefined });
     try {

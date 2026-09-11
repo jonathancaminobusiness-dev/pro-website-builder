@@ -879,9 +879,24 @@ describe('identity run', () => {
     await repository.saveVersion({ id: 'v-moved', projectId: decided.meta.projectId, parentId: decided.meta.versionId, hash: 'h-moved', ir: moved });
     await repository.createApproval({ id: 'identity-moved-identity-approval-0', runId: 'identity-moved', projectId: decided.meta.projectId, stage: 'identity', approverRole: 'captain', versionId: decided.meta.versionId, versionHash: 'h-decided', decision: 'approved', rationale: 'Gate 1 decidido.' });
 
-    expect(repository.identityApprovalRun(decided.meta.versionId)).toBe('identity-moved');
-    expect(repository.identityApprovalRun('v-moved')).toBe('identity-moved');
-    expect(repository.identityApprovalRun('v-que-ninguem-decidiu')).toBeUndefined();
+    expect(repository.identityApprovalRuns(decided.meta.versionId)).toEqual(['identity-moved']);
+    expect(repository.identityApprovalRuns('v-moved')).toEqual(['identity-moved']);
+    expect(repository.identityApprovalRuns('v-que-ninguem-decidiu')).toEqual([]);
+  });
+
+  it('names every Gate 1 that approved a version, because two executions of one briefing share it', async () => {
+    // Version ids are derived from the document, so the same briefing decided
+    // twice approves the same id: the version alone no longer names one chain.
+    const repository = new ProjectRepository(database);
+    const shared = createFixtureIR();
+    await repository.createProject({ id: shared.meta.projectId, name: 'Identity stage project' });
+    await repository.saveVersion({ id: shared.meta.versionId, projectId: shared.meta.projectId, hash: 'h-shared', ir: shared });
+    for (const runId of ['identity-a', 'identity-b']) {
+      await repository.createRun({ id: runId, projectId: shared.meta.projectId });
+      await repository.createApproval({ id: `${runId}-identity-approval-0`, runId, projectId: shared.meta.projectId, stage: 'identity', approverRole: 'captain', versionId: shared.meta.versionId, versionHash: 'h-shared', decision: 'approved', rationale: 'Gate 1 decidido.' });
+    }
+
+    expect(repository.identityApprovalRuns(shared.meta.versionId).sort()).toEqual(['identity-a', 'identity-b']);
   });
 
   it('refuses to return a direction once the gate is decided', async () => {
@@ -910,6 +925,33 @@ describe('identity api', () => {
   }
 
   const post = (origin: string, path: string, payload: unknown) => fetch(`${origin}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: STUDIO_ORIGIN }, body: JSON.stringify(payload) });
+
+  it('refuses to seed a prototype from a version two executions approved', async () => {
+    await withServer(async (origin) => {
+      const handoffs: string[] = [];
+      for (const runId of ['chain-a', 'chain-b']) {
+        await post(origin, '/api/identity/runs', { runId });
+        await post(origin, `/api/identity/runs/${runId}/start`, { approverRole: 'captain' });
+        const approved = await post(origin, `/api/identity/runs/${runId}/approve`, { approverRole: 'captain', directionId: 'typographic-low-chroma', rationale: 'Aprovada.' });
+        handoffs.push((await approved.json() as { handoff: { versionId: string } }).handoff.versionId);
+      }
+      // The same briefing decided twice approves the same document, so the same
+      // content-derived version id: it names two chains, and only the caller
+      // knows which one it means.
+      expect(handoffs[0]).toBe(handoffs[1]);
+
+      const seeded = await post(origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-ambiguous', versionId: handoffs[0] });
+      expect(seeded.status).toBe(409);
+      const error = (await seeded.json() as { error: string }).error;
+      expect(error).toContain('chain-a');
+      expect(error).toContain('chain-b');
+      expect(error).toMatch(/identityRunId/);
+
+      // Nothing was measured: an ambiguous request never opens a run.
+      const runs = await (await fetch(`${origin}/api/prototype/runs`, { headers: { origin: STUDIO_ORIGIN } })).json() as { runs: unknown[] };
+      expect(runs.runs).toEqual([]);
+    });
+  });
 
   it('drives one run from creation to an approved gate and back open', async () => {
     await withServer(async (origin) => {

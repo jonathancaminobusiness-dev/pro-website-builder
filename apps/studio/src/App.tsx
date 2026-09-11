@@ -356,7 +356,7 @@ export default function App() {
               ? <>Cadeia identidade → protótipo <code>{chainRunId}</code>: a identidade mudou depois do Gate 1; aprove-a de novo antes de medir o protótipo e publicar.</>
               : <>Cadeia identidade → protótipo: Gate 1 <code>{chainRunId}</code> aprovou a versão <code>{identity!.handoff!.versionId}</code>{prototypeVersionId ? <> e o Gate 2 aprovou <code>{prototypeVersionId}</code>, que desce dela</> : <>, e o Gate 2 ainda não aprovou nenhuma revisão que desça dela</>}.</>}</p>
             <div className="actions">
-              <button className="secondary" onClick={runChainStage} title={chainGate?.blocker} disabled={chainBusy || chainStale || !prototypeVersionId || chainRun?.currentStage === 'finalization'}>{chainBusy ? 'Executando…' : 'Executar a etapa de finalização'}</button>
+              <button className="secondary" onClick={runChainStage} disabled={chainBusy || chainStale || !prototypeVersionId || chainRun?.currentStage === 'finalization'}>{chainBusy ? 'Executando…' : 'Executar a etapa de finalização'}</button>
               {!chainStale && !prototypeVersionId && <span className="qa-chip"><a href={GATE2_ROUTE}>Meça e aprove o protótipo no Gate 2</a></span>}
             </div></>
           : <p className="chain-line">Nenhuma identidade aprovada neste navegador: o Gate 3 abaixo compila o briefing fixo desta demonstração. Aprove uma identidade no Gate 1 para publicar a sua.</p>}

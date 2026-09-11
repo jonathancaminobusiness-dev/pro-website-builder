@@ -355,7 +355,11 @@ export class IdentityRun {
     // chain hangs on, so a screen still holding the pre-decision snapshot would
     // otherwise close Gate 3 on work the captain never returned.
     const gate = this.stage.gateState();
-    if (gate.state !== 'open') throw new Gate1AlreadyDecidedError(`O Gate 1 desta execução já foi decidido para ${gate.record.directionId}; mude a identidade para reabri-lo antes de decidir de novo.`);
+    if (gate.state !== 'open') {
+      throw new Gate1AlreadyDecidedError(gate.state === 'reopened'
+        ? `O Gate 1 desta execução já foi decidido para ${gate.record.directionId} e a identidade mudou depois disso; a decisão disponível agora é reaprovar essa mesma direção.`
+        : `O Gate 1 desta execução já foi decidido para ${gate.record.directionId}; mude a identidade para reabri-lo antes de decidir de novo.`);
+    }
     const candidate = this.candidate(input.directionId);
     const record: Approval = { id: `${this.options.runId}-identity-rejection-${this.approvals.length}`, stage: 'identity', approverRole: 'captain', versionId: candidate.versionId, versionHash: this.store.get(candidate.versionId)!.hash, decision: 'rejected', rationale: input.rationale, createdAt: new Date().toISOString() };
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
@@ -385,8 +389,9 @@ export class IdentityRun {
 
   /**
    * The version Gate 1 closed on, as the prototype stage has to start from it.
-   * Nothing is returned while the gate is open, and what comes back is the
-   * document with the approved direction's imagery already on it.
+   * Nothing is returned while the gate is open. The imagery approved with it is
+   * not in this document — `/assets` is not the identity stage's to write — and
+   * travels on the handoff instead.
    */
   approvedVersion(): VersionRecord | undefined {
     const versionId = this.stage.approvedVersionId;

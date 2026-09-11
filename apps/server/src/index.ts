@@ -10,7 +10,7 @@ import { FixtureRun } from './fixture-run.js';
 import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
 import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
-import { PrototypeRunRegistry } from './prototype-api.js';
+import { Gate1NotApprovedError, PrototypeRunRegistry } from './prototype-api.js';
 import { identityDeadlinesFromEnvironment, identityProviderTimeoutMs } from './identity-deadlines.js';
 
 export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string; identityDeadlines?: Partial<IdentityStageDeadlines> } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
@@ -55,6 +55,17 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     identityLoading.set(id, loading);
     try { return await loading; } finally { identityLoading.delete(id); }
   };
+  /**
+   * The one Gate 1 that approved a version, when a request names the version
+   * alone. Two executions of the same briefing produce the same document under
+   * the same content-derived id, and only the caller knows which of them it
+   * means, so an ambiguous version is refused rather than resolved by guess.
+   */
+  const namedByVersion = (versionId: string): string | undefined => {
+    const runs = repository.identityApprovalRuns(versionId);
+    if (runs.length > 1) throw new Gate1NotApprovedError(`A versão ${versionId} foi aprovada no Gate 1 de mais de uma execução (${runs.join(', ')}); informe a execução em identityRunId.`);
+    return runs[0];
+  };
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
@@ -75,13 +86,16 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     // from the identity run's own gate, so a request naming an undecided or a
     // since-changed identity is refused instead of measuring a fixture.
     identity: async ({ identityRunId, versionId }) => {
-      const runId = identityRunId ?? (versionId ? repository.identityApprovalRun(versionId) : undefined);
+      const runId = identityRunId ?? (versionId ? namedByVersion(versionId) : undefined);
       if (!runId) return undefined;
       const run = await loadIdentityRun(runId);
       const handoff = run?.snapshot().handoff;
       const approved = run?.approvedVersion();
       if (!run || !handoff || !approved) return undefined;
-      return { identityRunId: runId, projectId: run.projectId, versionId: handoff.versionId, identityHash: handoff.identityHash, approvedAt: handoff.approvedAt, stale: handoff.stale, ir: approved.ir };
+      // The imagery Gate 1 generated travels on the handoff, because the identity
+      // stage may not write `/assets`; the prototype starts from the document
+      // carrying it rather than from the placeholders it replaces.
+      return { identityRunId: runId, projectId: run.projectId, versionId: handoff.versionId, identityHash: handoff.identityHash, approvedAt: handoff.approvedAt, stale: handoff.stale, ir: approved.ir, assets: handoff.assets };
     },
     modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
     evidence: new RenderHubEvidenceSource({

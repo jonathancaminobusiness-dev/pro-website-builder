@@ -42,6 +42,12 @@ export interface IdentitySeed {
   /** True once the identity moved after the gate closed; such a version is not handed on. */
   stale: boolean;
   ir: DesignIR;
+  /**
+   * The imagery generated for the approved direction. It travels beside the
+   * document because the identity stage may not write `/assets`, and the
+   * prototype composes over the ledger this places it in.
+   */
+  assets: DesignIR['assets']['items'];
 }
 
 /** The link from a prototype run back to the Gate 1 execution it starts from. */
@@ -148,6 +154,19 @@ interface PersistedRun {
   versions: VersionRecord[];
 }
 
+/**
+ * The approved document with Gate 1's own imagery on it: an asset the gate
+ * generated replaces the placeholder of the same id and any other is added, so
+ * the prototype composes over what the captain approved rather than over the
+ * fixture's stand-ins.
+ */
+function withApprovedImagery(seed: IdentitySeed): DesignIR {
+  if (seed.assets.length === 0) return seed.ir;
+  const items = new Map(seed.ir.assets.items.map((asset) => [asset.id, asset]));
+  for (const asset of seed.assets) items.set(asset.id, asset);
+  return { ...seed.ir, assets: { items: [...items.values()] } };
+}
+
 /** One sentence per stage event, so a run that takes minutes says what it is doing. */
 function describeStep(type: string, payload: Record<string, unknown>): string {
   const list = (value: unknown): string => Array.isArray(value) ? value.join(', ') : '';
@@ -204,8 +223,9 @@ export class PrototypeRunRegistry {
     const applier = new Applier(store, new PatchGate());
     // The seeded document already carries its own version id, so the root of this
     // run is the very version Gate 1 approved and every revision it produces
-    // descends from it.
-    const base = applier.createRoot(seed.ir);
+    // descends from it — carrying the imagery that gate generated, which the
+    // identity stage could not write into the document itself.
+    const base = applier.createRoot(withApprovedImagery(seed));
     const startedAt = new Date().toISOString();
     const chain: PrototypeChain = { identityRunId: seed.identityRunId, identityVersionId: seed.versionId, identityHash: seed.identityHash, projectId: seed.projectId };
     const record: PrototypeRunRecord = {
