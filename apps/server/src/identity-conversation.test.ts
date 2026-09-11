@@ -270,6 +270,23 @@ describe('briefing conversation idempotency', () => {
     expect(second.messages).toEqual(first.messages);
   });
 
+  it('keeps a cancel sent during an in-flight turn, instead of letting that turn resurrect the conversation', async () => {
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { conversation } = harness([async () => { await gate; return succeeded(RECOMMENDATION); }]);
+
+    const slow = conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    const cancelled = conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    release();
+    await slow;
+    const closed = await cancelled;
+
+    expect(closed.state).toBe('cancelled');
+    expect(conversation.state).toBe('cancelled');
+    expect(canSendBriefingMessage(conversation.state)).toBe(false);
+    await expect(conversation.send({ message: 'Mais uma coisa.', action: 'answer', idempotencyKey: nextKey() })).rejects.toThrow(ConversationError);
+  });
+
   it('joins an in-flight turn instead of starting a parallel one', async () => {
     let release = (): void => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -303,16 +320,16 @@ describe('briefing confirmation', () => {
     expect(confirmed).toEqual([]);
   });
 
-  it('lists the gaps the captain chose to leave open inside the briefing it closes', async () => {
+  it('signs exactly the text the captain confirmed and records the open gaps beside it', async () => {
     const withGap = turn({ ...CONFIRMATION, unknowns: [{ gap: 'Faixa de preço percebida', impact: 'Muda o quanto a identidade pode parecer premium.' }] } as Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>);
     const { conversation } = harness([succeeded(withGap), succeeded(FINAL)]);
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
 
     const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: nextKey() });
 
-    expect(closed.confirmations[0]?.briefing).toContain('Lacunas declaradas em aberto:');
-    expect(closed.confirmations[0]?.briefing).toContain('Faixa de preço percebida (impacto: Muda o quanto a identidade pode parecer premium.)');
-    expect(closed.confirmations[0]?.openGaps).toHaveLength(1);
+    expect(closed.confirmations[0]?.briefing).toBe('Clínica de bairro preventiva.');
+    expect(closed.briefing).toBe('Clínica de bairro preventiva.');
+    expect(closed.confirmations[0]?.openGaps).toEqual([{ gap: 'Faixa de preço percebida', impact: 'Muda o quanto a identidade pode parecer premium.' }]);
   });
 
   it('opens a new revision on a later edit instead of rewriting the one already signed', async () => {
@@ -399,6 +416,7 @@ describe('briefing conversation contract', () => {
     expect(canBriefingConversationTransition('question', 'recommendation')).toBe(true);
     expect(canBriefingConversationTransition('confirmation', 'question')).toBe(true);
     expect(canBriefingConversationTransition('final', 'question')).toBe(false);
+    expect(canBriefingConversationTransition('final', 'final')).toBe(true);
     expect(BRIEFING_CONVERSATION_MAX_QUESTIONS).toBe(6);
   });
 

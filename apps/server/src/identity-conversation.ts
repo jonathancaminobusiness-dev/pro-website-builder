@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
   BRIEFING_CONVERSATION_MAX_ATTEMPTS,
-  BRIEFING_CONVERSATION_MAX_MESSAGES,
   BRIEFING_CONVERSATION_MAX_QUESTIONS,
   BRIEFING_CONVERSATION_TURN_TIMEOUT_MS,
   BRIEFING_MESSAGE_MAX_LENGTH,
@@ -103,6 +102,13 @@ function emptyState(): ConversationState {
 export class BriefingConversation {
   private data = emptyState();
   private readonly inFlight = new Map<string, Promise<BriefingConversationSnapshot>>();
+  /**
+   * One conversation runs one turn at a time. The idempotency key only makes a
+   * retry of the *same* turn safe; two different turns — a cancel sent while a
+   * 60-second model call is still in flight — would otherwise read a state that
+   * the other one is about to move.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
   private readonly timeoutMs: number;
   private readonly maxQuestions: number;
   private readonly now: () => Date;
@@ -183,14 +189,19 @@ export class BriefingConversation {
     const running = this.inFlight.get(input.idempotencyKey);
     if (running) return await running;
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
-    const turn = this.runSend(input).finally(() => this.inFlight.delete(input.idempotencyKey));
+    const turn = this.enqueue(() => this.runSend(input)).finally(() => this.inFlight.delete(input.idempotencyKey));
     this.inFlight.set(input.idempotencyKey, turn);
     return await turn;
   }
 
+  private enqueue<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(run, run);
+    this.queue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
   private async runSend(input: { message?: string | undefined; action: BriefingMessageAction; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (!canSendBriefingMessage(this.data.state)) throw new ConversationError(this.closedReason(), 409);
-    if (this.data.messages.length >= BRIEFING_CONVERSATION_MAX_MESSAGES) throw new ConversationError('Esta conversa atingiu o número máximo de mensagens. Confirme o resumo para fechar o briefing.', 409);
 
     if (input.action === 'cancel') {
       this.append({ author: 'system', text: 'Conversa cancelada pelo capitão. A execução e o briefing já confirmado continuam disponíveis.', state: 'cancelled' });
@@ -225,7 +236,7 @@ export class BriefingConversation {
     const running = this.inFlight.get(input.idempotencyKey);
     if (running) return await running;
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
-    const turn = this.runConfirm(input).finally(() => this.inFlight.delete(input.idempotencyKey));
+    const turn = this.enqueue(() => this.runConfirm(input)).finally(() => this.inFlight.delete(input.idempotencyKey));
     this.inFlight.set(input.idempotencyKey, turn);
     return await turn;
   }
@@ -236,7 +247,6 @@ export class BriefingConversation {
     try { briefing = normalizeIdentityBriefing(input.briefing, true); }
     catch (error) { throw error instanceof BriefingValidationError ? new ConversationError(error.message, 400) : error; }
 
-    briefing = withDeclaredGaps(briefing, this.data.openGaps);
     const revision = this.data.confirmations.length + 1;
     this.data.confirmations.push({ revision, briefing, openGaps: structuredClone(this.data.openGaps), confirmedAt: this.now().toISOString(), messageCount: this.data.messages.length });
     this.data.briefing = briefing;
@@ -434,10 +444,15 @@ export class BriefingConversation {
     });
   }
 
+  /**
+   * The key is spent only once the execution has the turn: a write that throws
+   * must not leave a retry reading a success the execution never recorded.
+   */
   private async commit(idempotencyKey: string): Promise<BriefingConversationSnapshot> {
-    this.data.appliedKeys = [...this.data.appliedKeys, idempotencyKey].slice(-KEY_MEMORY);
-    const snapshot = this.snapshot();
+    const appliedKeys = [...this.data.appliedKeys, idempotencyKey].slice(-KEY_MEMORY);
+    const snapshot = { ...this.snapshot(), appliedKeys };
     await this.options.persist(snapshot);
+    this.data.appliedKeys = appliedKeys;
     return snapshot;
   }
 
@@ -454,16 +469,6 @@ export class BriefingConversation {
 }
 
 const DECLARED_GAPS_HEADING = 'Lacunas declaradas em aberto:';
-
-/**
- * A captain may close the briefing with gaps still open — that is their call —
- * but the briefing that reaches the identity stage has to say which ones, or
- * the stage reads a silence as a decision.
- */
-export function withDeclaredGaps(briefing: string, openGaps: readonly BriefingGap[]): string {
-  if (openGaps.length === 0 || briefing.includes(DECLARED_GAPS_HEADING)) return briefing;
-  return [briefing, '', DECLARED_GAPS_HEADING, ...openGaps.map((gap) => `- ${gap.gap} (impacto: ${gap.impact})`)].join('\n');
-}
 
 /**
  * The summary safe mode offers: only what the captain actually said, in the

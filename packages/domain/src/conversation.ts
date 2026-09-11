@@ -30,18 +30,20 @@ export type BriefingConversationState = z.infer<typeof briefingConversationState
  * has to be able to offer a summary even when the very first turn fails.
  *
  * `final` is never a move a model makes: only the captain's confirmation closes
- * the briefing, which is why it appears solely as an exit of `confirmation` and
- * of `failed`. `cancelled` and `failed` end the current conversation without
- * touching the execution or a briefing the captain already confirmed, and the
- * one exit `failed` keeps is the captain closing the deterministic summary that
- * safe mode offered.
+ * the briefing, which is why it appears solely as an exit of `confirmation`, of
+ * `failed` and of `final` itself — a later edit is the next revision of a
+ * briefing already signed, which is a move the captain alone makes.
+ * `cancelled` and `failed` end the current conversation without touching the
+ * execution or a briefing the captain already confirmed, and the one exit
+ * `failed` keeps is the captain closing the deterministic summary that safe
+ * mode offered.
  */
 export const BRIEFING_CONVERSATION_TRANSITIONS: Readonly<Record<BriefingConversationState, readonly BriefingConversationState[]>> = Object.freeze({
   entry: ['recommendation', 'confirmation', 'cancelled', 'failed'],
   recommendation: ['question', 'confirmation', 'cancelled', 'failed'],
   question: ['recommendation', 'confirmation', 'cancelled', 'failed'],
   confirmation: ['question', 'final', 'cancelled', 'failed'],
-  final: [],
+  final: ['final'],
   cancelled: [],
   failed: ['final'],
 });
@@ -80,7 +82,6 @@ export const BRIEFING_SUMMARY_MAX_LENGTH = IDENTITY_BRIEFING_MAX_LENGTH;
 export const BRIEFING_TURN_MESSAGE_MAX_LENGTH = 2_000;
 export const BRIEFING_TURN_LIST_MAX_ITEMS = 8;
 export const BRIEFING_TURN_ITEM_MAX_LENGTH = 280;
-export const BRIEFING_CONVERSATION_MAX_MESSAGES = 60;
 export const BRIEFING_IDEMPOTENCY_KEY_MAX_LENGTH = 200;
 /** The plan asks for exactly three conceptual directions, never two and never four. */
 export const BRIEFING_CONCEPTUAL_DIRECTIONS = 3;
