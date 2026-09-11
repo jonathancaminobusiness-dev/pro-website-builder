@@ -93,6 +93,12 @@ export default function App() {
   const recoveryAttempts = useRef({ runId: '', count: 0 });
   const pendingStart = useRef<{ runId: string; epoch: number } | null>(null);
   const latestIdentity = useRef<IdentityGateSnapshot | null>(null);
+  /** Every write to the pipeline snapshot bumps this, so a read can tell whether a newer one landed while it was in flight. */
+  const snapshotEpoch = useRef(0);
+  const commitSnapshot = useCallback((next: Snapshot): void => {
+    snapshotEpoch.current += 1;
+    setSnapshot(next);
+  }, []);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
 
   useEffect(() => {
@@ -106,12 +112,16 @@ export default function App() {
   // until the run is read again, so the screen re-reads it whenever the tab
   // comes back to the foreground.
   const refreshRun = useCallback(async (runId: string): Promise<void> => {
+    const epoch = snapshotEpoch.current;
     try {
       const next = await request<Snapshot>(`/api/runs/${encodeURIComponent(runId)}`);
-      // A read of a run the screen has already left cannot replace the one on it.
-      setSnapshot((current) => current && current.runId !== runId ? current : next);
+      // A read answers for the snapshot that was on the screen when it was
+      // issued: an action or a later read that has landed since is newer than
+      // this answer, and it also means the screen may have left the run.
+      if (snapshotEpoch.current !== epoch) return;
+      commitSnapshot(next);
     } catch (cause) { setError(failureMessage(cause)); }
-  }, []);
+  }, [commitSnapshot]);
   const pipelineRunId = snapshot?.runId ?? '';
   useEffect(() => {
     if (!pipelineRunId) return;
@@ -122,7 +132,7 @@ export default function App() {
 
   async function act(action: () => Promise<Snapshot>): Promise<void> {
     setBusy(true); setError('');
-    try { setSnapshot(await action()); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); } finally { setBusy(false); }
+    try { commitSnapshot(await action()); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); } finally { setBusy(false); }
   }
 
   const create = () => act(async () => (await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) })).snapshot);
@@ -362,7 +372,7 @@ export default function App() {
       <section className="intro-panel"><p className="eyebrow">A identidade é o contrato</p><h2>Da direção visual ao site final, uma fonte de verdade.</h2><p>O editor mostra propostas tipadas; o renderer determinístico cuida do resultado. Os três gates desta versão são do capitão.</p><button className="primary" onClick={create} disabled={busy}>{busy ? 'Preparando…' : snapshot ? 'Novo briefing' : 'Carregar briefing fixo'}</button></section>
       <section className="stage-panel"><div className="section-heading"><div><p className="eyebrow">Pipeline</p><h2>Três etapas, três decisões</h2></div>{snapshot && <span className={`status status-${snapshot.status}`}>{snapshot.status === 'needs_review' ? 'aguarda gate' : snapshot.status === 'rejected' ? 'rejeitado · reexecutar' : snapshot.status}</span>}</div><div className="stage-list">{stages.map((stage, index) => { const approval = snapshot?.approvals.find((item) => item.stage === stage.id); const active = snapshot?.currentStage === stage.id; return <div className={`stage-row ${active ? 'active' : ''}`} key={stage.id}><span className="stage-number">0{index + 1}</span><div><strong>{stage.label}</strong><small>{approval ? approval.decision === 'approved' ? 'Aprovado pelo capitão' : 'Rejeitado para revisão' : active ? 'Proposta pronta para revisão' : 'Bloqueada pelo gate anterior'}</small></div><span className="stage-dot" />{active && <span className="active-mark">●</span>}</div>; })}</div><div className="actions">{snapshot?.status === 'queued' && stageInFlight && <button className="secondary" onClick={() => control('cancel')} disabled={controlBusy}>{controlBusy ? 'Parando…' : 'Cancelar execução'}</button>}{snapshot?.status === 'cancelled' && <button className="secondary" onClick={() => control('restart')} disabled={controlBusy}>{controlBusy ? 'Retomando…' : 'Retomar execução'}</button>}{snapshot?.status === 'needs_review' ? <><button className="secondary" onClick={() => review('reject')} disabled={busy}>Rejeitar proposta</button>{snapshot.currentStage === 'finalization' ? <span className="qa-chip">Aprovar é publicar o bundle no Gate 3 abaixo</span> : <button className="primary" onClick={() => review('approve')} disabled={busy}>Aprovar gate</button>}</> : <button className="primary" onClick={runStage} disabled={!snapshot || busy || snapshot.status === 'succeeded'}>{busy ? 'Executando…' : snapshot?.status === 'succeeded' ? 'Release publicado' : snapshot?.status === 'rejected' ? 'Refazer etapa' : 'Executar próxima etapa'}</button>}</div></section>
       <section className="review-panel"><div className="section-heading"><div><p className="eyebrow">Revisão visual</p><h2>Preview isolado</h2></div><span className="qa-chip">linter: {snapshot?.lintErrorCount ?? 0} erros</span></div>{snapshot ? <><div className="route-tabs">{snapshot.rendered.routes.map((item) => <button key={item.route} className={route === item.route ? 'selected' : ''} onClick={() => setRoute(item.route)}>{item.route}</button>)}</div><iframe title="Preview do site" src={previewUrl} sandbox="" className="preview-frame" /></> : <div className="empty-state"><span>△</span><p>Carregue o briefing para abrir o primeiro contrato de identidade.</p></div>}</section>
-      <Gate3Panel key={snapshot?.runId ?? 'none'} runId={snapshot?.runId ?? null} apiOrigin={API_ORIGIN} onPublished={(run) => setSnapshot(run as Snapshot)} />
+      <Gate3Panel key={snapshot?.runId ?? 'none'} runId={snapshot?.runId ?? null} apiOrigin={API_ORIGIN} onPublished={(run) => commitSnapshot(run as Snapshot)} />
       {error && <p className="error-banner" role="alert">{error}</p>}
     </main>}
     <footer><span>DesignIR → Preview → Export</span><span>renderer determinístico · preview em origem separada</span></footer>
