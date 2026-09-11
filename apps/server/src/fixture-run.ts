@@ -70,10 +70,10 @@ export class FixtureRun {
 
   private releaseRun: ReleaseRun | undefined;
 
-  constructor(private readonly options: { repository: ProjectRepository; provider: ModelProvider; release?: ReleaseRunOptions; modelAlias?: string }) {
+  constructor(private readonly options: { repository: ProjectRepository; provider: ModelProvider; release?: ReleaseRunOptions; modelAlias: string }) {
     // Every task the plan derives names the provider that will answer it, so a
     // Codex run and a Claude run of the same task do not hash the same key.
-    this.planner = new RunPlanner(this.store, ...(this.options.modelAlias ? [this.options.modelAlias] as const : []));
+    this.planner = new RunPlanner(this.store, this.options.modelAlias);
   }
 
   async initialize(runId: string): Promise<void> {

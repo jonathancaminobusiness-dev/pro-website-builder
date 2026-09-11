@@ -35,7 +35,7 @@ async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSour
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs, prototypes: registry,
-    createRun: async (id) => { const run = new FixtureRun({ repository, provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository, provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
   });
   // Port 0 keeps parallel checkouts off each other's fixed developer ports.
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

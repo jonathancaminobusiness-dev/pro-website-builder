@@ -36,7 +36,7 @@ describe('handoff to the next stage', () => {
 
     // The existing planner is what the next stage runs on: plan against the
     // handoff version and the identity it hands the worker is the approved one.
-    const planned = new RunPlanner(store).plan('run-handoff', handoff.versionId, 'briefing');
+    const planned = new RunPlanner(store, 'claude-local').plan('run-handoff', handoff.versionId, 'briefing');
     const prototype = planned.tasks.find((task) => task.stage === 'prototype')!;
     expect(hashJson(prototype.documentSlice['/identity'])).toBe(handoff.identityHash);
     expect(prototype.baseVersionId).toBe(handoff.versionId);
@@ -48,7 +48,7 @@ describe('handoff to the next stage', () => {
     await stage.run();
     await stage.approve({ directionId: 'editorial-material', rationale: 'Aprovada.', approverRole: 'captain' });
     const before = stage.handoff()!;
-    const beforeDigest = new RunPlanner(store).plan('run-handoff', before.versionId, 'briefing').tasks.find((task) => task.stage === 'prototype')!.inputDigest;
+    const beforeDigest = new RunPlanner(store, 'claude-local').plan('run-handoff', before.versionId, 'briefing').tasks.find((task) => task.stage === 'prototype')!.inputDigest;
 
     await stage.changeToken({ tokenPath: 'color.paper', value: '#ffffff', rationale: 'Papel mais claro.' });
     const after = stage.handoff()!;
@@ -57,7 +57,7 @@ describe('handoff to the next stage', () => {
     // The approved hash is unchanged; what changed is the document it no longer describes.
     expect(after.identityHash).toBe(before.identityHash);
     expect(identityHash(store.get(after.versionId)!.ir)).not.toBe(after.identityHash);
-    const afterDigest = new RunPlanner(store).plan('run-handoff', after.versionId, 'briefing').tasks.find((task) => task.stage === 'prototype')!.inputDigest;
+    const afterDigest = new RunPlanner(store, 'claude-local').plan('run-handoff', after.versionId, 'briefing').tasks.find((task) => task.stage === 'prototype')!.inputDigest;
     expect(afterDigest).not.toBe(beforeDigest);
   });
 });

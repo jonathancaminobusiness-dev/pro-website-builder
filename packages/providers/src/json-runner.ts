@@ -1,10 +1,6 @@
-import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { promisify } from 'node:util';
-import { CLAUDE_RUNNER_TIMEOUT_MS } from './claude-runner.js';
-import type { ClaudeExecutor, ClaudeRunnerOptions } from './model.js';
-
-const execFileAsync = promisify(execFile);
+import { CLAUDE_RUNNER_TIMEOUT_MS, execFileExecutor } from './claude-runner.js';
+import type { ClaudeRunnerOptions } from './model.js';
 
 /**
  * A worker that answers one closed question with JSON that matches a schema.
@@ -63,16 +59,7 @@ export class JsonRunnerError extends Error {
 
 const DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 
-const executeClaudeJson: ClaudeExecutor = async (executable, args, options) => {
-  const { stdout, stderr } = await execFileAsync(executable, args, {
-    shell: false,
-    timeout: options.timeoutMs,
-    ...(options.signal ? { signal: options.signal } : {}),
-    windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  return { stdout, stderr };
-};
+const executeClaudeJson = execFileExecutor(8 * 1024 * 1024);
 
 export class ClaudeJsonRunner implements JsonModelRunner {
   private readonly options: Required<ClaudeRunnerOptions>;

@@ -29,7 +29,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-'));
     const db = openDatabase(join(dir, 'api.sqlite'));
     const runs = new Map<string, FixtureRun>();
-    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
@@ -47,7 +47,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-'));
     const db = openDatabase(join(dir, 'duplicate.sqlite'));
     const runs = new Map<string, FixtureRun>();
-    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
@@ -66,7 +66,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-'));
     const db = openDatabase(join(dir, 'malformed.sqlite'));
     const runs = new Map<string, FixtureRun>();
-    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     const port = typeof address === 'object' && address ? address.port : 0;
@@ -81,7 +81,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-'));
     const db = openDatabase(join(dir, 'csrf.sqlite'));
     const runs = new Map<string, FixtureRun>();
-    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
@@ -101,7 +101,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-restart-'));
     const dbPath = join(dir, 'restart.sqlite');
     const first = openDatabase(dbPath);
-    const seeded = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const seeded = new FixtureRun({ modelAlias: 'claude-local', repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     await seeded.initialize('persisted-run');
     await seeded.runNext();
     await seeded.approve('identity', 'captain');
@@ -113,8 +113,8 @@ describe('local API', () => {
     const runs = new Map<string, FixtureRun>();
     const server = createApiServer({
       runs,
-      createRun: async (id) => { const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
-      loadRun: async (id) => { const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); if (!await run.restore(id)) return undefined; runs.set(id, run); return run; },
+      createRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
+      loadRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); if (!await run.restore(id)) return undefined; runs.set(id, run); return run; },
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();

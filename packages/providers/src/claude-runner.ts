@@ -9,16 +9,18 @@ const execFileAsync = promisify(execFile);
 const deniedTools = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 export const CLAUDE_RUNNER_TIMEOUT_MS = 7 * 60_000;
 
-const executeClaude: ClaudeExecutor = async (executable, args, options) => {
+export const execFileExecutor = (maxBuffer: number): ClaudeExecutor => async (executable, args, options) => {
   const { stdout, stderr } = await execFileAsync(executable, args, {
     shell: false,
     timeout: options.timeoutMs,
     ...(options.signal ? { signal: options.signal } : {}),
     windowsHide: true,
-    maxBuffer: 4 * 1024 * 1024,
+    maxBuffer,
   });
   return { stdout, stderr };
 };
+
+const executeClaude = execFileExecutor(4 * 1024 * 1024);
 
 export class ClaudeRunner implements ModelProvider {
   private readonly options: Required<ClaudeRunnerOptions>;

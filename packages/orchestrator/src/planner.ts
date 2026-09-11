@@ -115,7 +115,7 @@ function valueAt(ir: DesignIR, path: string): unknown {
 
 export class RunPlanner {
   /** `modelAlias` is what the resolved provider is called on every task; `idempotencyKey` hashes it. */
-  constructor(private readonly store: VersionStore, private readonly modelAlias: string = 'claude-local') {}
+  constructor(private readonly store: VersionStore, private readonly modelAlias: string) {}
 
   plan(runId: string, baseVersionId: string, brief: string): RunPlan {
     const base = this.store.get(baseVersionId);

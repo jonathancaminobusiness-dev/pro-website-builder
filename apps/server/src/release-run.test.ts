@@ -53,7 +53,7 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs,
-    createRun: async (id) => { const run = new FixtureRun({ repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, modelProvider: 'fake', ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, modelProvider: 'fake', ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -397,7 +397,7 @@ describe('Gate 3 over the local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-release-off-'));
     const db = openDatabase(join(dir, 'api.sqlite'));
     const runs = new Map<string, FixtureRun>();
-    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ modelAlias: 'claude-local', repository: new ProjectRepository(db), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;

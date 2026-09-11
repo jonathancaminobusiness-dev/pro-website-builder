@@ -17,7 +17,7 @@ describe('phase 0 secret boundary', () => {
   it('keeps database dump, rendered bundle, and captured log data free of secret-like values', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pwb-secrets-'));
     const database = openDatabase(join(root, 'secrets.sqlite'));
-    const run = new FixtureRun({ repository: new ProjectRepository(database), release: releaseOptions(join(root, 'exports')), provider: createModelProvider() });
+    const run = new FixtureRun({ modelAlias: 'claude-local', repository: new ProjectRepository(database), release: releaseOptions(join(root, 'exports')), provider: createModelProvider() });
     const snapshot = await run.initialize('secret-scan').then(() => run.runAll());
     // The release the run stopped at: the exact bytes Gate 3 would publish.
     const compiled = compileRelease(renderDesign(snapshot.currentVersion.ir), snapshot.currentVersion.ir, { siteUrl: 'https://site.invalid', siteName: 'pro-website-builder' });
