@@ -17,9 +17,12 @@ export interface BriefingCreateButtonProps {
   onCreate: () => void;
 }
 
-export interface BriefingReplacementConfirmationProps {
+export interface BriefingReplacementConfirmationProps<Element> {
   replacing: string;
+  /** The editor for the new run's briefing: the captain writes what replaces the current one. */
+  editor: Element;
   disabled: boolean;
+  createDisabled: boolean;
   onKeep: () => void;
   onCreate: () => void;
 }
@@ -69,10 +72,11 @@ export function renderBriefingReplacementOffer<Element>(factory: BriefingEditorE
   return factory.createElement('button', { className: 'secondary', disabled: props.disabled, onClick: props.onOpen }, props.label);
 }
 
-export function renderBriefingReplacementConfirmation<Element>(factory: BriefingEditorElementFactory<Element>, props: BriefingReplacementConfirmationProps): Element {
+export function renderBriefingReplacementConfirmation<Element>(factory: BriefingEditorElementFactory<Element>, props: BriefingReplacementConfirmationProps<Element>): Element {
   return factory.createElement('div', { className: 'token-form open-run', role: 'group' },
     factory.createElement('span', null, 'Uma execução nova substitui ', factory.createElement('code', null, props.replacing), ' como a que este navegador lembra.'),
+    props.editor,
     factory.createElement('button', { className: 'secondary', onClick: props.onKeep, disabled: props.disabled }, 'Manter esta execução'),
-    factory.createElement('button', { className: 'primary', onClick: props.onCreate, disabled: props.disabled }, 'Criar mesmo assim'),
+    factory.createElement('button', { className: 'primary', onClick: props.onCreate, disabled: props.disabled || props.createDisabled }, 'Criar mesmo assim'),
   );
 }

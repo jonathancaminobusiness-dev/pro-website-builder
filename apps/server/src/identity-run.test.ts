@@ -50,6 +50,51 @@ describe('identity run', () => {
     expect(curatorPrompt).toContain(briefing);
   });
 
+  it('normalizes a direct execution briefing before persistence and curator use', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({
+      runId: 'identity-normalized-direct',
+      repository,
+      provider: new FakeIdentityProvider(),
+      briefing: '  Nicho de cerâmica autoral.  ',
+    });
+
+    await run.initialize();
+
+    expect((await repository.getRun('identity-normalized-direct'))?.briefing).toBe('Nicho de cerâmica autoral.');
+    expect(run.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
+  });
+
+  it('persists a normalized briefing when restoring a legacy run', async () => {
+    const repository = new ProjectRepository(database);
+    const runId = 'identity-normalized-restore';
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
+    await run.initialize();
+    database.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run('  Nicho de cerâmica autoral.  ', runId);
+
+    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+
+    expect((await repository.getRun(runId))?.briefing).toBe('Nicho de cerâmica autoral.');
+    expect(restored.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
+  });
+
+  it('still serves a restored run when the canonicalizing briefing write fails', async () => {
+    const repository = new ProjectRepository(database);
+    const runId = 'identity-readonly-restore';
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
+    await run.initialize();
+    database.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run('  Nicho de cerâmica autoral.  ', runId);
+    repository.updateRunBriefing = async (): Promise<void> => { throw new Error('database is locked'); };
+
+    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+
+    expect(restored.snapshot().status).not.toBe('unrecoverable');
+    expect(restored.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
+    expect((await repository.getRun(runId))?.briefing).toBe('  Nicho de cerâmica autoral.  ');
+  });
+
   it('passes per-critic deadlines through to the identity stage', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({
@@ -681,6 +726,11 @@ describe('identity run', () => {
     await expect(run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Mesmo assim.' })).rejects.toThrow(/cancelled/i);
     await expect(run.start()).rejects.toThrow(/cancelled/i);
     expect(run.snapshot().status).toBe('cancelled');
+
+    // Stopping a stopped run is the no-op the second click on the Studio's
+    // cancel button relies on, not an error the captain has to read.
+    const again = await run.cancel();
+    expect(again.status).toBe('cancelled');
 
     const events = await repository.listEvents('identity-stopped');
     expect(events.some((event) => event.type === 'identity.run.cancelled')).toBe(true);

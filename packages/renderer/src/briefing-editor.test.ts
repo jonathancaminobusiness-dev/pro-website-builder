@@ -44,23 +44,44 @@ describe('briefing editor renderer API', () => {
   it('owns the replacement confirmation controls and forwards both callbacks', () => {
     let kept = 0;
     let created = 0;
+    const editor = renderBriefingEditor(factory, { value: 'Novo nicho.', maxLength: 8000, onChange: () => undefined });
     const confirmation = renderBriefingReplacementConfirmation(factory, {
       replacing: 'identity-123',
+      editor,
       disabled: true,
+      createDisabled: false,
       onKeep: () => { kept += 1; },
       onCreate: () => { created += 1; },
     });
 
     expect(confirmation).toMatchObject({ type: 'div', props: { className: 'token-form open-run', role: 'group' } });
     expect(textOf(confirmation)).toContain('identity-123');
-    const keep = confirmation.children[1] as TestElement;
-    const create = confirmation.children[2] as TestElement;
+    expect(confirmation.children[1]).toBe(editor);
+    const keep = confirmation.children[2] as TestElement;
+    const create = confirmation.children[3] as TestElement;
     expect(keep).toMatchObject({ type: 'button', props: { className: 'secondary', disabled: true } });
     expect(create).toMatchObject({ type: 'button', props: { className: 'primary', disabled: true } });
     (keep.props?.onClick as () => void)();
     (create.props?.onClick as () => void)();
     expect(kept).toBe(1);
     expect(created).toBe(1);
+  });
+
+  it('refuses to create a replacement run while its briefing is empty', () => {
+    const confirmation = renderBriefingReplacementConfirmation(factory, {
+      replacing: 'identity-123',
+      editor: renderBriefingEditor(factory, { value: '', maxLength: 8000, onChange: () => undefined }),
+      disabled: false,
+      createDisabled: true,
+      onKeep: () => undefined,
+      onCreate: () => undefined,
+    });
+
+    const editor = confirmation.children[1] as TestElement;
+    const textarea = editor.children[1] as TestElement;
+    expect(textarea).toMatchObject({ type: 'textarea', props: { value: '' } });
+    expect(confirmation.children[2]).toMatchObject({ type: 'button', props: { disabled: false } });
+    expect(confirmation.children[3]).toMatchObject({ type: 'button', props: { className: 'primary', disabled: true } });
   });
 
   it('owns the replacement offer and forwards its disabled state and callback', () => {
