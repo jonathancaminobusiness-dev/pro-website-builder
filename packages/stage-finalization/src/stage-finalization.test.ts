@@ -535,6 +535,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());
     const stage = new FinalizationStage({
+      modelAlias: 'fake',
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       compilerOptions: { ...COMPILER_OPTIONS, fonts: [FIXTURE_FACE] },
@@ -661,6 +662,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());
     const stage = new FinalizationStage({
+      modelAlias: 'fake',
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       summarizer: lying,

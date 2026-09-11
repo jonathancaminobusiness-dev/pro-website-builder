@@ -139,6 +139,8 @@ export const releaseGateReportSchema = z.object({
  */
 export const releasePublicationSchema = z.object({
   digest: z.string().min(1),
+  /** The acceptance this publication records; one per run's finalization gate. */
+  acceptanceId: z.string().min(1),
   approvedVersionId: z.string().min(1),
   releasedVersionId: z.string().min(1),
   irHash: z.string().min(1),

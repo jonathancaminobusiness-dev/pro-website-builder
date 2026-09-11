@@ -248,17 +248,17 @@ nothing prepared in this execution, a digest the run no longer holds, a bundle
 prepared for another proposal, a document the linter rejects, a veto still
 standing, or an open point never accepted in writing. The studio can tell the
 release having moved from the server having broken. And the bytes never outlive
-the acceptance of them: the bundle is written first, and then one acceptance
-carries everything else — the publication appended to the release record, the
-finalization approval, and the three events that describe them — landing
-together or not at all. A publish that does not commit takes back whatever it
-wrote, the record entry and the bundle alike, so a restarted server reads the
-run exactly as the live one does — still at the gate, with no release behind it
-— and the retry records one publication rather than a second copy. A bundle that
-was already there — the same bytes published before — is never touched, because
-its own record stands for it. A bundle that was already there — the
-same bytes published before — is never touched, because its own record stands
-for it.
+the acceptance of them: the bundle is written first, the acceptance commits next
+— the finalization approval and the events that describe it, the publication
+among them — and only then is that publication written into the release record
+beside the bundle. A publish that does not reach the commit takes its bytes back
+and records nothing, so a restarted server reads the run exactly as the live one
+does: still at the gate, with no release behind it. Past the commit the release
+is accepted, and the record is a projection of the ledger that accepted it —
+never the other way round — so an entry that never landed is written by the next
+restore of that run, and asking for the same acceptance again records it once. A
+bundle that was already there — the same bytes published before — is never
+touched, because its own record stands for it.
 
 Only the captain may accept an open escalation in writing. A scripted run —
 `run:fixture` and `run:release` alike — goes through that same publish path

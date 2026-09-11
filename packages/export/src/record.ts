@@ -12,8 +12,8 @@ import { releasePublicationsSchema, type ReleasePublication } from '@pwb/domain'
  * so two documents that compile to the same site publish into the same
  * directory; what told them apart — the approved version, the released version,
  * the document hash, the captain's written acceptance — belongs here instead.
- * Publishing the same bytes again appends a second entry rather than colliding
- * with the first.
+ * Another run publishing the same bytes appends a second entry rather than
+ * colliding with the first.
  */
 export type { ReleasePublication };
 
@@ -47,31 +47,22 @@ export async function readReleasePublications(rootDir: string, digest: string): 
   catch (error) { throw new Error(`The release record ${path} is unreadable, so the publications of this bundle cannot be preserved: ${error instanceof Error ? error.message : 'invalid JSON or shape'}`); }
 }
 
-function samePublication(one: ReleasePublication, other: ReleasePublication): boolean {
-  return one.digest === other.digest && one.approvedVersionId === other.approvedVersionId && one.releasedVersionId === other.releasedVersionId
-    && one.irHash === other.irHash && one.approverRole === other.approverRole && one.rationale === other.rationale
-    && one.acceptedEscalations.length === other.acceptedEscalations.length && one.acceptedEscalations.every((escalation, index) => escalation === other.acceptedEscalations[index]);
-}
-
+/**
+ * Records one publication of one bundle, or leaves the record alone when this
+ * acceptance is already in it.
+ *
+ * The record is a projection of the ledger that accepted the release, never the
+ * other way round: the acceptance commits first and the entry is written after
+ * it, so an entry that never landed is re-appended later from the ledger. That
+ * repair asks for the same acceptance again, which is why one acceptance is one
+ * entry. Two acceptances of the same bytes — another run publishing the same
+ * site — stay two entries.
+ */
 export async function appendReleasePublication(rootDir: string, entry: ReleasePublication): Promise<ReleasePublication[]> {
   await mkdir(rootDir, { recursive: true });
-  const publications = [...await readReleasePublications(rootDir, entry.digest), entry];
-  await writeFile(recordPath(rootDir, entry.digest), `${JSON.stringify(publications, null, 2)}\n`, 'utf8');
-  return publications;
-}
-
-/**
- * Takes one publication back out of the record: the acceptance it belongs to
- * did not commit, so it describes a publication that never happened. Only the
- * entry this publish appended is dropped — the last one that matches it — so
- * the record is left exactly as the publish found it, and a retry appends once
- * instead of doubling what an auditor counts.
- */
-export async function removeReleasePublication(rootDir: string, entry: ReleasePublication): Promise<ReleasePublication[]> {
   const recorded = await readReleasePublications(rootDir, entry.digest);
-  const last = recorded.map((publication) => samePublication(publication, entry)).lastIndexOf(true);
-  if (last < 0) return recorded;
-  const publications = recorded.filter((_, index) => index !== last);
+  if (recorded.some((publication) => publication.acceptanceId === entry.acceptanceId)) return recorded;
+  const publications = [...recorded, entry];
   await writeFile(recordPath(rootDir, entry.digest), `${JSON.stringify(publications, null, 2)}\n`, 'utf8');
   return publications;
 }

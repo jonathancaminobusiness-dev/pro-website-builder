@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { createFixtureIR, type AgentTask, type Approval } from '@pwb/domain';
-import type { ReleaseManifest } from '@pwb/export';
+import { createFixtureIR, releasePublicationSchema, type AgentTask, type Approval } from '@pwb/domain';
+import { appendReleasePublication, type ReleaseManifest } from '@pwb/export';
 import { lintDesign } from '@pwb/linter';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type ScheduleResult, type VersionRecord, VersionStore } from '@pwb/orchestrator';
 import { ReleasePublishRefusedError, ReleaseRun, type ReleaseApprover, type ReleaseContext, type ReleaseRunOptions, type ReleaseSnapshot } from './release-run.js';
@@ -120,7 +120,26 @@ export class FixtureRun {
     this.started = events.some((event) => event.type === 'run.started');
     for (const event of events) if (event.type === 'task.queued') this.attempts.set(event.payload.stage as Stage, Number(event.payload.attempt));
     this.initialized = true;
+    await this.recordPublishedRelease(events);
     return true;
+  }
+
+  /**
+   * Writes the publication of a release this run accepted but never recorded.
+   *
+   * The acceptance commits before the entry beside the bundle is written, so a
+   * process that stopped in between left a release the ledger knows about and
+   * the record does not. The record is the projection, so it is rebuilt from
+   * the log; asking for the same acceptance again records it once, and a
+   * release whose entry is already there is left alone.
+   */
+  private async recordPublishedRelease(events: Array<{ type: string; payload: Record<string, unknown> }>): Promise<void> {
+    const releaseRoot = this.options.release?.releaseRoot;
+    if (!releaseRoot) return;
+    const finished = events.filter((event) => event.type === 'run.finished').at(-1);
+    const publication = releasePublicationSchema.safeParse(finished?.payload.publication);
+    if (!publication.success) return;
+    await appendReleasePublication(releaseRoot, publication.data).catch(() => undefined);
   }
 
   async runNext(): Promise<FixtureSnapshot> {
@@ -308,20 +327,19 @@ export class FixtureRun {
       approveFinalization: async (approverRole, rationale, manifest, publication) => {
         const version = this.currentVersion;
         const approval: Approval = { id: `${this.runId()}-finalization-approval`, stage: 'finalization', approverRole, versionId: version.id, versionHash: version.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
-        // Acceptance is one step: the publication record, the approval and the
-        // three events that describe them commit together, and only then does
-        // the run become a succeeded one holding this manifest. A publish that
-        // dies anywhere before that commit leaves nothing durable behind, so
-        // the bytes and the record it wrote are taken back and a restarted
-        // server reads the run exactly as this one does — still at the gate.
+        // Acceptance is one step: the approval and the events that describe it
+        // commit together, and only then does the run become a succeeded one
+        // holding this manifest. A publish that dies before that commit leaves
+        // nothing durable behind, so the bytes it wrote are taken back and a
+        // restarted server reads the run exactly as this one does — still at
+        // the gate. The publication travels in the log, which is what the
+        // release record is rebuilt from when its entry never landed.
         await this.options.repository.createApprovalWithEvents(
           { ...approval, runId: this.runId(), projectId: this.projectId() },
           [
             { id: randomUUID(), runId: this.runId(), type: 'approval.recorded', payload: { stage: 'finalization', decision: 'approved', versionId: approval.versionId } },
-            { id: randomUUID(), runId: this.runId(), type: 'run.finished', payload: { status: 'succeeded', digest: manifest.digest } },
-            { id: randomUUID(), runId: this.runId(), type: publication.event.type, payload: publication.event.payload },
+            { id: randomUUID(), runId: this.runId(), type: 'run.finished', payload: { status: 'succeeded', digest: manifest.digest, publication } },
           ],
-          publication.write,
         );
         this.approvals.push(approval);
         this.stageIndex += 1;
