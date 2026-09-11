@@ -125,13 +125,17 @@ export class ProjectRepository {
   }
 
   /** Writes the serialized briefing conversation onto the execution; a run that does not exist yet simply has nothing to write to. */
-  async saveConversation(runId: string, conversation: string): Promise<void> {
-    await this.write(() => { this.db.sqlite.prepare('UPDATE runs SET conversation = ? WHERE id = ?').run(conversation, runId); });
-  }
-
-  /** Moves the execution onto the briefing a confirmation produced, without touching the conversation that produced it. */
-  async updateRunBriefing(runId: string, briefing: string): Promise<void> {
-    await this.write(() => { this.db.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run(briefing, runId); });
+  /**
+   * The conversation, and the briefing a confirmation moved the execution onto,
+   * in one transaction: a confirmation records itself and moves the execution
+   * together or not at all, so no execution ever carries a briefing its
+   * transcript does not name.
+   */
+  async saveConversation(runId: string, conversation: string, briefing?: string): Promise<void> {
+    await this.write(() => this.db.sqlite.transaction(() => {
+      this.db.sqlite.prepare('UPDATE runs SET conversation = ? WHERE id = ?').run(conversation, runId);
+      if (briefing !== undefined) this.db.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run(briefing, runId);
+    })());
   }
 
   async getRun(runId: string): Promise<{ id: string; projectId: string; briefing: string; conversation?: string } | undefined> {

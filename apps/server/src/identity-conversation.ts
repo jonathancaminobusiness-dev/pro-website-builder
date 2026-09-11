@@ -50,17 +50,27 @@ interface TurnFailure { code: string; message: string }
 export interface BriefingConversationOptions {
   runId: string;
   provider: ModelProvider;
-  /** Writes the conversation onto the execution after every change that must survive a restart. */
-  persist: (snapshot: BriefingConversationSnapshot) => Promise<void>;
-  /** Called with the briefing a confirmation produced, so the execution carries it into the identity stage. */
+  /**
+   * Writes the conversation onto the execution after every change that must
+   * survive a restart. A confirmation passes the briefing it signed as well,
+   * because the transcript and the execution's briefing must move in one
+   * transaction or not at all.
+   */
+  persist: (snapshot: BriefingConversationSnapshot, confirmedBriefing?: string) => Promise<void>;
+  /**
+   * Called once the confirmation is durable, so the execution can pick the
+   * briefing up in memory. It runs after the write, never before: nothing the
+   * execution holds may name a briefing no persisted row does.
+   */
   onConfirmed?: (briefing: string, revision: number) => Promise<void> | void;
   /**
    * Asked before a turn is spent, and free to refuse it with a
    * `ConversationError`: an execution the captain stopped, or one whose
    * briefing is frozen because it already holds identity work, must not buy a
-   * 60-second model call whose answer it could never take. It is a pre-check,
-   * not the decision — `onConfirmed` refuses again when it applies the
-   * briefing, because the execution can start a stage while the turn runs.
+   * 60-second model call whose answer it could never take. A confirmation asks
+   * it twice — once before the turn and once at the moment the briefing is
+   * written — because the execution can be stopped or started while the turn
+   * runs, and only the second ask sees that.
    */
   guardTurn?: () => void;
   /**
@@ -284,11 +294,13 @@ export class BriefingConversation {
       this.data.error = { code: turn.failure.code, message: `${turn.failure.message} O briefing foi confirmado mesmo assim; as três direções conceituais podem ser pedidas de novo.` };
       this.append({ author: 'system', text: this.data.error.message, state: 'final', fallback: true });
     }
-    // The execution takes the briefing before the key is spent, so a write that
-    // throws leaves the conversation unconfirmed and the same-key retry re-drives
-    // the whole confirmation instead of reading a signature nothing applied.
+    // Asked again at the moment the briefing is applied, and not redundant with
+    // the ask before the turn: a stop or a stage start can land inside the
+    // up-to-60-second closing turn, and this is the ask that sees it.
+    this.options.guardTurn?.();
+    const snapshot = await this.commit(input.idempotencyKey, briefing);
     await this.options.onConfirmed?.(briefing, revision);
-    return await this.commit(input.idempotencyKey);
+    return snapshot;
   }
 
   // ------------------------------------------------------- the model turn
@@ -476,12 +488,14 @@ export class BriefingConversation {
 
   /**
    * The key is spent only once the execution has the turn: a write that throws
-   * must not leave a retry reading a success the execution never recorded.
+   * must not leave a retry reading a success the execution never recorded. The
+   * key travels inside the same write as the turn it belongs to — and, on a
+   * confirmation, inside the same write as the briefing it signed.
    */
-  private async commit(idempotencyKey: string): Promise<BriefingConversationSnapshot> {
+  private async commit(idempotencyKey: string, confirmedBriefing?: string): Promise<BriefingConversationSnapshot> {
     const appliedKeys = [...this.data.appliedKeys, idempotencyKey].slice(-KEY_MEMORY);
     const snapshot = { ...this.snapshot(), appliedKeys };
-    await this.options.persist(snapshot);
+    await this.options.persist(snapshot, confirmedBriefing);
     this.data.appliedKeys = appliedKeys;
     this.commits += 1;
     return snapshot;

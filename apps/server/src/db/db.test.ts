@@ -24,6 +24,29 @@ describe('sqlite persistence', () => {
     db.sqlite.close();
   });
 
+  it('moves the briefing and the conversation of an execution in one transaction, or neither', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-conversation-tx-'));
+    const db = openDatabase(join(dir, 'conversation.sqlite'));
+    const repo = new ProjectRepository(db);
+    await repo.createProject({ id: 'project-conversa', name: 'Fixture' });
+    await repo.createRun({ id: 'run-conversa', projectId: 'project-conversa', briefing: 'Briefing inicial.' });
+    await repo.saveConversation('run-conversa', '{"state":"confirmation"}');
+
+    await repo.saveConversation('run-conversa', '{"state":"final"}', 'Briefing confirmado.');
+    const moved = await repo.getRun('run-conversa');
+    expect(moved?.briefing).toBe('Briefing confirmado.');
+    expect(moved?.conversation).toBe('{"state":"final"}');
+
+    // The briefing column is NOT NULL, so this write fails after the
+    // conversation statement already ran inside the transaction.
+    await expect(repo.saveConversation('run-conversa', '{"state":"perdido"}', null as unknown as string)).rejects.toThrow();
+
+    const unchanged = await repo.getRun('run-conversa');
+    expect(unchanged?.briefing).toBe('Briefing confirmado.');
+    expect(unchanged?.conversation).toBe('{"state":"final"}');
+    db.sqlite.close();
+  });
+
   it('rebuilds the tasks table when a database written before the attempt key is opened', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-legacy-'));
     const file = join(dir, 'legacy.sqlite');
