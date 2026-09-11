@@ -66,6 +66,12 @@ export interface Gate2Result {
   colorSchemes: Array<'light' | 'dark'>;
   qa: Array<{ id: string; tier: number; severity: string; title: string; message: string; nodeIds: string[] }>;
   lint: Array<{ id: string; severity: string; path: string; message: string }>;
+  /**
+   * The sections no composer filled. Their windows still hold the architect's
+   * placeholders, so the review is partial and says which parts of it are a gap
+   * rather than a decision.
+   */
+  failedSections: PrototypeStageOutcome['failedSections'];
   cycles: PrototypeStageOutcome['cycles'];
   reports: PrototypeStageOutcome['reports'];
   issues: Array<Finding & { applied: boolean; refusal?: string }>;
@@ -99,7 +105,11 @@ interface PersistedRun {
 function describeStep(type: string, payload: Record<string, unknown>): string {
   const list = (value: unknown): string => Array.isArray(value) ? value.join(', ') : '';
   if (type === 'prototype.manifest.applied') return `Arquitetura de informação pronta: ${list(payload.routes)}.`;
-  if (type === 'prototype.sections.applied') return `Seções compostas em paralelo: ${list(payload.sections)}.`;
+  if (type === 'prototype.sections.applied') {
+    const failed = Array.isArray(payload.failedSections) ? payload.failedSections : [];
+    return `Seções compostas em paralelo: ${list(payload.sections)}.${failed.length > 0 ? ` Sem composição: ${failed.join(', ')}.` : ''}`;
+  }
+  if (type === 'prototype.section.unavailable') return `A seção ${String(payload.sectionId)} não foi composta: ${String(payload.reason)}.`;
   if (type === 'prototype.qa.gate') return `QA determinístico medido no navegador: ${Array.isArray(payload.vetoes) ? payload.vetoes.length : 0} veto(s).`;
   if (type === 'prototype.cycle.decided') return `Ciclo ${String(payload.cycle)}: ${String(payload.reason)}.`;
   if (type === 'prototype.refine.applied') return `Ciclo ${String(payload.cycle)}: reparo causal aplicado.`;
@@ -367,6 +377,7 @@ export class PrototypeRunRegistry {
       colorSchemes: declaresDarkScheme(ir.identity) ? ['light', 'dark'] : ['light'],
       qa: outcome.qa.checks.map((check) => ({ id: check.id, tier: check.tier, severity: check.severity, title: check.title, message: check.message, nodeIds: check.nodeIds })),
       lint: outcome.lint.findings.map((finding) => ({ id: finding.id, severity: finding.severity, path: finding.path, message: finding.message })),
+      failedSections: outcome.failedSections ?? [],
       cycles: outcome.cycles,
       reports: outcome.reports,
       issues: this.issues(record),

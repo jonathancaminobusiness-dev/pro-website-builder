@@ -112,6 +112,41 @@ describe('orchestrator', () => {
     expect(peak).toBe(2);
   });
 
+  it('retries a failed task only as often as the caller asked, and never a cancelled or expired one', async () => {
+    const scheduler = new Scheduler();
+    const attempts: number[] = [];
+    const settled = await scheduler.run([task('flaky')], async (queued) => {
+      attempts.push(queued.attempt);
+      if (queued.attempt < 2) throw new Error('the worker fell over');
+      return 'ok';
+    }, { retries: 1 });
+    expect(attempts).toEqual([1, 2]);
+    expect(settled.results[0]).toMatchObject({ state: 'succeeded', value: 'ok' });
+
+    // The retry budget is exactly what was asked for; a task that keeps failing is reported failed.
+    const exhausted: number[] = [];
+    const failed = await scheduler.run([task('always')], async (queued) => { exhausted.push(queued.attempt); throw new Error('still down'); }, { retries: 1 });
+    expect(exhausted).toEqual([1, 2]);
+    expect(failed.results[0]!.state).toBe('failed');
+
+    // A deadline that fired already spent the whole budget the task was given; it is not spent twice.
+    const expiries: number[] = [];
+    const expired = await scheduler.run([task('slow', 'v0', { deadlineMs: 10 })], async (queued) => {
+      expiries.push(queued.attempt);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return 'late';
+    }, { retries: 1 });
+    expect(expiries).toEqual([1]);
+    expect(expired.results[0]!.state).toBe('failed');
+  });
+
+  it('does not retry by default, so no caller pays for an answer it cannot use', async () => {
+    const attempts: number[] = [];
+    const result = await new Scheduler().run([task('once')], async (queued) => { attempts.push(queued.attempt); throw new Error('down'); });
+    expect(attempts).toEqual([1]);
+    expect(result.results[0]!.state).toBe('failed');
+  });
+
   it('rejects stale and overlapping patches before the applier mutates a version', () => {
     const gate = new PatchGate();
     const context = { currentVersionId: 'v0', allowedPaths: ['/reviewRecord'], stage: 'identity' as const, role: 'director' as const };
