@@ -120,6 +120,46 @@ describe('Codex provider', () => {
     }
   });
 
+  it('starts a session in a workspace no git repository contains', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pwb-codex-untrusted-'));
+    const script = join(directory, 'codex-fixture.mjs');
+    const executable = join(directory, 'codex-fixture');
+    // Emulates the real CLI's precondition: outside a git repository it refuses
+    // to start unless --skip-git-repo-check was passed.
+    await writeFile(script, [
+      "import { stat } from 'node:fs/promises';",
+      "import { join } from 'node:path';",
+      "const trusted = await stat(join(process.cwd(), '.git')).then(() => true, () => false);",
+      "if (!trusted && !process.argv.includes('--skip-git-repo-check')) {",
+      "  process.stderr.write('Not inside a trusted directory and --skip-git-repo-check was not specified.');",
+      "  process.exit(1);",
+      "}",
+      "console.log(JSON.stringify({type: 'item.completed', item: {type: 'agent_message', text: JSON.stringify({answer: 'ok'})}}));",
+    ].join('\n'), 'utf8');
+    await writeFile(executable, `#!/bin/sh\nexec ${process.execPath} ${script} "$@"\n`, 'utf8');
+    await chmod(executable, 0o755);
+    try {
+      const runner = new CodexJsonRunner({ executable, timeoutMs: 5_000 });
+      await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 5_000 })).resolves.toEqual({ answer: 'ok' });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an allowlisted directory instead of copying a whole tree into the session', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'pwb-codex-directory-entry-'));
+    await writeFile(join(source, 'inside.json'), '"inside"', 'utf8');
+    let invoked = false;
+    const runner = new CodexJsonRunner({ execute: async () => { invoked = true; return { stdout: '', stderr: '' }; } });
+    try {
+      await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1_000, allowlist: [source] }))
+        .rejects.toMatchObject({ code: 'CODEX_ALLOWLIST_UNREADABLE' });
+      expect(invoked).toBe(false);
+    } finally {
+      await rm(source, { recursive: true, force: true });
+    }
+  });
+
   it('reports an actionable error when the Codex CLI is unavailable', async () => {
     const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_UNAVAILABLE' });

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { ZodError } from 'zod';
@@ -168,9 +168,11 @@ async function executeCodex(executable: string, args: string[], options: CodexEx
  * the request's allowlist into it under `allowlist/<n>/`, and removes it when
  * the session ends. Every entry gets its own numbered directory, so two paths
  * sharing a basename cannot collide with each other and none can collide with
- * the schema file written at the workspace root. `operation` receives a
- * rewriter that points the prompt at the copies rather than at the originals,
- * which stay outside the boundary.
+ * the schema file written at the workspace root. An entry is one readable
+ * regular file: a directory would pull a whole tree inside the boundary this
+ * workspace exists to narrow, and its copy would spend the session deadline.
+ * `operation` receives a rewriter that points the prompt at the copies rather
+ * than at the originals, which stay outside the boundary.
  */
 async function withWorkspace<T>(allowlist: readonly string[], operation: (workspace: string, rewrite: (prompt: string) => string) => Promise<T>): Promise<T> {
   const workspace = await mkdtemp(join(resolve(tmpdir()), CODEX_WORKSPACE_PREFIX));
@@ -181,10 +183,11 @@ async function withWorkspace<T>(allowlist: readonly string[], operation: (worksp
       const source = resolve(entry);
       const destination = join(workspace, CODEX_ALLOWLIST_DIRECTORY, String(copies.size), basename(source));
       try {
+        if (!(await stat(source)).isFile()) throw new Error(`${entry} is not a regular file.`);
         await mkdir(dirname(destination), { recursive: true });
-        await cp(source, destination, { recursive: true, errorOnExist: true, force: false });
+        await cp(source, destination, { errorOnExist: true, force: false });
       } catch {
-        throw new CodexCliError('CODEX_ALLOWLIST_UNREADABLE', `A Codex session could not be given ${entry}; an allowlisted path must exist and be readable.`);
+        throw new CodexCliError('CODEX_ALLOWLIST_UNREADABLE', `A Codex session could not be given ${entry}; an allowlisted path must be a readable regular file.`);
       }
       copies.set(entry, destination);
     }
@@ -224,7 +227,7 @@ export class CodexJsonRunner implements JsonModelRunner {
           'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
           '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false',
           '--json', ...(schemaPath ? ['--output-schema', schemaPath] : []),
-          '--sandbox', 'read-only', '--ephemeral', '-C', workspace, prompt,
+          '--sandbox', 'read-only', '--ephemeral', '--skip-git-repo-check', '-C', workspace, prompt,
         ], { cwd: workspace, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
         const result = request.strictSchema === false ? await execute() : await withSchemaFile(workspace, request.schema, execute);
         if (!result.stdout.trim() && CODEX_AUTH_FAILURE.test(result.stderr)) {
