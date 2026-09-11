@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
-import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type FontDecision, type ReleaseManifest } from '@pwb/export';
+import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
 import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
@@ -20,12 +20,13 @@ export interface ReleaseRunOptions {
   /** Where the project keeps the faces it may self-host; no manifest means none. */
   fontsDir?: string;
   /**
-   * The faces the preview origin served the captain, read when the release is
-   * prepared. Gate 3 compares them against the compiled bundle, so a face
-   * replaced after the captain looked at it is a divergence and not an
-   * identical route. A run with no preview leaves this out.
+   * The faces the preview origin served, asked for the very version Gate 3 is
+   * about to compile so a script can serve that document before answering.
+   * Gate 3 compares them against the compiled bundle, so a face replaced after
+   * the captain looked at it is a divergence and not an identical route. A run
+   * with no preview leaves this out.
    */
-  previewFaces?: () => FontDecision[] | undefined;
+  previewFaces?: (version: VersionRecord) => Promise<ServedFace[] | undefined> | ServedFace[] | undefined;
 }
 
 /**
@@ -135,7 +136,7 @@ export class ReleaseRun {
     // stamp their artifacts with the release they actually measured.
     await writeReleaseDocument(this.options.evidenceDir, context.current.ir);
     const evidence = await readEvidence(this.options.evidenceDir);
-    const previewFaces = this.options.previewFaces?.();
+    const previewFaces = await this.options.previewFaces?.(context.current);
     const result = await stage.run({
       runId: this.runId,
       version: context.current,

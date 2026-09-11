@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
-import { compileRelease, readReleasePublications, type FontDecision } from '@pwb/export';
+import { compileRelease, readReleasePublications, type FontDecision, type ServedFace } from '@pwb/export';
 import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { writeEvidenceArtifact } from '@pwb/stage-finalization';
@@ -20,7 +20,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(
 interface ReleaseSnapshot {
   digest: string;
   versionId: string;
-  report: { blocked: boolean; bundleDigest: string; irHash: string; approvedVersionId: string; releasedVersionId: string; vetoes: Array<{ id: string }>; rubric: Array<{ dimension: string }>; parity: { matched: boolean }; evidence: unknown[]; escalations: string[]; refinementCycles: number; summary?: { gateAuthority: string } };
+  report: { blocked: boolean; bundleDigest: string; irHash: string; approvedVersionId: string; releasedVersionId: string; vetoes: Array<{ id: string }>; rubric: Array<{ dimension: string }>; parity: { matched: boolean; routes: Array<{ route: string; differences: string[] }> }; evidence: unknown[]; escalations: string[]; refinementCycles: number; summary?: { gateAuthority: string } };
   catalog: Array<{ id: string }>;
   published?: { directory: string };
 }
@@ -45,7 +45,7 @@ function pageEditingProvider(text: string): ModelProvider {
   };
 }
 
-async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string; previewFaces?: () => FontDecision[] | undefined } = {}) {
+async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string; previewFaces?: () => ServedFace[] | undefined } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-release-api-'));
   const evidenceDir = join(dir, 'evidence');
   const releaseRoot = join(dir, 'releases');
@@ -236,15 +236,29 @@ describe('Gate 3 over the local API', () => {
     expect(unreviewed.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
 
     // The same run behind the preview origin `run:release` and `run:fixture` now
-    // start: the faces the gate compares are faces that origin really delivered.
-    const preview = await startServedPreview((versionId) => versionId === 'v0' ? renderDesign(createFixtureIR()) : undefined, 'v0', fontsDir);
+    // start: the faces the gate compares are the ones that origin's document
+    // declared, read back out of the bytes it served.
+    const preview = await startServedPreview(fontsDir);
     cleanups.push(async () => { await preview.close(); });
-    expect(preview.servedFaces()?.map((face) => face.family)).toEqual(['Fixture Sans']);
+    // A route the origin does not have serves nothing, so it answers for no face.
+    expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(404);
+    expect(preview.servedFaces()).toBeUndefined();
 
-    const served = await harness({ fontsDir, previewFaces: () => preview.servedFaces() });
+    const declared = await preview.serve('v0', renderDesign(createFixtureIR()));
+    expect(declared.map((face) => face.family)).toEqual(['Fixture Sans']);
+    expect(preview.servedFaces()).toEqual(declared);
+
+    const served = await harness({ fontsDir, previewFaces: () => declared });
     const compared = await fetch(`${served.origin}/api/runs/${served.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(compared.report.parity.matched).toBe(true);
     expect(compared.report.escalations.join(' ')).not.toMatch(/Fixture Sans/);
+
+    // The same served document against a release that ships no face at all: the
+    // comparison has two independent sides, so it says the face moved.
+    const diverged = await harness({ previewFaces: () => declared });
+    const flagged = await fetch(`${diverged.origin}/api/runs/${diverged.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(flagged.report.parity.matched).toBe(false);
+    expect(flagged.report.parity.routes.flatMap((route) => route.differences)).toContain('A face Fixture Sans 400 normal está no preview e não no release.');
   });
 
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {
