@@ -9,12 +9,17 @@ import { IDENTITY_BRIEFING_MAX_LENGTH } from './identity-briefing.js';
 export interface IdentityApiOptions {
   runs: Map<string, IdentityRun>;
   createRun: (id: string, briefing?: string) => Promise<IdentityRun>;
-  /** Rebuilds a run this process never held, so a restart does not lose an open Gate 1. */
+  /**
+   * The run as the ledger has it, rebuilding one this process never held so a
+   * restart does not lose an open Gate 1. The loader owns the choice between the
+   * object this process holds and a fresh read, and must answer with the cached
+   * run whenever that one is authoritative.
+   */
   loadRun?: (id: string) => Promise<IdentityRun | undefined>;
 }
 
 async function resolve(options: IdentityApiOptions, runId: string): Promise<IdentityRun | undefined> {
-  return options.runs.get(runId) ?? (options.loadRun ? await options.loadRun(runId) : undefined);
+  return options.loadRun ? await options.loadRun(runId) : options.runs.get(runId);
 }
 
 type Send = (status: number, body: unknown) => void;

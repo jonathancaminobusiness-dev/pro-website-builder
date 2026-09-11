@@ -38,7 +38,14 @@ async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSour
   const db = openDatabase(join(dir, 'gate2.sqlite'));
   const repository = new ProjectRepository(db);
   // Synthesized evidence keeps these unit tests browserless; the server itself only ever measures.
-  const registry = new PrototypeRunRegistry({ repository, evidence: options.evidence ?? new DerivedEvidenceSource(), ...(options.seed ? { seed: options.seed } : {}), ...(options.identity ? { identity: options.identity } : {}) });
+  // Every run starts from an identity Gate 1 approved; a test that wants a
+  // document with a known defect hands it over as that approved identity.
+  const seeded = options.seed;
+  const registry = new PrototypeRunRegistry({
+    repository,
+    evidence: options.evidence ?? new DerivedEvidenceSource(),
+    identity: options.identity ?? (async () => approvedIdentity(seeded ? { ir: seeded() } : {})),
+  });
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs, prototypes: registry,
@@ -90,13 +97,13 @@ describe('Gate 2 API', () => {
       expect(refused.payload.error).toContain('Only the captain');
 
       // The start request answers at once with the id, because measuring takes minutes.
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run' });
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run', identityRunId: 'identity-chain' });
       expect(created.status).toBe(201);
       expect(created.payload.runId).toBe('gate2-run');
       expect(created.payload.status).toBe('queued');
       expect(created.payload.result).toBeUndefined();
 
-      const duplicate = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run' });
+      const duplicate = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run', identityRunId: 'identity-chain' });
       expect(duplicate.status).toBe(409);
       expect((await fetch(`${api.origin}/api/prototype/runs/absent`)).status).toBe(404);
 
@@ -120,7 +127,7 @@ describe('Gate 2 API', () => {
     const held = blockingEvidence();
     const api = await harness({ evidence: held.evidence });
     try {
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-recover' });
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-recover', identityRunId: 'identity-chain' });
       expect(created.payload.status).toBe('queued');
       expect(created.payload.result).toBeUndefined();
       await until(api.origin, 'gate2-recover', (snapshot) => snapshot.status === 'running');
@@ -146,9 +153,9 @@ describe('Gate 2 API', () => {
     const held = blockingEvidence();
     const api = await harness({ evidence: held.evidence });
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-first' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-first', identityRunId: 'identity-chain' });
       await until(api.origin, 'gate2-first', (snapshot) => snapshot.status === 'running');
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-second' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-second', identityRunId: 'identity-chain' });
 
       // The second run holds no browser: it waits for the only measuring slot the server has.
       for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -165,7 +172,7 @@ describe('Gate 2 API', () => {
   it('serves both sides of the comparison from the isolated preview origin', async () => {
     const api = await harness();
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-preview' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-preview', identityRunId: 'identity-chain' });
       const result = (await settled(api.origin, 'gate2-preview')).result!;
       for (const versionId of [result.before.versionId, result.after.versionId]) {
         const document = api.registry.preview(versionId);
@@ -179,7 +186,7 @@ describe('Gate 2 API', () => {
     // Driven from a revision with a known defect, so the run always carries a finding to decide on.
     const api = await harness({ seed: createOffRhythmControlIR });
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-decide' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-decide', identityRunId: 'identity-chain' });
       const findingId = (await settled(api.origin, 'gate2-decide')).result!.issues[0]!.id;
       const path = '/api/prototype/runs/gate2-decide/decision';
 
@@ -197,7 +204,7 @@ describe('Gate 2 API', () => {
   it('records the gate decision against the reviewed revision and keeps it captain-only', async () => {
     const api = await harness();
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-gate' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-gate', identityRunId: 'identity-chain' });
       const created = await settled(api.origin, 'gate2-gate');
       const path = '/api/prototype/runs/gate2-gate/gate';
       expect((await post(api.origin, path, { approverRole: 'captain', decision: 'maybe', rationale: 'ok' })).status).toBe(400);
@@ -215,8 +222,8 @@ describe('Gate 2 API', () => {
     const repository = new ProjectRepository(db);
     const held = blockingEvidence();
     try {
-      const first = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), seed: createOffRhythmControlIR });
-      await first.create('gate2-restart');
+      const first = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), identity: async () => approvedIdentity({ ir: createOffRhythmControlIR() }) });
+      await first.create('gate2-restart', { identityRunId: 'identity-chain' });
       let before = first.get('gate2-restart')!;
       for (let attempt = 0; attempt < 400 && (before.status === 'running' || before.status === 'queued'); attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -225,11 +232,11 @@ describe('Gate 2 API', () => {
       await first.decide('gate2-restart', { findingId: before.result!.issues[0]!.id, decision: 'accepted', rationale: 'Reparo causal aceito.' });
 
       // A run that never finished measuring when the process stopped.
-      const stopped = new PrototypeRunRegistry({ repository, evidence: held.evidence });
-      await stopped.create('gate2-interrupted');
+      const stopped = new PrototypeRunRegistry({ repository, evidence: held.evidence, identity: async () => approvedIdentity() });
+      await stopped.create('gate2-interrupted', { identityRunId: 'identity-chain' });
 
       // A new process reads the same database and serves the review without measuring anything again.
-      const restarted = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource() });
+      const restarted = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), identity: async () => approvedIdentity() });
       await restarted.restore();
 
       const recovered = restarted.get('gate2-restart')!;
@@ -258,8 +265,8 @@ describe('Gate 2 API', () => {
     const db = openDatabase(join(dir, 'events.sqlite'));
     const repository = new ProjectRepository(db);
     try {
-      const registry = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), seed: createOffRhythmControlIR });
-      await registry.create('gate2-events');
+      const registry = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), identity: async () => approvedIdentity({ ir: createOffRhythmControlIR() }) });
+      await registry.create('gate2-events', { identityRunId: 'identity-chain' });
       let snapshot = registry.get('gate2-events')!;
       for (let attempt = 0; attempt < 200 && snapshot.status === 'running'; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 25));

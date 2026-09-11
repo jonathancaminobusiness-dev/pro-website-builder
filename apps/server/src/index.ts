@@ -105,6 +105,27 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
     previewFaces: () => preview.servedFaces(),
   };
+  /**
+   * One run object per id, here too: gates 1 and 2 close in their own runs, so a
+   * cached chain run can be behind the ledger it is judged by — but two requests
+   * that reread it together must land on the same object, or the stage one of
+   * them starts finishes on a run nothing can reach.
+   */
+  const loading = new Map<string, Promise<FixtureRun | undefined>>();
+  const loadRun = async (id: string): Promise<FixtureRun | undefined> => {
+    const inFlight = loading.get(id);
+    if (inFlight) return inFlight;
+    const load = (async () => {
+      const existing = runs.get(id);
+      if (existing && !existing.reloadableFromLedger(await repository.listApprovals(id))) return existing;
+      const run = new FixtureRun({ repository, provider, release });
+      if (!await run.restore(id)) return existing;
+      runs.set(id, run);
+      return run;
+    })();
+    loading.set(id, load);
+    try { return await load; } finally { loading.delete(id); }
+  };
   const api = createApiServer({
     runs,
     prototypes: registry,
@@ -112,20 +133,17 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
       try {
+        // An id the ledger already holds belongs to the execution that took it —
+        // an identity chain among them — and a fixture run started over it would
+        // answer for that execution's gates with a document of its own.
+        if (await repository.getRun(id)) throw new RunConflictError(id);
         const run = new FixtureRun({ repository, provider, release });
         await run.initialize(id);
         runs.set(id, run);
         return run;
       } finally { claimed.delete(id); }
     },
-    loadRun: async (id) => {
-      const existing = runs.get(id);
-      if (existing && !existing.reloadableFromLedger(await repository.listApprovals(id))) return existing;
-      const run = new FixtureRun({ repository, provider, release });
-      if (!await run.restore(id)) return existing;
-      runs.set(id, run);
-      return run;
-    },
+    loadRun,
     identity: {
       runs: identityRuns,
       createRun: async (id, briefing) => {

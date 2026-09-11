@@ -216,7 +216,12 @@ descendant of it. The studio's finalization line names that chain — or says
 plainly that nothing but the fixed briefing has been loaded — and the panel below
 it prepares and publishes that run. A run held in memory is reread from the ledger
 whenever it carries a decision it has not seen, because gates 1 and 2 close in
-their own runs and possibly in another process.
+their own runs and possibly in another process; two requests that reread it
+together land on the same object, so a stage one of them starts is never orphaned
+by the other. Only the finalization stage of such a chain is this route's to run:
+`POST /api/runs/<identityRunId>/stage` and `/approve` answer `409` for the
+identity and prototype stages, and `POST /api/runs` refuses an id the ledger
+already holds, so no bundle is ever published behind the gates that measure them.
 
 Publishing the bundle *is* the finalization approval: there is no second action
 that could close the gate, so nothing can write a release with a veto standing or

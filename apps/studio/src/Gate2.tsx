@@ -305,7 +305,7 @@ export default function Gate2(): ReactElement {
           <h1>{result.journey}</h1>
         </div>
         <div className="gate2-badges">
-          {snapshot.chain && <span className="qa-chip" title={`Gate 1 · ${snapshot.chain.identityRunId}`}>{result.identityHash === snapshot.chain.identityHash ? 'identidade do Gate 1 medida nesta revisão' : 'a identidade desta revisão não é a do Gate 1'}</span>}
+          {snapshot.chain && <span className={`qa-chip${result.identityHash === snapshot.chain.identityHash ? '' : ' identity-mismatch'}`} title={`Gate 1 · ${snapshot.chain.identityRunId}`}>{result.identityHash === snapshot.chain.identityHash ? 'identidade do Gate 1 medida nesta revisão' : 'a identidade desta revisão não é a do Gate 1'}</span>}
           <span className={`status status-${result.gate}`}>{result.gate === 'vetoed' ? 'vetado pelo QA' : 'aguarda decisão'}</span>
           <span className="qa-chip" title={result.stopDetail}>parou por: {stopReasonCopy[result.stopReason] ?? result.stopReason}</span>
           <a className="gate2-back" href="#/">← pipeline</a>

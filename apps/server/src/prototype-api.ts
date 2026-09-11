@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { agentTaskSchema, createFixtureIR, hashJson, stageRoles, type Approval, type DesignIR } from '@pwb/domain';
+import { agentTaskSchema, hashJson, stageRoles, type Approval, type DesignIR } from '@pwb/domain';
 import { Applier, DEFAULT_MAX_ACTIVE_CLAUDE, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { identityHash } from '@pwb/stage-identity';
@@ -77,8 +77,8 @@ const STAGE_DEADLINE_SLACK_MS = CRITIC_WAVES * CRITIC_DEADLINE_MS + CAPTURE_MATR
 export interface PrototypeRunProgress {
   runId: string;
   status: PrototypeRunStatus;
-  /** The Gate 1 execution this run was seeded from; absent only for a run with no identity behind it. */
-  chain?: PrototypeChain;
+  /** The Gate 1 execution this run was seeded from; every run has one. */
+  chain: PrototypeChain;
   /** The last stage event, as the machine name the event log stores. */
   step: string;
   detail: string;
@@ -124,7 +124,7 @@ export interface Gate2Snapshot extends PrototypeRunProgress {
 interface PrototypeRunRecord {
   runId: string;
   store: VersionStore;
-  chain?: PrototypeChain;
+  chain: PrototypeChain;
   progress: PrototypeRunProgress;
   outcome?: PrototypeStageOutcome;
   decisions: IssueDecisionRecord[];
@@ -160,14 +160,13 @@ export interface PrototypeRegistryOptions {
   modelProvider?: string;
   /** Where the deterministic gate's evidence is measured; the server always hands it the RenderHub. */
   evidence: EvidenceSource;
-  /** The revision a run starts from; tests inject a document with a known defect through it. */
-  seed?: () => DesignIR;
   /**
-   * Reads back what Gate 1 approved. The server always wires it, and a registry
-   * that has it refuses to measure anything the captain did not approve: the
-   * prototype stage exists to work on the approved identity, not on a fixture.
+   * Reads back what Gate 1 approved, and it is the only way a run gets a
+   * document: the prototype stage exists to work on the approved identity, so a
+   * request the captain did not approve is refused rather than measured. Tests
+   * inject a document with a known defect as the identity a Gate 1 approved.
    */
-  identity?: (request: PrototypeRunRequest) => Promise<IdentitySeed | undefined>;
+  identity: (request: PrototypeRunRequest) => Promise<IdentitySeed | undefined>;
 }
 
 /**
@@ -198,32 +197,28 @@ export class PrototypeRunRegistry {
     // The seeded document already carries its own version id, so the root of this
     // run is the very version Gate 1 approved and every revision it produces
     // descends from it.
-    const base = applier.createRoot(seed ? seed.ir : (this.options.seed ?? createFixtureIR)());
+    const base = applier.createRoot(seed.ir);
     const startedAt = new Date().toISOString();
-    const chain: PrototypeChain | undefined = seed
-      ? { identityRunId: seed.identityRunId, identityVersionId: seed.versionId, identityHash: seed.identityHash, projectId: seed.projectId }
-      : undefined;
+    const chain: PrototypeChain = { identityRunId: seed.identityRunId, identityVersionId: seed.versionId, identityHash: seed.identityHash, projectId: seed.projectId };
     const record: PrototypeRunRecord = {
-      runId, store, decisions: [],
-      ...(chain ? { chain } : {}),
-      progress: { runId, status: 'queued', step: 'prototype.run.queued', detail: 'Na fila: o servidor mede uma revisão por vez.', startedAt, updatedAt: startedAt, ...(chain ? { chain } : {}) },
+      runId, store, decisions: [], chain,
+      progress: { runId, chain, status: 'queued', step: 'prototype.run.queued', detail: 'Na fila: o servidor mede uma revisão por vez.', startedAt, updatedAt: startedAt },
     };
     this.runs.set(runId, record);
-    await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.queued', payload: { runId, baseVersionId: base.id, ...(chain ? { identityRunId: chain.identityRunId, identityVersionId: chain.identityVersionId, identityHash: chain.identityHash } : {}) } });
+    await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.queued', payload: { runId, baseVersionId: base.id, identityRunId: chain.identityRunId, identityVersionId: chain.identityVersionId, identityHash: chain.identityHash } });
     await this.persist(record);
     this.lane = this.lane.then(() => this.execute(record, applier, base.id));
     return this.snapshot(record);
   }
 
   /**
-   * What Gate 1 approved, or a refusal. A registry wired to the identity runs
-   * measures only an approved identity: a request that names none, names one the
-   * captain never decided, or names one whose tokens moved after the decision is
-   * refused rather than silently answered with the built-in fixture.
+   * What Gate 1 approved, or a refusal. A run measures only an approved
+   * identity: a request that names none, names one the captain never decided, or
+   * names one whose tokens moved after the decision is refused rather than
+   * silently answered with a document of the server's choosing.
    */
-  private async resolveSeed(request: PrototypeRunRequest): Promise<IdentitySeed | undefined> {
+  private async resolveSeed(request: PrototypeRunRequest): Promise<IdentitySeed> {
     const read = this.options.identity;
-    if (!read) return undefined;
     const named = (request.identityRunId ?? '').trim() || (request.versionId ?? '').trim();
     if (!named) throw new Gate1NotApprovedError('A etapa de protótipo começa da identidade aprovada: informe a execução do Gate 1 ou a versão que ela aprovou.');
     const seed = await read({
@@ -245,17 +240,19 @@ export class PrototypeRunRegistry {
     for (const row of this.options.repository.listPrototypeRuns()) {
       if (this.runs.has(row.id)) continue;
       const persisted = row.payload as unknown as PersistedRun;
+      // A row written before Gate 2 was seeded from Gate 1 names no identity, so
+      // there is no chain to decide it into; it is not served as a review.
+      if (!persisted.chain) continue;
       const store = new VersionStore();
       for (const version of persisted.versions ?? []) store.save(version);
       const unfinished = row.status === 'queued' || row.status === 'running';
       const record: PrototypeRunRecord = {
-        runId: row.id, store, decisions: persisted.decisions ?? [],
-        ...(persisted.chain ? { chain: persisted.chain } : {}),
+        runId: row.id, store, decisions: persisted.decisions ?? [], chain: persisted.chain,
         ...(persisted.outcome ? { outcome: persisted.outcome } : {}),
         ...(persisted.approval ? { approval: persisted.approval } : {}),
         progress: {
           runId: row.id,
-          ...(persisted.chain ? { chain: persisted.chain } : {}),
+          chain: persisted.chain,
           status: unfinished ? 'interrupted' : row.status as PrototypeRunStatus,
           step: unfinished ? 'prototype.run.interrupted' : row.step,
           detail: unfinished ? 'O servidor parou no meio da medição; peça outra execução.' : row.detail,
@@ -357,7 +354,7 @@ export class PrototypeRunRegistry {
     const seen = new Set<string>();
     const versions = reviewed.filter((version) => !seen.has(version.id) && seen.add(version.id));
     const payload: PersistedRun = {
-      ...(record.chain ? { chain: record.chain } : {}),
+      chain: record.chain,
       ...(record.outcome ? { outcome: record.outcome } : {}),
       decisions: record.decisions,
       ...(record.approval ? { approval: record.approval } : {}),
@@ -410,8 +407,7 @@ export class PrototypeRunRegistry {
     // Gate 2 closes in the same ledger the other two gates read. Without the row
     // the approvals table holds, approving here would unblock nothing: Gate 3
     // asks that table whether the prototype was approved, and on which version.
-    const chainRunId = record.chain?.identityRunId ?? runId;
-    const projectId = record.chain?.projectId ?? version.ir.meta.projectId;
+    const { identityRunId: chainRunId, projectId } = record.chain;
     if (input.decision === 'approved') await this.persistLineage(record, version.id, projectId);
     await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: chainRunId, projectId }));
     await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'gate2.decided', payload: { decision: approval.decision, versionId: approval.versionId, rationale: approval.rationale, chainRunId } });

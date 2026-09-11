@@ -5,6 +5,7 @@ import type { IncomingMessage } from 'node:http';
 import { expect, test, type Page } from '@playwright/test';
 import { createFixtureIR, type DesignIR } from '../../packages/domain/src/index.js';
 import { DerivedEvidenceSource } from '../../packages/stage-prototype/src/index.js';
+import { identityHash } from '../../packages/stage-identity/src/index.js';
 import { openDatabase, ProjectRepository } from '../../apps/server/src/db/repository.js';
 import { PrototypeRunRegistry } from '../../apps/server/src/prototype-api.js';
 import { handlePrototypeRequest } from '../../apps/server/src/prototype-routes.js';
@@ -30,10 +31,13 @@ function createOffRhythmControlIR(): DesignIR {
 async function serveSeededRun(page: Page): Promise<() => Promise<void>> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-seeded-'));
   const database = openDatabase(join(dir, 'gate2.sqlite'));
+  // The run always starts from an identity Gate 1 approved; here that identity is
+  // the revision with the defect, handed over exactly as the server hands one on.
+  const approved = createOffRhythmControlIR();
   const registry = new PrototypeRunRegistry({
     repository: new ProjectRepository(database),
     evidence: new DerivedEvidenceSource(),
-    seed: createOffRhythmControlIR,
+    identity: async () => ({ identityRunId: 'gate1-seeded', projectId: approved.meta.projectId, versionId: approved.meta.versionId, identityHash: identityHash(approved), approvedAt: new Date().toISOString(), stale: false, ir: approved }),
   });
 
   await page.route('**/api/prototype/**', async (route) => {

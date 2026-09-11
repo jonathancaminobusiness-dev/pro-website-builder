@@ -15,6 +15,19 @@ type FixtureStatus = 'queued' | 'needs_review' | 'rejected' | 'cancelled' | 'suc
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
 const STAGES: Stage[] = ['identity', 'prototype', 'finalization'];
 
+/**
+ * A gate of the identity → prototype chain was asked for through the fixture
+ * route. Gates 1 and 2 are measured and decided by the identity execution and by
+ * the prototype run seeded from it; this object only carries such a chain to
+ * Gate 3, so it neither runs nor closes the two stages that belong to them.
+ */
+export class ChainGateError extends Error {
+  constructor(stage: Stage) {
+    super(`A etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução pertence à cadeia dos gates 1 e 2: ela é medida e decidida no gate que a mede. Esta rota só executa e publica a finalização.`);
+    this.name = 'ChainGateError';
+  }
+}
+
 export interface FixtureSnapshot {
   runId: string;
   projectId: string;
@@ -51,6 +64,13 @@ export class FixtureRun {
   private waiters: Array<() => void> = [];
   private failure: unknown;
   private running = false;
+  /**
+   * Whether this run is a Gate 1 execution the chain hands on. Such a run is
+   * read back here so Gate 3 can compile what the captain approved, never so the
+   * generic stages can produce an identity or a prototype behind the gates that
+   * measure them.
+   */
+  private chained = false;
   private readonly attempts = new Map<Stage, number>();
   private readonly reported = new Set<string>();
 
@@ -109,6 +129,9 @@ export class FixtureRun {
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
     const events = await this.options.repository.listEvents(runId);
+    // The identity execution writes its own events under this id and nothing
+    // else does, so the log says whose chain this run is.
+    this.chained = events.some((event) => event.type.startsWith('identity.'));
     this.started = events.some((event) => event.type === 'run.started');
     for (const event of events) if (event.type === 'task.queued') this.attempts.set(event.payload.stage as Stage, Number(event.payload.attempt));
     this.initialized = true;
@@ -120,6 +143,7 @@ export class FixtureRun {
     if (this.status === 'succeeded' || this.status === 'cancelled' || this.status === 'needs_review') return this.snapshot();
     const stage = STAGES[this.stageIndex];
     if (!stage) return this.snapshot();
+    this.requireOwnStage(stage);
     this.failure = undefined;
     const parked = this.scheduled !== undefined && (this.running || this.gate !== undefined);
     if (this.status === 'rejected' && this.gate) this.openGate('rejected');
@@ -142,6 +166,7 @@ export class FixtureRun {
     this.requireInitialized();
     if (approverRole !== 'captain') throw new Error('Only the captain can approve v1 gates.');
     if (stage === 'finalization') throw new Error('O gate de finalização é o Gate 3: publicar o bundle aprova a etapa.');
+    this.requireOwnStage(stage);
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting approval.`);
     const approved = this.currentVersion;
     this.requireClean(stage, approved);
@@ -203,6 +228,14 @@ export class FixtureRun {
     catch (error) { if (this.status === 'queued') this.status = 'needs_review'; throw error; }
   }
 
+  /**
+   * A chain run carries gates 1 and 2 that were closed elsewhere; only its
+   * finalization stage is this object's to run and to decide.
+   */
+  private requireOwnStage(stage: Stage): void {
+    if (this.chained && stage !== 'finalization') throw new ChainGateError(stage);
+  }
+
   /** No gate closes over a document the linter rejects, Gate 3 included. */
   private requireClean(stage: Stage, version: VersionRecord): void {
     const lint = lintDesign(version.ir);
@@ -212,6 +245,7 @@ export class FixtureRun {
   async reject(stage: Stage, approverRole: 'captain' | string, rationale = 'Captain requested a revision.'): Promise<FixtureSnapshot> {
     this.requireInitialized();
     if (approverRole !== 'captain') throw new Error('Only the captain can reject v1 gates.');
+    if (stage !== 'finalization') this.requireOwnStage(stage);
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting review.`);
     const rejection: Approval = { id: `${this.runId()}-${stage}-rejection-${this.approvals.length}`, stage, approverRole: 'captain', versionId: this.currentVersion.id, versionHash: this.currentVersion.hash, decision: 'rejected', rationale, createdAt: new Date().toISOString() };
     this.approvals.push(rejection);
