@@ -56,6 +56,13 @@ export interface PrototypeChain {
   identityVersionId: string;
   identityHash: string;
   projectId: string;
+  /**
+   * Imagery Gate 1 approved and the raster lane could not deliver. It is not in
+   * the document — an asset with no bytes and no provider licence would reach
+   * the public bundle as a licence warning — so the run says what is missing
+   * instead of leaving the captain to notice the gap.
+   */
+  failedImagery?: Array<{ id: string; reason: string }>;
 }
 
 /** Which approved identity a run is asked to start from; one of the two names it. */
@@ -64,8 +71,18 @@ export interface PrototypeRunRequest {
   versionId?: string;
 }
 
+/** A seed the prototype stage cannot be started from yet; every one of these is a 409. */
+export class SeedNotReadyError extends Error {}
+
 /** Gate 2 was asked to run on an identity Gate 1 has not approved, or no longer approves. */
-export class Gate1NotApprovedError extends Error {}
+export class Gate1NotApprovedError extends SeedNotReadyError {}
+
+/**
+ * The approved direction's imagery is still on the raster lane. Gate 1 returns
+ * the decision before the images exist, and a revision measured over unfinished
+ * placeholders is not the identity the captain approved.
+ */
+export class ImageryStillShootingError extends SeedNotReadyError {}
 
 /**
  * The gate of a review that is already decided. A decision writes a permanent
@@ -161,10 +178,20 @@ interface PersistedRun {
  * fixture's stand-ins.
  */
 function withApprovedImagery(seed: IdentitySeed): DesignIR {
-  if (seed.assets.length === 0) return seed.ir;
+  // Only an image the lane finished has bytes and a provider licence; a
+  // placeholder in the document would publish as a licence warning.
+  const shot = seed.assets.filter((asset) => asset.status === 'ready');
+  if (shot.length === 0) return seed.ir;
   const items = new Map(seed.ir.assets.items.map((asset) => [asset.id, asset]));
-  for (const asset of seed.assets) items.set(asset.id, asset);
+  for (const asset of shot) items.set(asset.id, asset);
   return { ...seed.ir, assets: { items: [...items.values()] } };
+}
+
+/** What the lane could not deliver, in the words the failure was recorded with. */
+function failedImagery(seed: IdentitySeed): Array<{ id: string; reason: string }> {
+  return seed.assets
+    .filter((asset) => asset.status === 'failed')
+    .map((asset) => ({ id: asset.id, reason: asset.provenance.termsNote ?? 'A geração da imagem não foi concluída.' }));
 }
 
 /** One sentence per stage event, so a run that takes minutes says what it is doing. */
@@ -227,7 +254,8 @@ export class PrototypeRunRegistry {
     // identity stage could not write into the document itself.
     const base = applier.createRoot(withApprovedImagery(seed));
     const startedAt = new Date().toISOString();
-    const chain: PrototypeChain = { identityRunId: seed.identityRunId, identityVersionId: seed.versionId, identityHash: seed.identityHash, projectId: seed.projectId };
+    const missing = failedImagery(seed);
+    const chain: PrototypeChain = { identityRunId: seed.identityRunId, identityVersionId: seed.versionId, identityHash: seed.identityHash, projectId: seed.projectId, ...(missing.length > 0 ? { failedImagery: missing } : {}) };
     const record: PrototypeRunRecord = {
       runId, store, decisions: [], chain,
       progress: { runId, chain, status: 'queued', step: 'prototype.run.queued', detail: 'Na fila: o servidor mede uma revisão por vez.', startedAt, updatedAt: startedAt },
@@ -257,6 +285,8 @@ export class PrototypeRunRegistry {
     if (seed.stale) throw new Gate1NotApprovedError('A identidade mudou depois do Gate 1: aprove-a de novo antes de medir o protótipo.');
     const asked = request.versionId?.trim();
     if (asked && asked !== seed.versionId) throw new Gate1NotApprovedError(`O Gate 1 desta execução aprovou a versão ${seed.versionId}, e não ${asked}.`);
+    const shooting = seed.assets.filter((asset) => asset.status === 'generating' || asset.status === 'placeholder');
+    if (shooting.length > 0) throw new ImageryStillShootingError(`As imagens da direção aprovada ainda estão sendo geradas (${shooting.map((asset) => asset.id).join(', ')}); peça a execução de novo quando elas terminarem.`);
     return seed;
   }
 
