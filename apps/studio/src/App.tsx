@@ -13,8 +13,8 @@ interface Snapshot {
   currentVersion: { id: string; hash: string };
   rendered: { routes: Array<{ route: string; title: string; html: string }> };
   approvals: Array<{ stage: string; decision: string; versionId: string }>;
-  /** The release gate's own verdict on this run's document; the screen never re-derives it. */
-  releaseGate: { prototypeVersionId?: string; blocker?: string };
+  /** What the release gate credits for this run's document; the screen never re-derives it. */
+  releaseGate: { prototypeVersionId?: string };
   exportManifest?: { digest: string; routes: Array<{ route: string; path: string }> };
 
   lintErrorCount: number;
