@@ -320,7 +320,7 @@ describe('briefing conversation state machine', () => {
     expect(archived?.unreadable?.raw).toContain('Clínica veterinária de bairro.');
   });
 
-  it('archives a damaged round under the number its own record still names, and under none when it names none', async () => {
+  it('counts the rounds it carries instead of numbering them from a record it could not read', async () => {
     const third = harness([succeeded(RECOMMENDATION), succeeded(RECOMMENDATION)]);
     await third.conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
     await third.conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
@@ -334,19 +334,28 @@ describe('briefing conversation state machine', () => {
     named.restore(onDisk);
     const afterNamed = await named.reopen({ idempotencyKey: nextKey() });
 
-    // The row still says which round it was, so that is the round archived and
-    // the next one continues the execution's own numbering.
+    // The archive keeps what that record claimed to be, while the round this
+    // execution is on is the one round it can account for, plus the new one.
     expect(afterNamed.previousRevisions[0]?.revision).toBe(3);
-    expect(afterNamed.revision).toBe(4);
-    expect(afterNamed.messages[0]?.text).toContain('A conversa 3');
+    expect(afterNamed.revision).toBe(2);
 
-    const anonymous = harness([]).conversation;
+    const anonymous = harness([succeeded(RECOMMENDATION)]).conversation;
     anonymous.restore('{ isto não é json');
     const afterAnonymous = await anonymous.reopen({ idempotencyKey: nextKey() });
 
     // Nothing in the record says which round it was, so nothing claims to.
     expect(afterAnonymous.previousRevisions[0]?.revision).toBeUndefined();
-    expect(afterAnonymous.messages[0]?.text).not.toMatch(/\d/);
+    expect(afterAnonymous.revision).toBe(2);
+    expect(afterAnonymous.messages[0]?.text).toContain('Esta é a conversa 2');
+
+    // And the round after it is counted the same way, rather than restarting
+    // the numbering the unreadable record interrupted.
+    await anonymous.send({ message: 'Recomeçando pela prevenção.', action: 'answer', idempotencyKey: nextKey() });
+    await anonymous.send({ action: 'cancel', idempotencyKey: nextKey() });
+    const afterThird = await anonymous.reopen({ idempotencyKey: nextKey() });
+    expect(afterThird.previousRevisions.map((entry) => entry.revision)).toEqual([undefined, 2]);
+    expect(afterThird.revision).toBe(3);
+    expect(afterThird.messages[0]?.text).toContain('Esta é a conversa 3');
   });
 
   it('stays damaged when the reopen write fails, instead of falling back to an execution that never had a chat', async () => {

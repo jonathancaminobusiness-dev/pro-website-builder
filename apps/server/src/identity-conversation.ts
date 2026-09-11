@@ -120,7 +120,6 @@ export interface BriefingConversationOptions {
 
 interface ConversationState {
   state: BriefingConversationState;
-  revision: number;
   previousRevisions: BriefingConversationRevision[];
   originalText: string;
   normalizedText: string;
@@ -139,7 +138,7 @@ interface ConversationState {
 }
 
 function emptyState(): ConversationState {
-  return { state: 'entry', revision: 1, previousRevisions: [], originalText: '', normalizedText: '', messages: [], openGaps: [], askedQuestions: [], questionCount: 0, attempt: 0, fallback: false, confirmations: [], directions: [], appliedKeys: [] };
+  return { state: 'entry', previousRevisions: [], originalText: '', normalizedText: '', messages: [], openGaps: [], askedQuestions: [], questionCount: 0, attempt: 0, fallback: false, confirmations: [], directions: [], appliedKeys: [] };
 }
 
 /**
@@ -213,7 +212,6 @@ export class BriefingConversation {
     const record = snapshot.data;
     this.data = {
       state: record.state,
-      revision: record.revision,
       previousRevisions: record.previousRevisions,
       originalText: record.originalText,
       normalizedText: record.normalizedText,
@@ -233,6 +231,13 @@ export class BriefingConversation {
   }
 
   get state(): BriefingConversationState { return this.data.state; }
+  /**
+   * Which round this execution is on, counted from the rounds it carries rather
+   * than stored beside them. A round the server could not read is still a round
+   * it archived, so the count never has to be invented — and it can never drift
+   * from the history it describes.
+   */
+  private get revision(): number { return this.data.previousRevisions.length + 1; }
   /** Why this execution's persisted conversation could not be read, when it could not. */
   get unreadable(): string | undefined { return this.damaged?.reason; }
   /** The briefing the captain confirmed, if any; the execution runs the identity stage on this. */
@@ -257,7 +262,7 @@ export class BriefingConversation {
     return {
       runId: this.options.runId,
       state: this.data.state,
-      revision: this.data.revision,
+      revision: this.revision,
       previousRevisions: structuredClone(this.data.previousRevisions),
       originalText: this.data.originalText,
       normalizedText: this.data.normalizedText,
@@ -441,20 +446,17 @@ export class BriefingConversation {
       };
       this.data = emptyState();
       this.data.previousRevisions.push(archived);
-      if (damaged.revision !== undefined) this.data.revision = damaged.revision + 1;
       this.damaged = undefined;
-      // The damaged round is named only when its own record still says which
-      // one it was; a number this server would have to invent is not one the
-      // captain is told.
-      this.append({ author: 'system', text: damaged.revision === undefined
-        ? `A conversa anterior desta execução não pôde ser lida (${damaged.reason}); o registro dela fica arquivado exatamente como estava, e nem o número dela é legível. Esta é uma conversa nova.`
-        : `A conversa ${damaged.revision} desta execução não pôde ser lida (${damaged.reason}); o registro dela fica arquivado exatamente como estava. Esta é a conversa ${this.data.revision}.`, state: 'entry' });
+      // The damaged round is not named: what its own record claimed to be is
+      // kept in the archive, and the round this execution is on now is counted,
+      // never guessed from a record nobody could read.
+      this.append({ author: 'system', text: `A conversa anterior desta execução não pôde ser lida (${damaged.reason}); o registro dela fica arquivado exatamente como estava. Esta é a conversa ${this.revision} desta execução.`, state: 'entry' });
       return await this.commit(input.idempotencyKey);
     }
     if (!canReopenBriefingConversation(this.data.state)) throw new ConversationError(this.reopenRefusal(), 409);
 
     const closed: BriefingConversationRevision = {
-      revision: this.data.revision,
+      revision: this.revision,
       closedAs: this.data.state,
       closedAt: this.now().toISOString(),
       messages: structuredClone(this.data.messages),
@@ -465,7 +467,6 @@ export class BriefingConversation {
       ...(this.data.error === undefined ? {} : { error: { ...this.data.error } }),
     };
     this.data.previousRevisions.push(closed);
-    this.data.revision += 1;
     this.data.state = 'entry';
     this.data.messages = [];
     this.data.originalText = '';
@@ -478,7 +479,7 @@ export class BriefingConversation {
     this.data.fallback = false;
     delete this.data.summary;
     delete this.data.error;
-    this.append({ author: 'system', text: `Conversa ${closed.revision} encerrada como ${closed.closedAs === 'cancelled' ? 'cancelada' : 'falha'}; ela continua legível acima. Esta é a conversa ${this.data.revision} desta execução.`, state: 'entry' });
+    this.append({ author: 'system', text: `Conversa ${closed.revision} encerrada como ${closed.closedAs === 'cancelled' ? 'cancelada' : 'falha'}; ela continua legível acima. Esta é a conversa ${this.revision} desta execução.`, state: 'entry' });
     return await this.commit(input.idempotencyKey);
   }
 

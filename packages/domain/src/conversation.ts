@@ -393,9 +393,10 @@ export type BriefingConversationError = z.infer<typeof briefingConversationError
  */
 export const briefingConversationRevisionSchema = z.object({
   /**
-   * Which round of this execution it was. Absent only on a round archived as
-   * `unreadable` whose record never yielded one: a number nobody can read is
-   * left unstated rather than invented.
+   * Which round of this execution it was. On a round archived as `unreadable`
+   * it is what that record itself claimed to be, and it is absent when the
+   * record claimed nothing: a number nobody can read is left unstated rather
+   * than invented.
    */
   revision: z.number().int().positive().optional(),
   /**
@@ -425,9 +426,10 @@ export const briefingConversationSnapshotSchema = z.object({
   runId: z.string().min(1),
   state: briefingConversationStateSchema,
   /**
-   * Which round of the conversation this execution is on. It starts at 1 and
-   * only a reopen after a cancelled or failed round moves it; a file written
-   * before reopens existed reads 1, which is what it was.
+   * Which round of the conversation this execution is on: the rounds it has
+   * archived, plus the one it is having. It is counted rather than kept beside
+   * the history, so it can never disagree with it; a file written before
+   * reopens existed archives nothing and reads 1, which is what it was.
    */
   revision: z.number().int().positive().default(1),
   /** The rounds that were closed before this one, oldest first, kept readable. */
