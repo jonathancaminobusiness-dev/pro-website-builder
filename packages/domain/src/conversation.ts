@@ -25,9 +25,12 @@ export type BriefingConversationState = z.infer<typeof briefingConversationState
  * Two returns are deliberate rather than accidental: `question ->
  * recommendation` is what an answer does, because the model re-reads the brief
  * before it asks again, and `confirmation -> question` is what a captain asking
- * for an adjustment does. `entry -> confirmation` exists because a model with
- * enough context may skip the questions, and because the deterministic fallback
- * has to be able to offer a summary even when the very first turn fails.
+ * for an adjustment does. `confirmation -> confirmation` is the other half of
+ * that correction: a captain who fixes a detail rather than reopening a
+ * question gets the summary back revised. `entry -> confirmation` exists
+ * because a model with enough context may skip the questions, and because the
+ * deterministic fallback has to be able to offer a summary even when the very
+ * first turn fails.
  *
  * `final` is never a move a model makes: only the captain's confirmation closes
  * the briefing, which is why it appears solely as an exit of `confirmation`, of
@@ -42,7 +45,7 @@ export const BRIEFING_CONVERSATION_TRANSITIONS: Readonly<Record<BriefingConversa
   entry: ['recommendation', 'confirmation', 'cancelled', 'failed'],
   recommendation: ['question', 'confirmation', 'cancelled', 'failed'],
   question: ['recommendation', 'confirmation', 'cancelled', 'failed'],
-  confirmation: ['question', 'final', 'cancelled', 'failed'],
+  confirmation: ['question', 'confirmation', 'final', 'cancelled', 'failed'],
   final: ['final'],
   cancelled: [],
   failed: ['final'],
@@ -55,16 +58,23 @@ export function canBriefingConversationTransition(from: BriefingConversationStat
 /**
  * The moves a model may ask for on one turn, which is narrower than the moves
  * the conversation can make. `cancelled` and `failed` are the server's to
- * record, never a model's to request, and only the captain's confirmation
- * reaches `final` — so the closing turn is the only one that may ask for it.
+ * record, never a model's to request; only the captain's confirmation reaches
+ * `final`, so the closing turn is the only one that may ask for it; and once
+ * the question cap is reached the turn may no longer ask, which is what turns
+ * the limit into an editable summary instead of a silent approval.
  *
- * The prompt advertises this list and the server validates against it, which is
- * the point of computing it once: a turn spent on a move the validator refuses
- * is a turn the captain paid for and lost.
+ * Every sentence of the prompt that tells the model what it may do next is
+ * built from this list and the server validates against it, which is the point
+ * of computing it once: a turn spent on a move the validator refuses is a turn
+ * the captain paid for and lost. The list is never empty — a conversation that
+ * must conclude can always offer its summary.
  */
-export function briefingTurnNextStates(state: BriefingConversationState, closing: boolean): BriefingConversationState[] {
-  if (closing) return ['final'];
-  return BRIEFING_CONVERSATION_TRANSITIONS[state].filter((next) => next !== 'cancelled' && next !== 'failed' && next !== 'final');
+export function briefingTurnNextStates(state: BriefingConversationState, turn: { closing: boolean; mustConclude: boolean }): BriefingConversationState[] {
+  if (turn.closing) return ['final'];
+  return BRIEFING_CONVERSATION_TRANSITIONS[state].filter((next) => {
+    if (next === 'cancelled' || next === 'failed' || next === 'final') return false;
+    return !(turn.mustConclude && next === 'question');
+  });
 }
 
 /** The states a captain may still send a message from; everything else is closed to model turns. */

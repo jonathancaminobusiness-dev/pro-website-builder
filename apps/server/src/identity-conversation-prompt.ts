@@ -57,15 +57,21 @@ function boundary(): string {
   ].join('\n');
 }
 
-function machine(state: BriefingConversationState, closing: boolean): string {
-  const allowed = briefingTurnNextStates(state, closing);
+function machine(context: BriefingTurnContext): string {
   return [
-    `O estado atual da conversa é \`${state}\`.`,
-    `A partir dele, o único \`nextState\` que você pode pedir é: ${allowed.join(', ')}.`,
+    `O estado atual da conversa é \`${context.state}\`.`,
+    `A partir dele, o único \`nextState\` que você pode pedir é: ${briefingTurnNextStates(context.state, context).join(', ')}.`,
     'O campo `intent` e o campo `nextState` precisam ser iguais.',
-    closing ? 'O capitão já confirmou o resumo, e é isso que fecha o briefing.' : 'Você nunca fecha o briefing sozinho: `final` só acontece quando o capitão confirma o resumo.',
+    context.closing ? 'O capitão já confirmou o resumo, e é isso que fecha o briefing.' : 'Você nunca fecha o briefing sozinho: `final` só acontece quando o capitão confirma o resumo.',
   ].join('\n');
 }
+
+/** How the prompt names each move, so the task text can only ask for one the validator accepts. */
+const MOVES: Partial<Record<BriefingConversationState, string>> = {
+  recommendation: 'devolva uma leitura atualizada do briefing, com `nextState` `recommendation`',
+  question: 'faça uma única pergunta, com `nextState` `question`, explicando por que a resposta importa',
+  confirmation: 'ofereça o resumo editável para confirmação, com `nextState` `confirmation`',
+};
 
 function transcript(history: BriefingTurnContext['history']): string {
   if (history.length === 0) return 'Histórico: esta é a primeira mensagem da conversa.';
@@ -90,15 +96,19 @@ function task(context: BriefingTurnContext): string {
       'As três direções precisam discordar entre si: se duas chegam à mesma promessa, uma delas está sobrando.',
     ].join('\n');
   }
+  const allowed = briefingTurnNextStates(context.state, context);
+  const moves = allowed.flatMap((next) => MOVES[next] === undefined ? [] : [MOVES[next]]);
   if (context.mustConclude) {
     return [
       `A conversa atingiu o limite de ${BRIEFING_CONVERSATION_MAX_QUESTIONS} perguntas.`,
-      'Não faça mais perguntas. Responda com `intent` e `nextState` iguais a `confirmation` e ofereça em `summary` um resumo editável do que já foi dito, listando em `unknowns` o que ficou em aberto.',
+      `Não faça mais perguntas. Escolha exatamente um destes movimentos: ${moves.join('; ')}.`,
+      'O `summary` precisa trazer o resumo editável do que já foi dito, e `unknowns` o que ficou em aberto.',
     ].join('\n');
   }
   return [
     'Devolva uma leitura útil: o que você entendeu, quais fatos estão claros e qual trade-off parece central.',
-    'Depois decida: se falta uma informação que realmente mudaria a identidade, faça uma pergunta; se não falta, ofereça o resumo para confirmação.',
+    `Depois escolha exatamente um destes movimentos: ${moves.join('; ')}.`,
+    ...(allowed.includes('question') ? ['Só pergunte quando a resposta mudaria mesmo a direção da identidade; se não mudaria, ofereça o resumo.'] : []),
   ].join('\n');
 }
 
@@ -112,7 +122,7 @@ export function briefingConversationPrompt(context: BriefingTurnContext, correct
   return [
     FACILITATION,
     boundary(),
-    machine(context.state, context.closing),
+    machine(context),
     `Turno número ${context.turnNumber}. Perguntas já feitas: ${context.questionCount} de ${BRIEFING_CONVERSATION_MAX_QUESTIONS}.`,
     `Texto original do capitão:\n${context.originalText || '(ainda não há texto original)'}`,
     `Texto normalizado que vale como briefing:\n${context.normalizedText || '(ainda não há texto normalizado)'}`,

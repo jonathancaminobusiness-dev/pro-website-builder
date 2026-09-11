@@ -113,6 +113,8 @@ export class BriefingConversation {
    * lands.
    */
   private queue: Promise<unknown> = Promise.resolve();
+  /** How many turns this conversation has written to the execution; a written turn is never rolled back. */
+  private commits = 0;
   private readonly timeoutMs: number;
   private readonly maxQuestions: number;
   private readonly now: () => Date;
@@ -197,8 +199,12 @@ export class BriefingConversation {
   private enqueue<T>(run: () => Promise<T>): Promise<T> {
     const atomic = async (): Promise<T> => {
       const before = structuredClone(this.data);
+      const written = this.commits;
       try { return await run(); }
-      catch (error) { this.data = before; throw error; }
+      catch (error) {
+        if (this.commits === written) this.data = before;
+        throw error;
+      }
     };
     const next = this.queue.then(atomic, atomic);
     this.queue = next.then(() => undefined, () => undefined);
@@ -247,7 +253,7 @@ export class BriefingConversation {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
     if (!canConfirmBriefing(this.data.state)) throw new ConversationError(this.confirmRefusal(), 409);
     let briefing: string;
-    try { briefing = normalizeIdentityBriefing(input.briefing, true); }
+    try { briefing = normalizeIdentityBriefing(input.briefing); }
     catch (error) { throw error instanceof BriefingValidationError ? new ConversationError(error.message, 400) : error; }
 
     const revision = this.data.confirmations.length + 1;
@@ -255,7 +261,6 @@ export class BriefingConversation {
     this.data.briefing = briefing;
     this.data.summary = briefing;
     this.append({ author: 'captain', text: briefing, state: this.data.state });
-    await this.options.onConfirmed?.(briefing, revision);
 
     const context = this.contextFor(briefing, 'answer', true);
     const turn = await this.modelTurn(context);
@@ -268,7 +273,9 @@ export class BriefingConversation {
       this.data.error = { code: turn.failure.code, message: `${turn.failure.message} O briefing foi confirmado mesmo assim; as três direções conceituais podem ser pedidas de novo.` };
       this.append({ author: 'system', text: this.data.error.message, state: 'final', fallback: true });
     }
-    return await this.commit(input.idempotencyKey);
+    const snapshot = await this.commit(input.idempotencyKey);
+    await this.options.onConfirmed?.(briefing, revision);
+    return snapshot;
   }
 
   // ------------------------------------------------------- the model turn
@@ -320,15 +327,11 @@ export class BriefingConversation {
 
   /** The rules the closed schema cannot state on its own: where the conversation is, and what it is allowed to do next. */
   private illegal(turn: BriefingConversationTurn, context: BriefingTurnContext): string[] {
-    const problems: string[] = [];
-    if (!briefingTurnNextStates(context.state, context.closing).includes(turn.nextState)) {
-      if (context.closing) problems.push('O capitão confirmou o briefing, então este turno precisa de intent e nextState iguais a `final`.');
-      else if (turn.nextState === 'final') problems.push('Só a confirmação do capitão fecha o briefing; este turno não pode pedir `final`.');
-      else problems.push(`De \`${context.state}\` a conversa não pode ir para \`${turn.nextState}\`.`);
-    }
-    if (context.closing) return problems;
-    if (context.mustConclude && turn.intent === 'question') problems.push(`O limite de ${this.maxQuestions} perguntas foi atingido; ofereça um resumo em vez de perguntar.`);
-    return problems;
+    if (briefingTurnNextStates(context.state, context).includes(turn.nextState)) return [];
+    if (context.closing) return ['O capitão confirmou o briefing, então este turno precisa de intent e nextState iguais a `final`.'];
+    if (turn.nextState === 'final') return ['Só a confirmação do capitão fecha o briefing; este turno não pode pedir `final`.'];
+    if (turn.nextState === 'question' && context.mustConclude) return [`O limite de ${this.maxQuestions} perguntas foi atingido; ofereça um resumo em vez de perguntar.`];
+    return [`De \`${context.state}\` a conversa não pode ir para \`${turn.nextState}\`.`];
   }
 
   /**
@@ -461,6 +464,7 @@ export class BriefingConversation {
     const snapshot = { ...this.snapshot(), appliedKeys };
     await this.options.persist(snapshot);
     this.data.appliedKeys = appliedKeys;
+    this.commits += 1;
     return snapshot;
   }
 
