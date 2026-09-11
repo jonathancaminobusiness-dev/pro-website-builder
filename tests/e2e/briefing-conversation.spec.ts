@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { CONSOLIDATED_SUMMARY } from '../../apps/studio/src/briefing/conversation-fixture.js';
+import { answerTurn, clarifyingQuestion, CONSOLIDATED_SUMMARY, entryTurn, questionTurn, recommendationTurn } from '../../apps/studio/src/briefing/conversation-fixture.js';
 import { FakeConversationApi, type FakeConversationOptions } from './fake-conversation-api.js';
 
 const ENTRY = 'Somos uma clínica veterinária de bairro. Queremos cuidar de cães e gatos com prevenção, sem parecer hospital frio nem pet shop genérico.';
@@ -236,6 +236,35 @@ test('says a conversation it could not read was not read, and keeps the stage cl
   await chat.getByRole('button', { name: 'Tentar novamente' }).click();
   await expect(page.getByLabel(/Conte sobre o negócio/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Feche o briefing para executar' })).toBeDisabled();
+});
+
+test('corrects the answer the open question is asking for, never the entry text', async ({ page }) => {
+  const api = await openConversation(page, {
+    initial: {
+      state: 'question',
+      briefing: ENTRY,
+      messageCount: 3,
+      turns: [entryTurn(ENTRY), recommendationTurn(), answerTurn('Carinho no atendimento.'), questionTurn()],
+      question: clarifyingQuestion(),
+    },
+  });
+  const chat = page.locator('.briefing-chat');
+
+  // The correction belongs to the answer the question field holds; the entry
+  // text has no field on screen to receive it, so it offers no control.
+  await expect(chat.getByRole('button', { name: 'Corrigir esta resposta' })).toHaveCount(1);
+  await expect(chat.locator('.chat-turn', { hasText: ENTRY }).getByRole('button', { name: 'Corrigir esta resposta' })).toHaveCount(0);
+
+  await chat.getByRole('button', { name: 'Corrigir esta resposta' }).click();
+  const answer = page.getByLabel('Sua resposta');
+  await expect(answer).toHaveValue('Carinho no atendimento.');
+  await answer.fill('Carinho no atendimento, sem abrir mão da segurança clínica.');
+  await page.getByRole('button', { name: 'Responder' }).click();
+
+  await expect(page.getByLabel(/Briefing final, editável/)).toHaveValue(CONSOLIDATED_SUMMARY);
+  const answers = api.writes.filter((write) => write.body.intent === 'answer');
+  expect(answers).toHaveLength(1);
+  expect(answers[0]?.body.message).toBe('Carinho no atendimento, sem abrir mão da segurança clínica.');
 });
 
 test('reads the ceiling from the contract and closes manually once it is reached', async ({ page }) => {

@@ -5,6 +5,8 @@ import { clarifyingQuestion, CONSOLIDATED_SUMMARY, answerTurn, confirmationTurn,
 import {
   affordances,
   classifyFailure,
+  correctableTurnId,
+  limitRefreshDelayMs,
   conversationReducer,
   initialConversationState,
   pendingMessage,
@@ -351,5 +353,50 @@ describe('summary seeding', () => {
     const state = conversationReducer(initialConversationState(), { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', briefing: 'texto original', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
 
     expect(state.summaryDraft).toBe(CONSOLIDATED_SUMMARY);
+  });
+});
+
+describe('correctable turn', () => {
+  it('names the latest answer while a question is open, never the entry text', () => {
+    const state = opened({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), answerTurn('Carinho no atendimento.'), questionTurn()], question: clarifyingQuestion(), messageCount: 3 });
+
+    expect(correctableTurnId(state, affordances(state, NOW))).toBe('turn-answer');
+  });
+
+  it('names nothing while a question the captain never answered is the only field on screen', () => {
+    const state = opened({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 });
+
+    expect(correctableTurnId(state, affordances(state, NOW))).toBeNull();
+  });
+
+  it('names the entry turn while the entry composer is the field on screen', () => {
+    const state = opened({ state: 'entry', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 });
+
+    expect(correctableTurnId(state, affordances(state, NOW))).toBe('turn-entry');
+  });
+
+  it('names nothing where no field would receive the corrected text', () => {
+    const state = opened({ state: 'confirmation', turns: [entryTurn('Somos uma clínica de bairro.'), confirmationTurn()], summary: CONSOLIDATED_SUMMARY, messageCount: 3 });
+
+    expect(correctableTurnId(state, affordances(state, NOW))).toBeNull();
+  });
+});
+
+describe('time ceiling refresh', () => {
+  it('measures the wait to a ceiling that has not arrived yet', () => {
+    const state = opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T10:10:00.000Z' }, messageCount: 2 });
+
+    expect(limitRefreshDelayMs(state, NOW)).toBe(600_000);
+    // The panel is still asking, which is exactly why the wait has to be kept.
+    expect(affordances(state, NOW).canSkip).toBe(true);
+    expect(affordances(state, new Date('2026-09-11T10:10:00.000Z')).canSkip).toBe(false);
+  });
+
+  it('waits for nothing once the ceiling has passed, or when there is none', () => {
+    const passed = opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T09:00:00.000Z' }, messageCount: 2 });
+
+    expect(limitRefreshDelayMs(passed, NOW)).toBeNull();
+    expect(limitRefreshDelayMs(opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 }), NOW)).toBeNull();
+    expect(limitRefreshDelayMs(initialConversationState(), NOW)).toBeNull();
   });
 });

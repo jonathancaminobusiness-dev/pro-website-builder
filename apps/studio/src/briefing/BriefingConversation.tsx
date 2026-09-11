@@ -1,6 +1,6 @@
-import { useEffect, useRef, type ReactElement } from 'react';
+import { useEffect, useReducer, useRef, type ReactElement } from 'react';
 import { type ConversationTurn } from './contract.js';
-import { affordances, pendingMessage, progressLabel, type ConversationUiState } from './machine.js';
+import { affordances, correctableTurnId, limitRefreshDelayMs, pendingMessage, progressLabel, type ConversationUiState } from './machine.js';
 
 /**
  * The short conversation that happens before the identity stage. It reads a
@@ -62,10 +62,21 @@ export default function BriefingConversation(props: BriefingConversationProps): 
   const snapshot = state.snapshot;
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const questionId = snapshot?.question?.id;
+  const [, wake] = useReducer((count: number) => count + 1, 0);
+  const ceilingDelay = limitRefreshDelayMs(state, now);
 
   // The one question on screen takes focus when it arrives, so a captain on the
   // keyboard lands in the field that is being asked for.
   useEffect(() => { if (questionId) answerRef.current?.focus(); }, [questionId]);
+
+  // The time ceiling is a fact about the clock, not about the server: an idle
+  // panel wakes itself at `expiresAt` so the limit state is on screen the moment
+  // it applies, instead of waiting for a re-render that may never come.
+  useEffect(() => {
+    if (ceilingDelay === null) return;
+    const timer = setTimeout(wake, ceilingDelay);
+    return () => { clearTimeout(timer); };
+  }, [ceilingDelay]);
 
   // A server with no conversation for this run says nothing about the briefing
   // flow that already exists: the panel disappears and the old field decides.
@@ -90,11 +101,13 @@ export default function BriefingConversation(props: BriefingConversationProps): 
   // What is on screen is decided by the same affordances that decide what can be
   // sent, so no control renders that could never act.
   const showSummary = can.summaryOpen;
-  const showEntry = !can.closed && !can.atLimit && snapshot.state === 'entry';
+  const showEntry = can.entryOpen;
   const showQuestion = can.asking;
-  // Correcting a turn loads it back into the draft, so it is offered only while
-  // a field bound to the draft is on screen to receive it.
+  // Correcting a turn loads it back into the draft, so it is offered only on the
+  // turn the field on screen would receive: the entry while the entry composer
+  // is up, the latest answer while a question is open.
   const draftVisible = showEntry || showQuestion;
+  const correctable = correctableTurnId(state, can);
   const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
   const newExecutionExit = 'Não há texto salvo para fechar um briefing, então o caminho daqui é criar uma nova execução.';
   const haltedExit = showSummary
@@ -124,7 +137,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         {readingList('Hipóteses do Studio', turn.hypotheses, 'hypotheses')}
         {readingList('Ainda desconhecido', turn.unknowns, 'unknowns')}
         {turn.question && <p className="chat-why"><strong>Por que isso muda a identidade.</strong> {turn.question.why}</p>}
-        {turn.role === 'captain' && draftVisible && <button className="secondary chat-correct" onClick={() => props.onCorrect(turn)} disabled={can.locked}>Corrigir esta resposta</button>}
+        {turn.id === correctable && <button className="secondary chat-correct" onClick={() => props.onCorrect(turn)} disabled={can.locked}>Corrigir esta resposta</button>}
       </li>)}
       {bubble !== null && <li className="chat-turn chat-captain chat-pending" aria-hidden={false}>
         <p className="chat-role">Você · enviando</p>

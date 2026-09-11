@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { RequestError } from '../request.js';
 import BriefingConversation from './BriefingConversation.js';
 import { ConversationContractError, type ConversationSnapshot } from './contract.js';
-import { clarifyingQuestion, CONSOLIDATED_SUMMARY, conceptualDirections, confirmationTurn, conversationSnapshot, entryTurn, questionTurn, recommendationTurn } from './conversation-fixture.js';
+import { answerTurn, clarifyingQuestion, CONSOLIDATED_SUMMARY, conceptualDirections, confirmationTurn, conversationSnapshot, entryTurn, questionTurn, recommendationTurn } from './conversation-fixture.js';
 import { classifyFailure, conversationReducer, initialConversationState, type ConversationAction, type ConversationUiState } from './machine.js';
 
 const NOW = new Date('2026-09-11T10:00:00.000Z');
@@ -16,6 +16,11 @@ function state(snapshot: ConversationSnapshot | null, ...actions: ConversationAc
     ? conversationReducer(initialConversationState(), { type: 'resumed', snapshot: null })
     : conversationReducer(initialConversationState(), { type: 'settled', snapshot });
   return actions.reduce(conversationReducer, opened);
+}
+
+/** The rendered history, one entry per turn, so a control can be attributed to the turn that owns it. */
+function turnBlocks(markup: string): string[] {
+  return markup.split('<li class="chat-turn').slice(1);
 }
 
 function render(next: ConversationUiState): string {
@@ -77,13 +82,35 @@ describe('briefing conversation panel', () => {
     expect(markup).toContain('Cancelar conversa');
   });
 
-  it('keeps the history readable and each captain turn correctable', () => {
-    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 })));
+  it('keeps the history readable and corrects only the turn the open field holds', () => {
+    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), answerTurn('Carinho no atendimento.'), questionTurn()], question: clarifyingQuestion(), messageCount: 3 })));
 
     expect(markup).toContain('role="log"');
     expect(markup).toContain('aria-label="Histórico da conversa de briefing"');
     expect(markup).toContain('Somos uma clínica de bairro.');
+    // One control, and it belongs to the answer the question field holds: the
+    // entry text is not correctable here, so a correction can never post the
+    // business description as the answer to the open question.
     expect(markup.match(/Corrigir esta resposta/g)).toHaveLength(1);
+    const withControl = turnBlocks(markup).filter((block) => block.includes('Corrigir esta resposta'));
+    expect(withControl).toHaveLength(1);
+    expect(withControl[0]).toContain('Carinho no atendimento.');
+    expect(withControl[0]).not.toContain('Somos uma clínica de bairro.');
+  });
+
+  it('offers no correction over an open question the captain has not answered yet', () => {
+    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 })));
+
+    expect(markup).toContain('id="briefing-chat-answer"');
+    expect(markup).not.toContain('Corrigir esta resposta');
+  });
+
+  it('corrects the entry text while the entry composer is the field on screen', () => {
+    const markup = render(state(conversationSnapshot({ state: 'entry', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 })));
+
+    const withControl = turnBlocks(markup).filter((block) => block.includes('Corrigir esta resposta'));
+    expect(withControl).toHaveLength(1);
+    expect(withControl[0]).toContain('Somos uma clínica de bairro.');
   });
 
   it('keeps the history while a send is in flight, names the step and disables a second send', () => {
@@ -294,7 +321,7 @@ describe('briefing conversation panel', () => {
 
   it('freezes every writer of a locked field, not just the keyboard', () => {
     const failed = state(
-      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.')], question: clarifyingQuestion(), messageCount: 2 }),
+      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), answerTurn('Carinho no atendimento.')], question: clarifyingQuestion(), messageCount: 2 }),
       { type: 'draft', value: 'Segurança clínica.' },
       { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' } } },
       { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },

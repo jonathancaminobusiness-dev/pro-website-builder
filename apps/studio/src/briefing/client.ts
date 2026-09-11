@@ -1,7 +1,8 @@
 /**
- * The one place the Studio speaks to the conversation endpoints. It imports the
- * wire shapes from `./contract.js`; when the server slice publishes the shared
- * package, that import is the only line that changes.
+ * The one place the Studio speaks to the conversation endpoints. Like every
+ * other module here it reads the wire shapes from the local mirror
+ * `./contract.js`, so adopting the shared package the server slice publishes is
+ * contained to that module rather than to this one.
  */
 import { requestJson, RequestError } from '../request.js';
 import {

@@ -186,6 +186,8 @@ export interface ConversationAffordances {
    * discards it, so a retry can never re-send text the screen has replaced.
    */
   locked: boolean;
+  /** The initial-text composer is on screen: the same condition that decides whether it can be sent. */
+  entryOpen: boolean;
   canSendEntry: boolean;
   canAnswer: boolean;
   canSkip: boolean;
@@ -216,6 +218,38 @@ export interface ConversationAffordances {
   canDiscard: boolean;
 }
 
+/**
+ * The one past turn a correction may load back: the captain's latest turn
+ * written in the field that is on screen now. Correcting is editing the text a
+ * field holds, so a turn no visible field would receive — the entry text while
+ * a clarifying question is open — is not correctable, and the panel offers no
+ * control that would post it as the answer to something else.
+ */
+export function correctableTurnId(state: ConversationUiState, can: ConversationAffordances): string | null {
+  const turns = state.snapshot?.turns;
+  if (turns === undefined) return null;
+  const intent = can.asking ? 'answer' : can.entryOpen ? 'entry' : null;
+  if (intent === null) return null;
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (turn !== undefined && turn.role === 'captain' && turn.intent === intent) return turn.id;
+  }
+  return null;
+}
+
+/**
+ * How long until the time ceiling changes what the panel may offer. The screen
+ * reads it to wake itself at `expiresAt`, so the limit state arrives at the
+ * ceiling instead of at whatever re-render happens to come next. A conversation
+ * with no ceiling, or one already past it, schedules nothing.
+ */
+export function limitRefreshDelayMs(state: ConversationUiState, now: Date): number | null {
+  const expiresAt = state.snapshot?.limits.expiresAt;
+  if (expiresAt === undefined) return null;
+  const delay = Date.parse(expiresAt) - now.getTime();
+  return delay > 0 ? delay : null;
+}
+
 export function affordances(state: ConversationUiState, now: Date): ConversationAffordances {
   const snapshot = state.snapshot;
   const busy = state.pending !== null && state.failure === null;
@@ -225,13 +259,14 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
   const canDiscard = canRetry && holdsEditableBody(state.pending);
   const ready = state.availability === 'available' && snapshot !== null;
   if (!ready || snapshot === null) {
-    return { ready: false, busy, locked, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry, canDiscard };
+    return { ready: false, busy, locked, entryOpen: false, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry, canDiscard };
   }
   const closed = briefingClosed(snapshot);
   const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
   const atLimit = limitReached(snapshot, now) && !closed && !halted;
   const typed = state.draft.trim() !== '';
   const asking = !closed && snapshot.state === 'question' && snapshot.question !== undefined && !atLimit;
+  const entryOpen = !closed && !atLimit && snapshot.state === 'entry';
   // Nothing to close a briefing with is not an exit: a halted conversation with
   // no persisted text says so rather than offering an empty close.
   const closable = snapshot.summary !== '' || snapshot.briefing !== '';
@@ -242,7 +277,8 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
     ready: true,
     busy,
     locked,
-    canSendEntry: !locked && !atLimit && snapshot.state === 'entry' && typed,
+    entryOpen,
+    canSendEntry: !locked && entryOpen && typed,
     canAnswer: !locked && asking && typed,
     canSkip: !locked && asking,
     canCancel: !locked && !closed && !halted,
