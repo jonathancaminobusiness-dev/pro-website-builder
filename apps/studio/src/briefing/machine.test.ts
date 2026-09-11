@@ -69,6 +69,29 @@ describe('conversation ui state', () => {
     }
   });
 
+  it('unlocks the question again when a skip fails, since a skip held no field back', () => {
+    const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
+    const failed = reduce(asking, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
+    const can = affordances(failed, NOW);
+
+    expect(failed.pending).toBeNull();
+    expect(can.locked).toBe(false);
+    expect(can.canSkip).toBe(true);
+    expect(can.canCancel).toBe(true);
+    expect(can.canRetry).toBe(true);
+    expect(can.canDiscard).toBe(false);
+  });
+
+  it('holds the field a failed answer came from until the captain decides what to do with it', () => {
+    const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
+    const failed = reduce(asking, { type: 'draft', value: 'Segurança clínica.' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
+    const can = affordances(failed, NOW);
+
+    expect(failed.pending).not.toBeNull();
+    expect(can.locked).toBe(true);
+    expect(can.canDiscard).toBe(true);
+  });
+
   it('offers no edit-and-resend for a failed read, which carried no field', () => {
     const failed = reduce(opened({ state: 'recommendation', messageCount: 1 }), { type: 'begin', intent: { kind: 'resume' } }, { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) });
     const can = affordances(failed, NOW);

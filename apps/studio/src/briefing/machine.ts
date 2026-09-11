@@ -64,6 +64,17 @@ function summarySeed(snapshot: ConversationSnapshot): string {
   return snapshot.summary !== '' ? snapshot.summary : snapshot.briefing;
 }
 
+/**
+ * The request holds text the screen is still showing: the entry, an answer, or
+ * the edited summary of a close. A skip, a cancel and a read carry none, so a
+ * failure has nothing of theirs to hold on to.
+ */
+function holdsEditableBody(intent: PendingIntent | null): boolean {
+  if (intent === null) return false;
+  if (intent.kind === 'confirm') return true;
+  return intent.kind === 'send' && (intent.request.intent === 'entry' || intent.request.intent === 'answer');
+}
+
 export function initialConversationState(): ConversationUiState {
   return { availability: 'unknown', snapshot: null, draft: '', summaryDraft: '', pending: null, failure: null };
 }
@@ -117,14 +128,14 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
         failure: null,
       };
     }
-    // A read carries no body and no field, so a failed one holds nothing back:
-    // it is dropped, and every exit the conversation had stays live behind the
-    // error the captain can replay.
+    // A failure keeps the request pending only while it holds a field the
+    // screen can still change; anything else is dropped, so every exit the
+    // conversation had stays live behind the error the captain can replay.
     case 'failed':
       return {
         ...state,
         availability: state.snapshot === null && state.pending?.kind === 'resume' ? 'unreachable' : state.availability,
-        pending: state.pending?.kind === 'resume' ? null : state.pending,
+        pending: holdsEditableBody(state.pending) ? state.pending : null,
         failure: action.failure,
       };
   }
@@ -205,7 +216,7 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
   const busy = state.pending !== null && state.failure === null;
   const locked = state.pending !== null;
   const canRetry = state.failure !== null;
-  const canDiscard = canRetry && (state.pending?.kind === 'confirm' || (state.pending?.kind === 'send' && (state.pending.request.intent === 'entry' || state.pending.request.intent === 'answer')));
+  const canDiscard = canRetry && holdsEditableBody(state.pending);
   const ready = state.availability === 'available' && snapshot !== null;
   if (!ready || snapshot === null) {
     return { ready: false, busy, locked, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry, canDiscard };
