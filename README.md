@@ -314,8 +314,9 @@ runners measure the bundle the gate credits. The preview serves those same faces
 from its own origin under `font-src 'self'`, reading them again whenever the
 manifest or any file it declares changes rather than once at start, so a face
 added or re-exported while the studio runs reaches the captain's iframe and an
-unreadable manifest fails that request rather than the studio. Gate 3 then
-compares the faces the preview actually served — read back out of the
+unreadable manifest fails that request rather than the studio — and leaves the
+origin vouching for no face at all rather than for a plan it no longer serves.
+Gate 3 then compares the faces the preview actually served — read back out of the
 `@font-face` rules that document declared, never from the fonts directory, which
 would compare the plan against itself — against the ones the bundle ships, so a
 face replaced after the captain looked at it is a divergence and not an
@@ -379,10 +380,13 @@ The observed release-engine evidence is recorded in [Verified runs](docs/verifie
 Publishing over an open escalation takes a written reason from the captain, recorded in the run's log as `release.published` and in the release record beside the bundle. The manifest inside the bundle is a pure
 function of the compiled bytes and the toolchain — it names no document, no
 version, no publication and no path on the machine that compiled it — so writing
-the same bytes again is an idempotent success that appends a second entry to
-`<digest>.publications.json`, where the approved version, the released version,
-the document hash and the acceptance live. That record is the only durable home
-for them, so a damaged one refuses the next append instead of being replaced.
+the same bytes again is an idempotent success, and what tells two publications
+of one bundle apart lives beside it in `<digest>.publications.json`: the approved
+version, the released version, the document hash and the acceptance. One
+acceptance is one entry there, and another run accepting the same bytes is a
+second one. That record is the only durable home for them, so a damaged one —
+unparseable, or parseable into something that is not a list of publications —
+refuses the next append instead of being replaced.
 
 Lighthouse is a laboratory run. It measures one machine and one network, does
 not observe a visitor, and does not measure INP without interaction; the
