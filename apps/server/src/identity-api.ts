@@ -107,9 +107,11 @@ export async function handleIdentityRequest(
       send(200, await run.conversation.send(message.data));
       return true;
     } catch (error) {
-      if (!(error instanceof ConversationError)) throw error;
-      send(error.status, { error: error.message });
-      return true;
+      if (error instanceof ConversationError) { send(error.status, { error: error.message }); return true; }
+      // A run the captain stopped refuses the turn as the rest of the product
+      // refuses it, and the conversation reports that refusal as a conflict.
+      if (error instanceof StageError) { send(409, { error: error.message }); return true; }
+      throw error;
     }
   }
 

@@ -167,11 +167,11 @@ function everyMatchWasSaid(pattern: RegExp, text: string, said: string): boolean
 /**
  * The ids of every visual-output rule the text breaks, in declaration order.
  *
- * `restatedFrom` is the captain's own words, passed for the fields that give
- * the briefing back — the reply itself, the summary, the facts, the hypotheses
- * and the declared gaps. A rule that a captain may legitimately have written is
- * broken there only by a value the captain never wrote; everything else is
- * judged as the model's.
+ * `restatedFrom` is the captain's own words, passed for every field that reads
+ * the briefing back — the reply, the question, the summary, the facts, the
+ * hypotheses and the declared gaps. A rule that a captain may legitimately have
+ * written is broken there only by a value the captain never wrote; the
+ * conceptual directions are the model's own composition and are judged as such.
  */
 export function findVisualOutput(text: string, restatedFrom?: string): string[] {
   const said = restatedFrom === undefined ? undefined : normalizeForEcho(restatedFrom);
@@ -266,7 +266,7 @@ function turnTexts(turn: BriefingConversationTurn): Array<{ text: string; restat
   const restated = (text: string): { text: string; restated: boolean } => ({ text, restated: true });
   return [
     restated(turn.message),
-    ...(turn.question ? [turn.question.text, turn.question.why, ...turn.question.options].map(authored) : []),
+    ...(turn.question ? [turn.question.text, turn.question.why, ...turn.question.options].map(restated) : []),
     ...turn.facts.map(restated),
     ...turn.hypotheses.map(restated),
     ...turn.unknowns.flatMap((gap) => [restated(gap.gap), restated(gap.impact)]),

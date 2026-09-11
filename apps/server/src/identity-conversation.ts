@@ -55,12 +55,14 @@ export interface BriefingConversationOptions {
   /** Called with the briefing a confirmation produced, so the execution carries it into the identity stage. */
   onConfirmed?: (briefing: string, revision: number) => Promise<void> | void;
   /**
-   * True once the execution can no longer take a new briefing, because the
-   * identity stage already ran on the one it has. A confirmation is refused
-   * there rather than recorded: a revision the execution would never apply is
-   * a signature the captain would read as applied.
+   * Asked before a turn is spent, and free to refuse it with a
+   * `ConversationError`: an execution the captain stopped, or one whose
+   * briefing is frozen because it already holds identity work, must not buy a
+   * 60-second model call whose answer it could never take. It is a pre-check,
+   * not the decision — `onConfirmed` refuses again when it applies the
+   * briefing, because the execution can start a stage while the turn runs.
    */
-  briefingFrozen?: () => boolean;
+  guardTurn?: () => void;
   /**
    * The briefing the execution carries, read at the moment a turn needs it. The
    * plan creates the execution from the captain's first text, so the opening
@@ -220,6 +222,7 @@ export class BriefingConversation {
 
   private async runSend(input: { message?: string | undefined; action: BriefingMessageAction; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
+    this.options.guardTurn?.();
     if (!canSendBriefingMessage(this.data.state)) throw new ConversationError(this.closedReason(), 409);
 
     if (input.action === 'cancel') {
@@ -258,7 +261,7 @@ export class BriefingConversation {
 
   private async runConfirm(input: { briefing: string; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
-    if (this.options.briefingFrozen?.()) throw new ConversationError('A etapa de identidade desta execução já começou, então o briefing dela está congelado. Crie uma nova execução para trabalhar com um briefing diferente.', 409);
+    this.options.guardTurn?.();
     if (!canConfirmBriefing(this.data.state)) throw new ConversationError(this.confirmRefusal(), 409);
     let briefing: string;
     try { briefing = normalizeIdentityBriefing(input.briefing); }

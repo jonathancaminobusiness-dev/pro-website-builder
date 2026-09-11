@@ -134,7 +134,11 @@ describe('briefing conversation API', () => {
     expect(started.status).toBe(200);
 
     const late = await post(server.origin, briefingConversationConfirmPath('conversa-congelada'), { briefing: 'Outro briefing, escrito depois da largada.', idempotencyKey: 'confirm-2' });
+    // The same rule holds at the boundary every turn passes through, so no
+    // model call is bought on a briefing the execution can no longer take.
+    const turn = await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'Pensando melhor, mudamos de ideia.', idempotencyKey: 'turn-5' });
 
+    expect(turn.status).toBe(409);
     expect(late.status).toBe(409);
     expect((await late.json() as { error: string }).error).toMatch(/congelado/);
     const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-congelada`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string };
@@ -187,6 +191,20 @@ describe('briefing conversation API', () => {
 
     const run = await fetch(`${server.origin}/api/identity/runs/conversa-cancelada`, { headers: { origin: STUDIO_ORIGIN } });
     expect(run.status).toBe(200);
+  });
+
+  it('spends no turn on an execution the captain stopped', async () => {
+    const server = await conversationServer();
+    await createRun(server.origin, 'conversa-parada', FIRST_TEXT);
+    await post(server.origin, briefingConversationPath('conversa-parada'), { idempotencyKey: 'turn-1' });
+    const stopped = await post(server.origin, '/api/identity/runs/conversa-parada/cancel', { approverRole: 'captain' });
+    expect(stopped.status).toBe(200);
+
+    const refused = await post(server.origin, briefingConversationPath('conversa-parada'), { message: 'Mais uma coisa.', idempotencyKey: 'turn-2' });
+
+    expect(refused.status).toBe(409);
+    const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-parada')}`, { headers: { origin: STUDIO_ORIGIN } }));
+    expect(conversation.messages).toHaveLength(2);
   });
 
   it('answers 404 for a conversation on an execution that does not exist', async () => {

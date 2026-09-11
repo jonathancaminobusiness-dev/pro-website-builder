@@ -26,6 +26,15 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
+/** Walks the fixture conversation up to the editable summary, which is where a captain may confirm. */
+async function driveToConfirmation(run: IdentityRun): Promise<void> {
+  const messages = [undefined, 'A prevenção é o centro.', 'Segurança clínica com carinho.', 'Acompanhamento é a promessa.'];
+  for (const [index, message] of messages.entries()) {
+    await run.conversation.send({ ...(message === undefined ? {} : { message }), action: 'answer', idempotencyKey: `turn-${index}` });
+  }
+  expect(run.conversation.state).toBe('confirmation');
+}
+
 function newRun(runId = 'identity-test'): IdentityRun {
   return new IdentityRun({ runId, repository: new ProjectRepository(database), provider: new FakeIdentityProvider() });
 }
@@ -155,6 +164,89 @@ describe('identity run', () => {
     expect(events.some((event) => event.type === 'identity.stage.gate_opened')).toBe(false);
     expect(events.some((event) => event.payload.taskId && String(event.payload.taskId).startsWith('identity-refiner-'))).toBe(false);
     expect(events.some((event) => event.payload.taskId && String(event.payload.taskId).startsWith('identity-art-director-'))).toBe(false);
+  });
+
+  it('refuses a confirmation that raced a start, instead of replacing the fan-out that is running', async () => {
+    const repository = new ProjectRepository(database);
+    const fake = new FakeIdentityProvider();
+    let release = (): void => {};
+    let reached = (): void => {};
+    const closing = new Promise<void>((resolve) => { release = resolve; });
+    const closingTurn = new Promise<void>((resolve) => { reached = resolve; });
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-briefing-conversation') && task.brief.includes('O capitão confirmou o briefing.')) { reached(); await closing; }
+        return fake.propose(task, signal);
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-confirma-na-largada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+
+    const confirming = run.conversation.confirm({ briefing: 'Briefing corrigido durante a largada.', idempotencyKey: 'confirm-1' });
+    // The start lands while the closing turn is in flight, which is the only
+    // window where the freeze can be true at apply time and false when asked.
+    await closingTurn;
+    const started = await run.start();
+    release();
+
+    await expect(confirming).rejects.toThrow(/congelado/);
+    expect(started.directions).toHaveLength(3);
+    const snapshot = run.snapshot();
+    expect(snapshot.directions).toHaveLength(3);
+    expect(snapshot.gate.state).toBe('open');
+    expect(snapshot.briefing).toBe('Clínica veterinária de bairro, preventiva.');
+    expect(run.conversation.snapshot().confirmations).toEqual([]);
+  });
+
+  it('spends no conversation turn on an execution the captain stopped', async () => {
+    const repository = new ProjectRepository(database);
+    const tasks: string[] = [];
+    const fake = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) { tasks.push(task.id); return fake.propose(task, signal); },
+    };
+    const run = new IdentityRun({ runId: 'identity-conversa-parada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await run.cancel();
+    expect(run.snapshot().status).toBe('cancelled');
+
+    await expect(run.conversation.send({ action: 'answer', idempotencyKey: 'turn-0' })).rejects.toThrow(/cancelled/);
+
+    expect(tasks).toEqual([]);
+  });
+
+  it('keeps the briefing editable after the stage failed, with the same answer before and after a restart', async () => {
+    const repository = new ProjectRepository(database);
+    const fake = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-briefing-conversation')) return fake.propose(task, signal);
+        return { taskId: task.id, status: 'failed', summary: 'provider down', errorCode: 'DOWN' };
+      },
+    };
+    const runId = 'identity-briefing-apos-falha';
+    const run = new IdentityRun({ runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+    await run.conversation.confirm({ briefing: 'Primeira versão do briefing confirmada.', idempotencyKey: 'confirm-1' });
+
+    const failed = await run.start();
+    expect(failed.status).toBe('failed');
+
+    const corrected = await run.conversation.confirm({ briefing: 'Segunda versão, escrita depois da falha.', idempotencyKey: 'confirm-2' });
+    expect(corrected.confirmations.map((entry) => entry.revision)).toEqual([1, 2]);
+    expect(run.snapshot().briefing).toBe('Segunda versão, escrita depois da falha.');
+
+    const restored = new IdentityRun({ runId, repository, provider });
+    expect(await restored.restore()).toBe(true);
+    expect(restored.snapshot().status).toBe('failed');
+
+    const afterRestart = await restored.conversation.confirm({ briefing: 'Terceira versão, escrita depois do restart.', idempotencyKey: 'confirm-3' });
+
+    expect(afterRestart.confirmations.map((entry) => entry.revision)).toEqual([1, 2, 3]);
+    expect(restored.snapshot().briefing).toBe('Terceira versão, escrita depois do restart.');
+    expect((await repository.getRun(runId))?.briefing).toBe('Terceira versão, escrita depois do restart.');
   });
 
   it('restores task failure details after a failed identity run restarts', async () => {
