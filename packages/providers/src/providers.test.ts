@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, idempotencyKey } from '@pwb/domain';
-import { FakeModelProvider, HiggsfieldMcpProvider } from './index.js';
+import { CLAUDE_RUNNER_TIMEOUT_MS, ClaudeJsonRunner, FakeModelProvider, HiggsfieldMcpProvider } from './index.js';
 
 describe('providers', () => {
   it('returns typed deterministic proposals from the fake model', async () => {
@@ -32,5 +32,35 @@ describe('providers', () => {
     expect(key).toHaveLength(64);
     expect(key).not.toMatch(/token|secret|key/i);
     expect(createFixtureIR().meta.projectId).toBe('fixture-project');
+  });
+});
+
+describe('ClaudeJsonRunner invocation cap', () => {
+  function recordingRunner(options: { timeoutMs?: number } = {}): { runner: ClaudeJsonRunner; calls: number[] } {
+    const calls: number[] = [];
+    const runner = new ClaudeJsonRunner({
+      ...options,
+      execute: async (_executable, _args, execution) => { calls.push(execution.timeoutMs); return { stdout: '{"answer":"ok"}', stderr: '' }; },
+    });
+    return { runner, calls };
+  }
+
+  it('caps one invocation at the claude timeout even when the remaining deadline is longer', async () => {
+    const { runner, calls } = recordingRunner();
+    await runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 30 * 60_000 });
+    // The README promises 7 minutes per claude invocation, not the whole stage budget.
+    expect(calls).toEqual([CLAUDE_RUNNER_TIMEOUT_MS]);
+  });
+
+  it('spends no more than the deadline the caller has left', async () => {
+    const { runner, calls } = recordingRunner({ timeoutMs: 7 * 60_000 });
+    await runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 30_000 });
+    expect(calls).toEqual([30_000]);
+  });
+
+  it('honours a configured cap below the default', async () => {
+    const { runner, calls } = recordingRunner({ timeoutMs: 90_000 });
+    await runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 30 * 60_000 });
+    expect(calls).toEqual([90_000]);
   });
 });

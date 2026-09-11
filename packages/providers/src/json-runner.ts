@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import type { ClaudeRunnerOptions } from './model.js';
+import { CLAUDE_RUNNER_TIMEOUT_MS } from './claude-runner.js';
+import type { ClaudeExecutor, ClaudeRunnerOptions } from './model.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -62,16 +63,30 @@ export class JsonRunnerError extends Error {
 
 const DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 
-export class ClaudeJsonRunner implements JsonModelRunner {
-  private readonly options: Required<Omit<ClaudeRunnerOptions, 'timeoutMs' | 'execute'>>;
+const executeClaudeJson: ClaudeExecutor = async (executable, args, options) => {
+  const { stdout, stderr } = await execFileAsync(executable, args, {
+    shell: false,
+    timeout: options.timeoutMs,
+    ...(options.signal ? { signal: options.signal } : {}),
+    windowsHide: true,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  return { stdout, stderr };
+};
 
-  constructor(options: Omit<ClaudeRunnerOptions, 'timeoutMs' | 'execute'> = {}) {
-    this.options = { executable: 'claude', maxTurns: 4, ...options };
+export class ClaudeJsonRunner implements JsonModelRunner {
+  private readonly options: Required<ClaudeRunnerOptions>;
+
+  constructor(options: ClaudeRunnerOptions = {}) {
+    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, execute: executeClaudeJson, ...options };
   }
 
   async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
     try {
-      const { stdout } = await execFileAsync(this.options.executable, [
+      // One invocation never outlives its own cap, whatever budget the caller's
+      // remaining deadline still allows — the rule `CodexJsonRunner` already
+      // applies, and the one the README states per claude invocation.
+      const { stdout } = await this.options.execute(this.options.executable, [
         '-p', request.prompt,
         '--output-format', 'json',
         '--json-schema', JSON.stringify(request.schema),
@@ -79,7 +94,7 @@ export class ClaudeJsonRunner implements JsonModelRunner {
         '--no-session-persistence',
         '--max-turns', String(this.options.maxTurns),
         '--disallowed-tools', DENIED_TOOLS,
-      ], { shell: false, timeout: request.deadlineMs, signal, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+      ], { timeoutMs: Math.min(this.options.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
       const raw: unknown = JSON.parse(stdout);
       return raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
     } catch (error) {
