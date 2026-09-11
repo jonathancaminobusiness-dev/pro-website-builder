@@ -217,6 +217,59 @@ describe('briefing conversation panel', () => {
     expect(render(conversationReducer(failed, { type: 'discard' }))).not.toContain('readOnly=""');
   });
 
+  it('freezes every writer of a locked field, not just the keyboard', () => {
+    const failed = state(
+      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.')], question: clarifyingQuestion(), messageCount: 2 }),
+      { type: 'draft', value: 'Segurança clínica.' },
+      { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' } } },
+      { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
+    );
+    const markup = render(failed);
+
+    expect(markup).toContain('readOnly=""');
+    expect(markup).toContain('disabled="">Experiência premium');
+    expect(markup).toContain('disabled="">Corrigir esta resposta');
+
+    const editable = render(conversationReducer(failed, { type: 'discard' }));
+
+    expect(editable).not.toContain('disabled="">Experiência premium');
+    expect(editable).not.toContain('disabled="">Corrigir esta resposta');
+  });
+
+  it('names a new execution when a ceiling arrives before any text was saved', () => {
+    const expired = state(conversationSnapshot({ limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T09:00:00.000Z' } }));
+    const markup = render(expired);
+
+    expect(markup).toContain('antes de qualquer texto ser salvo');
+    expect(markup).toContain('criar uma nova execução');
+    expect(markup).not.toContain('revise o resumo');
+    expect(markup).not.toContain('id="briefing-chat-summary"');
+    expect(markup).not.toContain('id="briefing-chat-entry"');
+    expect(markup).not.toContain('Reabrir do ponto salvo');
+  });
+
+  it('keeps the ceiling wording pointed at a summary that is really there', () => {
+    const markup = render(state(conversationSnapshot({ state: 'question', question: clarifyingQuestion(), summary: CONSOLIDATED_SUMMARY, messageCount: 6 })));
+
+    expect(markup).toContain('revise o resumo');
+    expect(markup).toContain('id="briefing-chat-summary"');
+    expect(markup).not.toContain('criar uma nova execução');
+  });
+
+  it('names the read in flight when an unreadable conversation is being retried', () => {
+    const retrying = conversationReducer(
+      conversationReducer(
+        conversationReducer(initialConversationState('identity-1'), { type: 'begin', intent: { kind: 'resume' } }),
+        { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
+      ),
+      { type: 'retry' },
+    );
+    const markup = render(retrying);
+
+    expect(markup).toContain('Reabrindo a conversa desta execução…');
+    expect(markup).not.toContain('Não foi possível abrir a conversa desta execução');
+  });
+
   it('says the conversation could not be read instead of reporting a read still running', () => {
     const unreachable = conversationReducer(
       conversationReducer(initialConversationState('identity-1'), { type: 'begin', intent: { kind: 'resume' } }),
@@ -226,7 +279,8 @@ describe('briefing conversation panel', () => {
 
     expect(markup).toContain('Não foi possível abrir a conversa desta execução');
     expect(markup).not.toContain('Abrindo a conversa desta execução…');
-    expect(markup).toContain('Tentar novamente');
+    expect(markup.match(/Tentar novamente/g)).toHaveLength(1);
+    expect(markup).not.toContain('Reabrir do ponto salvo');
   });
 
   it('stops offering the entry composer once a ceiling was reached', () => {
