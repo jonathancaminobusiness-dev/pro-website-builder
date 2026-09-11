@@ -158,6 +158,15 @@ export interface ConversationAffordances {
   canSkip: boolean;
   canCancel: boolean;
   canConfirm: boolean;
+  /** A question is open: the same condition that decides whether it can be answered or skipped. */
+  asking: boolean;
+  /**
+   * The editable summary and its manual close are the way out. Every state that
+   * stopped asking and did not close the briefing offers them — a consolidated
+   * summary, a reached ceiling, a cancelled conversation, a failed one — so no
+   * state leaves the captain without a “Fechar briefing”.
+   */
+  summaryOpen: boolean;
   /** A ceiling was reached: the panel stops asking and offers the editable summary and a manual close. */
   atLimit: boolean;
   closed: boolean;
@@ -170,21 +179,24 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
   const busy = state.pending !== null && state.failure === null;
   const ready = state.availability === 'available' && snapshot !== null;
   if (!ready || snapshot === null) {
-    return { ready: false, busy, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, atLimit: false, closed: false, canRetry: state.pending !== null && state.failure !== null };
+    return { ready: false, busy, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry: state.pending !== null && state.failure !== null };
   }
   const closed = briefingClosed(snapshot);
-  const stopped = closed || snapshot.state === 'cancelled';
-  const atLimit = limitReached(snapshot, now) && !stopped;
+  const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
+  const atLimit = limitReached(snapshot, now) && !closed && !halted;
   const typed = state.draft.trim() !== '';
-  const asking = snapshot.state === 'question' && snapshot.question !== undefined && !atLimit;
+  const asking = !closed && snapshot.state === 'question' && snapshot.question !== undefined && !atLimit;
+  const summaryOpen = !closed && (snapshot.state === 'confirmation' || atLimit || halted);
   return {
     ready: true,
     busy,
-    canSendEntry: !busy && !stopped && !atLimit && snapshot.state === 'entry' && typed,
+    canSendEntry: !busy && !atLimit && snapshot.state === 'entry' && typed,
     canAnswer: !busy && asking && typed,
     canSkip: !busy && asking,
-    canCancel: !busy && !stopped && snapshot.state !== 'failed',
-    canConfirm: !busy && !stopped && (snapshot.state === 'confirmation' || atLimit) && state.summaryDraft.trim() !== '',
+    canCancel: !busy && !closed && !halted,
+    canConfirm: !busy && summaryOpen && state.summaryDraft.trim() !== '',
+    asking,
+    summaryOpen,
     atLimit,
     closed,
     canRetry: state.pending !== null && state.failure !== null,

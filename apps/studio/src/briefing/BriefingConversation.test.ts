@@ -136,11 +136,13 @@ describe('briefing conversation panel', () => {
   });
 
   it('keeps the exit available while the conversation is failed, with nothing left to cancel', () => {
-    const markup = render(state(conversationSnapshot({ state: 'failed', turns: [entryTurn('Somos uma clínica de bairro.')], error: 'o modelo não respondeu', messageCount: 1 })));
+    const markup = render(state(conversationSnapshot({ state: 'failed', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], error: 'o modelo não respondeu', messageCount: 1 })));
 
     expect(markup).toContain('A conversa parou');
     expect(markup).toContain('Reabrir do ponto salvo');
     expect(markup).toContain('disabled="">Cancelar conversa');
+    expect(markup).toContain('Fechar briefing');
+    expect(markup).not.toContain('disabled="">Fechar briefing');
   });
 
   it('offers a single way out of the conversation, wherever it stands', () => {
@@ -168,11 +170,31 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('Pergunta 3');
   });
 
-  it('says plainly that a cancelled conversation sent nothing to the curator', () => {
-    const markup = render(state(conversationSnapshot({ state: 'cancelled', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 })));
+  it('says plainly that a cancelled conversation sent nothing to the curator, and still offers a way out', () => {
+    const markup = render(state(conversationSnapshot({ state: 'cancelled', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 })));
 
     expect(markup).toContain('Nada foi enviado ao curador');
-    expect(markup).not.toContain('Fechar briefing');
+    expect(markup).toContain('Reabrir do ponto salvo');
+    expect(markup).toContain('id="briefing-chat-summary"');
+    expect(markup).toContain('Fechar briefing');
+    expect(markup).not.toContain('disabled="">Fechar briefing');
+  });
+
+  it('stops offering the entry composer once a ceiling was reached', () => {
+    const markup = render(state(conversationSnapshot({ state: 'entry', briefing: 'Somos uma clínica de bairro.', messageCount: 6 })));
+
+    expect(markup).toContain('limite atingido');
+    expect(markup).not.toContain('id="briefing-chat-entry"');
+    expect(markup).not.toContain('Enviar para leitura');
+    expect(markup).toContain('Fechar briefing');
+  });
+
+  it('shows no question block while the conversation is not asking one', () => {
+    const markup = render(state(conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], question: clarifyingQuestion(), messageCount: 1 })));
+
+    expect(markup).not.toContain('id="briefing-chat-question"');
+    expect(markup).not.toContain('Responder');
+    expect(markup).not.toContain('Pular esta pergunta');
   });
 
   it('shows the three directions as text and marks each as having no preview', () => {

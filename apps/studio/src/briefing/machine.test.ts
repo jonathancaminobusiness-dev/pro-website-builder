@@ -135,12 +135,33 @@ describe('conversation ui state', () => {
     expect(can.canCancel).toBe(false);
   });
 
-  it('leaves a cancelled conversation with nothing to send', () => {
-    const can = affordances(opened({ state: 'cancelled', messageCount: 2 }), NOW);
+  it('leaves a cancelled conversation with nothing to send, but still closable', () => {
+    const state = opened({ state: 'cancelled', briefing: 'Somos uma clínica veterinária de bairro.', messageCount: 2 });
+    const can = affordances(state, NOW);
 
     expect(can.canCancel).toBe(false);
     expect(can.canSendEntry).toBe(false);
+    expect(can.asking).toBe(false);
     expect(can.atLimit).toBe(false);
+    expect(can.summaryOpen).toBe(true);
+    expect(state.summaryDraft).toBe('Somos uma clínica veterinária de bairro.');
+    expect(can.canConfirm).toBe(true);
+  });
+
+  it('keeps a failed conversation closable from its editable summary', () => {
+    const can = affordances(opened({ state: 'failed', briefing: 'Somos uma clínica veterinária de bairro.', error: 'o modelo não respondeu', messageCount: 2 }), NOW);
+
+    expect(can.canCancel).toBe(false);
+    expect(can.summaryOpen).toBe(true);
+    expect(can.canConfirm).toBe(true);
+  });
+
+  it('calls no question open while the conversation is not asking one', () => {
+    const can = affordances(opened({ state: 'recommendation', question: clarifyingQuestion(), messageCount: 1 }), NOW);
+
+    expect(can.asking).toBe(false);
+    expect(can.canAnswer).toBe(false);
+    expect(can.canSkip).toBe(false);
   });
 
   it('starts a reopened run from nothing, so a stale draft never leaks between executions', () => {
