@@ -72,6 +72,11 @@ corepack pnpm build
 corepack pnpm test:e2e
 ```
 
+There is no code linter in this repository and no `lint` script pretending to be
+one: `corepack pnpm typecheck` is the static check over the source, and
+`packages/linter` lints the generated *document* — the rules the stages and the
+gates block on — not the source that produces it.
+
 Playwright ships no browser of its own and `pnpm install` does not fetch one. Every measured path opens its browser through `RenderHub`, which refuses without that binary and names the command that installs it — the server, the fixture CLI and the e2e harnesses all get the same sentence.
 
 Run the deterministic fixture without starting the UI:
@@ -148,9 +153,9 @@ An information architect runs first and alone. It proposes a typed `RouteManifes
 
 Section composers run in parallel under the scheduler, one per section, each allowed to write only its own window. A composer proposes a typed `SectionComposition`, never a patch and never HTML; deterministic code checks that it filled exactly its window with a connected subtree inside the token system, compiles it into JSON Pointer operations, and the real `PatchGate` refuses any overlap between two windows before the merged patch reaches the applier. A call to action is a real anchor: the semantic vocabulary carries `link` and `button` as `component` nodes whose text is the label, and a link's `href` must be one of the routes the same document declares, which the manifest, the composition check and the document schema each refuse to accept otherwise. The renderer takes a `routePrefix`, so the same document links inside `/preview/<versionId>` while it is under review and at the site root once it is exported. A section declares its layout change as a `responsive` rule, whose width and props are tokens the renderer reads back out as a container query. A rule may only open at one of `gridGrammar.breakpointTokens`, the ascending container widths the identity declares as its breakpoints; the schema refuses a breakpoint at or below the narrowest supported viewport, because a condition every viewport already satisfies transforms nothing.
 
-The revision is then rendered across the representative capture matrix — every declared route, state and colour scheme at the three widths — and handed to the deterministic gate. A Tier 0 veto stops the stage before a single model call. Only if it passes do four critics run, each in its own session, each seeing the identity contract and the rubric before the screenshots, each returning a `CritiqueReport` that moves from perception to comprehension to projection. A finding names its nodes, says why it matters against the contract, and carries at most one repair drawn from `set_token`, `set_constraint`, `set_crop`, `replace_copy` and `reorder_node`. A critic that cannot tell answers `uncertain`, which escalates instead of inventing precision.
+The revision is then rendered across the representative capture matrix — every declared route, state and colour scheme at the three widths — and handed to the deterministic gate. The architect and the composers have already run by then, because there is no document to measure until they have; a Tier 0 veto stops the stage before a single critic runs, and no critic is ever asked to judge a revision the gate already vetoed. Only if it passes do four critics run, each in its own session, each seeing the identity contract and the rubric before the screenshots, each returning a `CritiqueReport` that moves from perception to comprehension to projection. A finding names its nodes, says why it matters against the contract, and carries at most one repair drawn from `set_token`, `set_constraint`, `set_crop`, `replace_copy` and `reorder_node`. A critic that cannot tell answers `uncertain`, which escalates instead of inventing precision.
 
-The `PatchPlanner` compiles at most three causal repairs per cycle, guards every write with a `test` against the value the critic saw, and rejects anything else with a stated reason. The prototype stage writes `/pages`, `/assets`, `/stateFixtures` and `/reviewRecord` and nothing else; `/stateFixtures` is on that list because the architect declares the states, and the gate refuses any operation outside it. The loop then stops, always for a named reason: `clean`, `tier0_veto`, `uncertain`, `max_cycles`, `repeated_issue`, `improvement_below_noise`, `no_actionable_patch` or `budget_exhausted`.
+The `PatchPlanner` compiles at most three causal repairs per cycle, guards every write with a `test` against the value the critic saw, and rejects anything else with a stated reason. The prototype stage's write boundary is `/pages`, `/assets`, `/stateFixtures` and `/reviewRecord`, and the gate refuses any operation outside it; `/stateFixtures` is on that list because the architect declares the states. What the stage writes today is narrower than what it may write: the architect writes `/pages` and `/stateFixtures`, the composers and the refiner write `/pages`, and nothing in the stage writes `/assets` or `/reviewRecord` — the review it produces is the `PrototypeStageOutcome` the Gate 2 screen reads, not a document subtree. The loop then stops, always for a named reason: `clean`, `tier0_veto`, `uncertain`, `max_cycles`, `repeated_issue`, `improvement_below_noise`, `no_actionable_patch` or `budget_exhausted`.
 
 Run the stage without the UI:
 
@@ -165,6 +170,10 @@ Each binds an ephemeral preview port, so several checkouts can run them at the s
 The Gate 2 screen is at `http://127.0.0.1:5173/#/gate-2`. It compares the composed revision with the refined one on the same route at the same width, offers an overlay and a difference blend, keeps the deterministic gate and the critics' opinion in separate panels, and records accept, reject or defer with a reason for each issue before the captain settles the gate. Both sides are always shown: when the loop applied no repair the two are the same revision and the difference blend is empty, which is itself the answer.
 
 The server measures that verdict rather than assuming it. `startServer` hands the run registry a `RenderHubEvidenceSource` pointed at the isolated preview origin, so a Gate 2 run drives the real capture matrix through Playwright — contrast, focus, axe, overflow, clipping and stability are observed on a live page before any critic runs, and a Tier 0 veto blocks approval. The browser cache lives in `PWB_RENDER_CACHE` (default `.treehouse/render-cache`), so an unchanged revision is never recaptured. The synthesized `DerivedEvidenceSource` is a test-only stand-in; no server path can reach it.
+
+No gate closes over a document the linter rejects, and Gate 2 is no exception: an approval is refused with 409 when the reviewed revision carries a prototype-stage lint error, `A11Y-090` or `COPY-110`. It is measured from the revision being approved rather than read off the run's outcome. Only the prototype stage's own rules block — an identity error is Gate 1's to refuse, and this stage may not write `/identity`. Rejecting is never blocked: sending a defective revision back is the point.
+
+A composer that cannot answer costs its section, not the run. It gets one retry; if it fails again its window keeps the architect's placeholder nodes, the section is named in `failedSections` and in a `prototype.section.unavailable` event, and the rest of the review stands — the same degradation a critic that cannot answer already had. The placeholder copy is itself a `COPY-110` error, so a partial prototype is reviewable but not approvable. Only a cancelled run, or one where no section was composed at all, has nothing to review and fails.
 
 Both deterministic tiers measure every declared route, state and colour scheme at the three representative widths — 390, 768 and 1440 — because a revision under review is not worth six widths of browser time. The full `RENDER_VIEWPORTS` sweep (320/360/390/768/1024/1440) is for a finalist and is asked for explicitly: `corepack pnpm run:prototype -- --render --full-matrix`.
 
@@ -231,9 +240,11 @@ PatchGate validates them against the finalization patch schema, and only the
 Applier writes a version. A critic proposes nothing at all, and the refiner
 writes `/reviewRecord` and nothing else, because the bytes the release publishes
 have to be the bytes the captain approved. A refinement becomes a real version of
-the run: it is saved through the run's applier and repository, so the manifest
-names a version that can be retrieved and a second Gate 3 run builds on the
-first instead of redoing it. A patch that rewrites what the review record already
+the run: it is saved through the run's applier and repository, so the release
+record names a version that can be retrieved and a second Gate 3 run builds on
+the first instead of redoing it. That version is named in the run's own record
+and in `<digest>.publications.json`, never in the bundle's `manifest.json`,
+which names no document at all — see below. A patch that rewrites what the review record already
 says is recognised on the dry run, so it neither mints a version nor spends its
 idempotency key; it escalates instead. A model session that fails — the refiner,
 the summarizer — escalates and the report still reaches the captain with every
