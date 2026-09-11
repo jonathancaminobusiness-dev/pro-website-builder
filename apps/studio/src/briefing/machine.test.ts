@@ -132,12 +132,16 @@ describe('conversation ui state', () => {
     expect(settled.pending).toBeNull();
   });
 
-  it('keeps a skip from wiping what the captain had typed', () => {
+  it('leaves the next question an empty field after a skip, never the text written for the last one', () => {
     const skipping = reduce(opened({ state: 'question', question: clarifyingQuestion() }), { type: 'draft', value: 'rascunho pela metade' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } });
-    const settled = conversationReducer(skipping, { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
+    const nextQuestion = conversationSnapshot({ state: 'question', question: { id: 'question-second', prompt: 'Que prova o público pede primeiro?', why: 'Ela decide o que a home mostra antes de tudo.' }, messageCount: 3 });
+    const settled = conversationReducer(skipping, { type: 'settled', snapshot: nextQuestion });
+    const can = affordances(settled, NOW);
 
     expect(pendingMessage(skipping)).toBe('Pular esta pergunta');
-    expect(settled.draft).toBe('rascunho pela metade');
+    expect(settled.draft).toBe('');
+    expect(can.asking).toBe(true);
+    expect(can.canAnswer).toBe(false);
   });
 
   it('holds an edited summary across a failed close so the retry closes what the captain wrote', () => {
