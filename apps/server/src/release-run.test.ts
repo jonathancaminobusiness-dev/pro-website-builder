@@ -84,7 +84,7 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
     }
   }
   const events = (id: string) => repository.listEvents(id);
-  return { origin, runId: created.runId, run, releaseRoot, evidenceDir, stageVersionId, events };
+  return { origin, runId: created.runId, run, releaseRoot, evidenceDir, stageVersionId, events, repository };
 }
 
 describe('Gate 3 over the local API', () => {
@@ -497,6 +497,48 @@ describe('Gate 3 over the local API', () => {
     expect(published.status).toBe(200);
     expect(await readdir(join(releaseRoot, prepared.digest))).toContain('manifest.json');
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
+  });
+
+  it('leaves no bundle on disk when the approval that closes the gate cannot be persisted', async () => {
+    const { origin, runId, releaseRoot, run, repository } = await harness();
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    // The gate's own approval cannot be written. Nothing has accepted this
+    // publication yet, so the bundle it wrote goes away with it and the run is
+    // left exactly where it was: at the gate, awaiting the captain.
+    const createApproval = repository.createApproval.bind(repository);
+    repository.createApproval = async (approval) => {
+      if (approval.stage === 'finalization') throw new Error('the approvals table is unavailable');
+      return createApproval(approval);
+    };
+    const refused = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(refused.status).toBe(500);
+    expect((await refused.json() as { error: string }).error).toMatch(/approvals table/);
+    expect(await readdir(releaseRoot)).not.toContain(prepared.digest);
+    expect(run.snapshot().status).toBe('needs_review');
+    expect(run.snapshot().exportManifest).toBeUndefined();
+    expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization' && entry.decision === 'approved')).toHaveLength(0);
+    expect(run.releaseSnapshot()?.published).toBeUndefined();
+
+    // With the approval writable again the same bundle publishes, and what the
+    // run reports is a release whose bytes are on disk.
+    repository.createApproval = createApproval;
+    const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(published.status).toBe(200);
+    expect(run.snapshot().status).toBe('succeeded');
+    expect(await readdir(join(releaseRoot, prepared.digest))).toContain('manifest.json');
+  });
+
+  it('refuses a publish whose document the linter rejects, and says so as a conflict', async () => {
+    const { origin, runId, run } = await harness();
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    // The document at the gate stops passing the linter: a node takes a raw
+    // visual value instead of a token. No gate closes over that, and the Studio
+    // reads it as the state conflict it is rather than as a broken server.
+    run.releaseContext().current.ir.pages.routes[0]!.nodes[0]!.props.color = '#ff00ff';
+    const refused = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: string }).error).toMatch(/lint error/);
+    expect(run.snapshot().status).toBe('needs_review');
   });
 
   it('has no release routes when the server does not serve the finalization stage', async () => {
