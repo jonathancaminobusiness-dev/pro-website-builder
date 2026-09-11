@@ -46,11 +46,10 @@ export interface ConversationUiState {
 
 export type ConversationAction =
   | { type: 'reset' }
-  | { type: 'resumed'; snapshot: ConversationSnapshot | null }
+  | { type: 'resumed'; snapshot: null }
   | { type: 'draft'; value: string }
   | { type: 'summaryDraft'; value: string }
   | { type: 'begin'; intent: PendingIntent }
-  | { type: 'retry' }
   | { type: 'discard' }
   | { type: 'settled'; snapshot: ConversationSnapshot }
   | { type: 'failed'; failure: ConversationFailure };
@@ -86,26 +85,19 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
   switch (action.type) {
     case 'reset':
       return initialConversationState();
+    // The server has no conversation for this run. That only means "this flow
+    // does not exist here" when none was ever read; after a successful read it
+    // is a failed read, so the history stays and the stage stays closed.
     case 'resumed':
-      if (action.snapshot === null) {
-        // A 404 only means "this server has no conversation for this run" when
-        // none was ever read. After a successful read it is a failed read: the
-        // history stays, the briefing stays open and the stage stays closed.
-        return state.snapshot === null
-          ? { ...state, availability: 'absent', snapshot: null, pending: null, failure: null }
-          : { ...state, failure: { message: 'Não foi possível reabrir a conversa desta execução: o servidor não a encontrou. Nada foi fechado e o que já foi lido continua aqui. Tente novamente.' } };
-      }
-      return { ...state, availability: 'available', snapshot: action.snapshot, summaryDraft: summarySeed(action.snapshot), pending: null, failure: null };
+      return state.snapshot === null
+        ? { ...state, availability: 'absent', pending: null, failure: null }
+        : { ...state, pending: null, failure: { message: 'Não foi possível reabrir a conversa desta execução: o servidor não a encontrou. Nada foi fechado e o que já foi lido continua aqui. Tente novamente.' } };
     case 'draft':
       return { ...state, draft: action.value };
     case 'summaryDraft':
       return { ...state, summaryDraft: action.value };
     case 'begin':
       return { ...state, pending: action.intent, failure: null };
-    // A retry keeps the pending intent exactly as it was — same kind, same body,
-    // same idempotency key — and only clears the error the captain just read.
-    case 'retry':
-      return state.pending === null ? state : { ...state, failure: null };
     // Giving up on the pending request instead of replaying it: the field it
     // came from opens again and the next send is a new request with a new key.
     case 'discard':
@@ -125,10 +117,14 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
         failure: null,
       };
     }
+    // A read carries no body and no field, so a failed one holds nothing back:
+    // it is dropped, and every exit the conversation had stays live behind the
+    // error the captain can replay.
     case 'failed':
       return {
         ...state,
         availability: state.snapshot === null && state.pending?.kind === 'resume' ? 'unreachable' : state.availability,
+        pending: state.pending?.kind === 'resume' ? null : state.pending,
         failure: action.failure,
       };
   }
@@ -195,7 +191,7 @@ export interface ConversationAffordances {
   /** A ceiling was reached: the panel stops asking and offers the editable summary and a manual close. */
   atLimit: boolean;
   closed: boolean;
-  /** The failed request can be sent again with the intent it already had. */
+  /** The failure can be replayed: the pending request as it was sent, or the read that failed. */
   canRetry: boolean;
   /**
    * The failed request carried text from a field on screen, so dropping it and
@@ -208,7 +204,7 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
   const snapshot = state.snapshot;
   const busy = state.pending !== null && state.failure === null;
   const locked = state.pending !== null;
-  const canRetry = state.pending !== null && state.failure !== null;
+  const canRetry = state.failure !== null;
   const canDiscard = canRetry && (state.pending?.kind === 'confirm' || (state.pending?.kind === 'send' && (state.pending.request.intent === 'entry' || state.pending.request.intent === 'answer')));
   const ready = state.availability === 'available' && snapshot !== null;
   if (!ready || snapshot === null) {

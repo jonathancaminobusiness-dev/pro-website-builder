@@ -49,7 +49,9 @@ function snapshot(status: IdentityGateSnapshot['status'], withResult = false): I
 
 /** A controller whose only interesting fact here is where its conversation stands. */
 function controllerFor(snapshot: ConversationSnapshot | null): BriefingConversationController {
-  const state = conversationReducer(initialConversationState(), { type: 'resumed', snapshot });
+  const state = snapshot === null
+    ? conversationReducer(initialConversationState(), { type: 'resumed', snapshot: null })
+    : conversationReducer(initialConversationState(), { type: 'settled', snapshot });
   const noop = (): undefined => undefined;
   return {
     state,

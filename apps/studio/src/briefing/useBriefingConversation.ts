@@ -72,10 +72,8 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
     closedBriefing: state.snapshot && briefingClosed(state.snapshot) ? state.snapshot.summary : null,
     resume: () => { if (runId) void run({ kind: 'resume' }, runId); },
     retry: () => {
-      const pending = latest.current.pending;
-      if (!pending || !runId) return;
-      dispatch({ type: 'retry' });
-      void run(pending, runId);
+      if (!runId) return;
+      void run(latest.current.pending ?? { kind: 'resume' }, runId);
     },
     discard: () => dispatch({ type: 'discard' }),
     sendEntry: () => send('entry', latest.current.draft.trim()),
