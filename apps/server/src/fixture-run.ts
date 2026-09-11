@@ -113,14 +113,12 @@ export class FixtureRun {
     this.stageIndex = Math.min(approved.length, STAGES.length);
     const events = await this.options.repository.listEvents(runId);
     // The project holds every run's versions, so what this run left undecided is
-    // read from its own log, in order: a version it created off the head it kept
-    // is pending until a rejection rewinds it, and a rerun proposes it again.
-    const kept = new Set<string>();
-    for (let cursor = byId.get(head.id); cursor; cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined) kept.add(cursor.id);
+    // read from its own log, in order: a proposal it made on the head it still
+    // holds is pending until a rejection retires it, and a rerun proposes again.
     const undecided = new Set<string>();
     for (const event of events) {
-      if (event.type === 'version.created' && !kept.has(String(event.payload.versionId))) undecided.add(String(event.payload.versionId));
-      if (event.type === 'version.rewound') undecided.delete(String(event.payload.rejectedVersionId));
+      if (event.type === 'version.created' && byId.get(String(event.payload.versionId))?.parentId === head.id) undecided.add(String(event.payload.versionId));
+      if (event.type === 'version.rewound') { undecided.delete(String(event.payload.rejectedVersionId)); undecided.delete(String(event.payload.retiredVersionId)); }
     }
     this.discardedStage = undecided.size > 0 ? STAGES[this.stageIndex] : undefined;
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
@@ -226,7 +224,7 @@ export class FixtureRun {
     }
     await ignoringDuplicate(this.options.repository.createApproval({ ...rejection, runId: this.runId(), projectId: this.projectId() }));
     await this.record('approval.recorded', { stage, decision: 'rejected', versionId: rejection.versionId });
-    if (parent) await this.record('version.rewound', { stage, rejectedVersionId: rejection.versionId, versionId: parent.id });
+    if (parent) await this.record('version.rewound', { stage, rejectedVersionId: rejection.versionId, retiredVersionId: rejected.id, versionId: parent.id });
     return this.snapshot();
   }
 
