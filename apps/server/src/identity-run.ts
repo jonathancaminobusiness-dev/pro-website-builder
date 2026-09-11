@@ -6,6 +6,7 @@ import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { approvalOf, identityHash, identityLint, identityStageDeadlineMs as calculateIdentityStageDeadlineMs, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, resolveIdentityStageDeadlines, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 import { BriefingValidationError, IDENTITY_BRIEFING, INVALID_IDENTITY_BRIEFING, LEGACY_INVALID_BRIEFING_MESSAGE, normalizeIdentityBriefing } from './identity-briefing.js';
+import { BriefingConversation, ConversationError } from './identity-conversation.js';
 
 export { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -44,6 +45,8 @@ function mergeFailures(...groups: Array<Array<{ taskId: string; reason: string }
 }
 
 const INTERRUPTED = 'The server restarted while the identity stage was running, so that fan-out was lost. Start the stage again.';
+
+const FROZEN_BRIEFING = 'A etapa de identidade desta execução já começou, então o briefing dela está congelado. Crie uma nova execução para trabalhar com um briefing diferente.';
 
 function identityStageDeadlineMs(deadlines: Partial<IdentityStageDeadlines> | undefined, maxActiveClaude: number): number {
   const override = Number(process.env.PWB_STAGE_DEADLINE_MS);
@@ -124,10 +127,32 @@ export class IdentityRun {
   private settling: Promise<void> | undefined;
   private abort: AbortController | undefined;
   private briefing: string;
+  private readonly conversationRun: BriefingConversation;
   private readonly deadlines: IdentityStageDeadlines;
 
   constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number; modelAlias: string }) {
     this.briefing = normalizeIdentityBriefing(options.briefing);
+    this.conversationRun = new BriefingConversation({
+      runId: options.runId,
+      provider: options.provider,
+      persist: async (snapshot, confirmedBriefing) => { await options.repository.saveConversation(options.runId, JSON.stringify(snapshot), confirmedBriefing); },
+      // No turn is bought on an execution that could never take its answer, and
+      // the same rule is asked again inside the section the confirmation writes
+      // and applies in — the section `start` also takes to claim the stage. A
+      // turn takes up to a minute and the captain can start the stage inside
+      // it, so the second ask is not redundant with the first: it is the one
+      // that protects a running fan-out from being replaced under it.
+      confirmSection: (work) => this.exclusive(work),
+      guardTurn: (turn) => {
+        this.refuseIfTerminal('create another one to work on a briefing.');
+        if (!turn.cancelling && this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
+      },
+      onConfirmed: (briefing) => {
+        this.briefing = briefing;
+        this.stage = this.newStage();
+      },
+      initialText: () => this.briefing,
+    });
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
@@ -187,6 +212,9 @@ export class IdentityRun {
     // reading the run: the normalized briefing is already the one in memory, so
     // a write this process cannot do now is left to a later restore.
     if (briefing !== run.briefing) await this.options.repository.updateRunBriefing(this.options.runId, briefing).catch(() => undefined);
+    // The conversation is rebuilt from the execution before anything else reads
+    // it, so a restarted server serves the same transcript, state and summary.
+    this.conversationRun.restore(run.conversation);
     this.stage = this.newStage();
     for (const version of await this.options.repository.listVersions(run.projectId)) {
       if (this.store.get(version.id)) continue;
@@ -248,6 +276,21 @@ export class IdentityRun {
   }
 
   /**
+   * Everything that decides which briefing this execution runs on, one at a
+   * time: the claim a start makes on the stage, and the write-and-apply of a
+   * confirmation. Holding them apart is what makes the freeze meaningful — a
+   * start that reads `briefingIsFrozen() === false` can no longer slip between
+   * that answer and the briefing being applied.
+   */
+  private lane: Promise<unknown> = Promise.resolve();
+
+  private exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.lane.then(work, work);
+    this.lane = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  /**
    * The one entry point that spends model turns. Nothing else in this class
    * starts a worker.
    *
@@ -255,28 +298,36 @@ export class IdentityRun {
    * snapshot, and never holds its caller for the stage deadline — which is
    * counted in tens of minutes, far beyond any HTTP client's patience. What the
    * stage becomes is read from the snapshot, through the polling the studio
-   * already does.
+   * already does. The claim itself is taken on the exclusive lane, so a
+   * confirmation can neither slip between the freeze answer and this claim nor
+   * replace the stage this one is about to run.
    */
   async begin(): Promise<IdentityRunSnapshot> {
     this.refuseIfTerminal('create another one to run the identity stage.');
-    // A failure is not the end of the run: the captain can ask again here, on
-    // the same terms a restarted process already offers.
-    if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
-    if (this.started) return this.snapshot();
-    this.started = true;
-    this.status = 'running';
-    this.abort = new AbortController();
-    this.failure = undefined;
-    this.inFlight = this.runStage(this.abort.signal).then(async (result) => {
-      this.result = result;
-      await this.persistCandidates(result);
-      this.status = 'needs_review';
-      await this.checkpoint();
-    }).catch(async (error: unknown) => {
-      this.failure = error instanceof Error ? error.message : 'The identity stage failed.';
-      this.status = 'failed';
-      await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.stage.failed', payload: { reason: this.failure } }));
-    }).catch(() => undefined);
+    await this.exclusive(async () => {
+      // A failure is not the end of the run: the captain can ask again here, on
+      // the same terms a restarted process already offers.
+      if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
+      if (this.started) return;
+      this.started = true;
+      this.status = 'running';
+      this.abort = new AbortController();
+      this.failure = undefined;
+      this.inFlight = this.runStage(this.abort.signal).then(async (result) => {
+        this.result = result;
+        await this.persistCandidates(result);
+        this.status = 'needs_review';
+        await this.checkpoint();
+      }).catch(async (error: unknown) => {
+        // A run that failed holds nothing: the partial result is discarded, so
+        // the snapshot never shows directions no gate can decide and the
+        // briefing is free again.
+        this.result = undefined;
+        this.failure = error instanceof Error ? error.message : 'The identity stage failed.';
+        this.status = 'failed';
+        await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.stage.failed', payload: { reason: this.failure } }));
+      }).catch(() => undefined);
+    });
     return this.snapshot();
   }
 
@@ -305,6 +356,23 @@ export class IdentityRun {
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  /**
+   * The briefing is frozen exactly while the execution holds identity work made
+   * from it: a fan-out in flight, or one whose checkpoint the run carries. Both
+   * facts survive a restart — `restore` rebuilds the checkpoint and a lost
+   * fan-out comes back as `interrupted` — so the same execution answers a
+   * confirmation the same way before and after the process bounced. A stage
+   * that failed or was interrupted froze nothing: it discards its result, so
+   * the captain may confirm a new briefing and start again on it. A result the
+   * run still holds counts as started whatever the status says, which is the
+   * guard that survives a failure path that forgot to discard one.
+   */
+  private briefingIsFrozen(): boolean {
+    if (this.result !== undefined) return true;
+    if (this.status === 'failed' || this.status === 'interrupted') return false;
+    return this.status === 'running';
   }
 
   /**
@@ -351,6 +419,10 @@ export class IdentityRun {
 
   async approve(input: { directionId: string; approverRole: string; rationale: string; overrideRationale?: string }): Promise<IdentityRunSnapshot> {
     this.refuseIfTerminal('Gate 1 cannot be decided on it.');
+    // Both gate routes decide on what the run holds: a direction the run no
+    // longer carries is refused here rather than handed to a stage whose
+    // fan-out the run already discarded.
+    this.candidate(input.directionId);
     const approval = await this.stage.approve({ ...input, ...(this.abort ? { signal: this.abort.signal } : {}) });
     const record: Approval = approvalOf(approval.record, this.approvals.length);
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
@@ -414,6 +486,9 @@ export class IdentityRun {
   }
 
   renderedFor(versionId: string): RenderedDocument | undefined { return this.rendered.get(versionId); }
+
+  /** The briefing conversation this execution carries; the API's three conversation routes are its only callers. */
+  get conversation(): BriefingConversation { return this.conversationRun; }
 
   get projectId(): string { return this.root.ir.meta.projectId; }
 

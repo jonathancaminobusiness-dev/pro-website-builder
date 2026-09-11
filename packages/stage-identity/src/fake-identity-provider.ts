@@ -3,6 +3,7 @@ import type { ModelProvider } from '@pwb/providers';
 import { identityAxisBrief, identityAxisBriefs, type IdentityAxisBriefId } from './axes.js';
 import { identityCritics } from './critics.js';
 import type { BriefSpec, CritiqueReport, DirectionVectorDraft, ImagePromptPlan } from './contracts.js';
+import { FAKE_CONVERSATION_TASK_PREFIX, fakeBriefingConversationTurn } from './fake-conversation.js';
 
 /**
  * The deterministic stand-in the whole identity journey runs on in CI. It is a
@@ -331,6 +332,9 @@ function imagePlanFor(seedId: IdentityAxisBriefId): ImagePromptPlan {
 export class FakeIdentityProvider implements ModelProvider {
   async propose(task: AgentTask, signal?: AbortSignal): Promise<AgentResult> {
     if (signal?.aborted) throw new DOMException('The task was cancelled.', 'AbortError');
+    if (task.id.startsWith(FAKE_CONVERSATION_TASK_PREFIX)) {
+      return { taskId: task.id, status: 'succeeded', summary: 'Turno determinístico da conversa de briefing.', artifact: fakeBriefingConversationTurn(task.brief) as unknown as Record<string, unknown> };
+    }
     if (task.id === 'identity-curator') {
       return { taskId: task.id, status: 'succeeded', summary: 'BriefSpec extraído do briefing fixo.', artifact: fakeBriefSpec as unknown as Record<string, unknown> };
     }
