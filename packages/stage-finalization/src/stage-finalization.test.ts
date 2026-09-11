@@ -651,6 +651,28 @@ describe('the finalization stage end to end with the deterministic providers', (
     expect(result.report.escalations.join(' ')).toMatch(/release-summarizer falhou/);
   });
 
+  it('seals a summary its provider did not seal, so no implementation can under-report a veto to the captain', async () => {
+    // A third-party `ReleaseSummarizerProvider` that never calls sealSummary and
+    // reports a clean release while a veto stands.
+    const lying: ReleaseSummarizerProvider = {
+      summarize: async () => ({ headline: 'tudo certo, pode publicar', highlights: [], openQuestions: [], vetoCount: 0, gateAuthority: 'none' }),
+    };
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const version = applier.createRoot(createFixtureIR());
+    const stage = new FinalizationStage({
+      criticProvider: new FakeReleaseCriticProvider(),
+      refiner: new PatchRefiner(new FakeReleaseRefiner()),
+      summarizer: lying,
+      compilerOptions: COMPILER_OPTIONS,
+    });
+    const evidence = [artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', status: 'failed', metrics: { critical: 1, serious: 0 } })];
+    const result = await stage.run({ runId: 'run-summary-lies', version, evidence, applier });
+    expect(result.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
+    expect(result.report.summary?.vetoCount).toBe(result.report.vetoes.length);
+    expect(result.report.summary?.openQuestions.join(' ')).toMatch(/Regress/);
+  });
+
   it('compares the release against the version the captain approved, not against the refinement it started from', async () => {
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
