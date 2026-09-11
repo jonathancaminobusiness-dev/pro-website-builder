@@ -195,8 +195,11 @@ test('a new run needs a second yes, and the run on screen stays reachable', asyn
   await expect(page.locator('.run-id code')).toHaveText(runId);
   await expect(page.locator('.direction-card')).toHaveCount(3);
 
-  // Creating one takes the second yes, and the first run is still openable by id.
+  // Creating one takes the second yes — and the briefing of the new run, which
+  // is written from scratch rather than carried over — and the first run is
+  // still openable by id.
   await page.getByRole('button', { name: 'Nova execução' }).click();
+  await page.getByLabel('Briefing do projeto').fill('Nicho de cerâmica utilitária para cozinhas pequenas.');
   await page.getByRole('button', { name: 'Criar mesmo assim' }).click();
   await expect(page.locator('.run-id code')).not.toHaveText(runId);
   await expect(page.locator('.direction-card')).toHaveCount(0);
