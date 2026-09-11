@@ -93,6 +93,15 @@ describe('Gate 1 execution progress', () => {
     expect(markup).not.toContain('Executando…');
   });
 
+  it('renders an invalid legacy run as ended without a retry action', () => {
+    const markup = renderGate({ ...snapshot('unrecoverable'), error: 'Esta execução legada foi encerrada porque o briefing salvo é inválido.' });
+
+    expect(markup).toContain('encerrada sem recuperação');
+    expect(markup).toContain('Execução encerrada');
+    expect(markup).toContain('briefing salvo é inválido');
+    expect(markup).not.toContain('Tentar novamente');
+  });
+
   it('keeps a queued server status visible while the start request is pending', () => {
     const markup = renderGate(snapshot('queued'), false, true);
 

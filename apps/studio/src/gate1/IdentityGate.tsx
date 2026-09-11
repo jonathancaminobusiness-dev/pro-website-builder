@@ -30,7 +30,7 @@ export interface IdentityDirectionView {
 
 export interface IdentityGateSnapshot {
   runId: string;
-  status: 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'reopened' | 'interrupted' | 'failed';
+  status: 'queued' | 'running' | 'needs_review' | 'approved' | 'cancelled' | 'unrecoverable' | 'reopened' | 'interrupted' | 'failed';
   baseVersionId: string;
   briefing: string;
   brief?: { audience: string; promise: string; proof: string[]; exclusions: string[]; evidence: Array<{ id: string; quote: string; source: string }>; unknowns: string[]; assumptions: Array<{ id: string; statement: string; risk: string }> };
@@ -144,6 +144,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const stopped = snapshot?.status === 'cancelled';
   const running = snapshotRunning;
   const failed = snapshot?.status === 'failed';
+  const unrecoverable = snapshot?.status === 'unrecoverable';
   const closed = snapshot?.gate.state === 'closed';
   const reopened = snapshot?.gate.state === 'reopened';
   const decided = closed || reopened;
@@ -183,8 +184,8 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
         {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
-        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
-          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || unrecoverable || snapshot.directions.length > 0}>
+          {unrecoverable ? 'Execução encerrada' : stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 
@@ -341,6 +342,7 @@ function statusLabel(status: IdentityGateSnapshot['status'] | undefined): string
     case 'needs_review': return 'aguarda gate';
     case 'approved': return 'aprovado';
     case 'cancelled': return 'cancelada';
+    case 'unrecoverable': return 'encerrada sem recuperação';
     case 'reopened': return 'reaberto';
     case 'interrupted': return 'interrompido pelo reinício';
     case 'failed': return 'falhou';

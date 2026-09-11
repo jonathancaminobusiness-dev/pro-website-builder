@@ -3,6 +3,8 @@ import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/bri
 /** The compatibility briefing used only when an older caller omits the new field. */
 export { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
 
+export const LEGACY_INVALID_BRIEFING_MESSAGE = `Esta execução legada foi encerrada porque o briefing salvo é inválido. Os dados foram preservados; crie uma nova execução com um briefing entre 1 e ${IDENTITY_BRIEFING_MAX_LENGTH} caracteres.`;
+
 export class BriefingValidationError extends Error {
   constructor(message: string) {
     super(message);
