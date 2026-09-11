@@ -76,11 +76,12 @@ export default function BriefingConversation(props: BriefingConversationProps): 
     </section>;
   }
 
-  const stopped = can.closed || snapshot.state === 'cancelled';
   const counter = `${snapshot.messageCount}/${snapshot.limits.messageLimit} mensagens`;
-  const showSummary = !stopped && (snapshot.state === 'confirmation' || can.atLimit);
-  const showEntry = !stopped && snapshot.state === 'entry';
-  const showQuestion = !stopped && snapshot.question !== undefined && !can.atLimit;
+  // What is on screen is decided by the same affordances that decide what can be
+  // sent, so no control renders that could never act.
+  const showSummary = can.summaryOpen;
+  const showEntry = !can.closed && !can.atLimit && snapshot.state === 'entry';
+  const showQuestion = can.asking;
   // Correcting a turn loads it back into the draft, so it is offered only while
   // a field bound to the draft is on screen to receive it.
   const draftVisible = showEntry || showQuestion;
@@ -186,13 +187,13 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         whichever control block happens to be on screen: a state that shows no
         composer — the first reading, a summary the server has not decided yet,
         a failed conversation — still has an exit. */}
-    {!stopped && <div className="actions chat-exit">
+    {!can.closed && <div className="actions chat-exit">
       <button className="secondary" onClick={props.onCancel} disabled={!can.canCancel}>Cancelar conversa</button>
-      {!draftVisible && !showSummary && state.failure === null && <button className="secondary" onClick={props.onResume} disabled={can.busy}>Reabrir do ponto salvo</button>}
+      {state.failure === null && <button className="secondary" onClick={props.onResume} disabled={can.busy}>Reabrir do ponto salvo</button>}
     </div>}
 
     {snapshot.state === 'cancelled' && <p className="chat-cancelled" role="status">
-      Conversa cancelada. Nada foi enviado ao curador e nenhuma etapa de identidade foi gasta; a execução continua aberta e o texto acima pode ser retomado.
+      Conversa cancelada. Nada foi enviado ao curador e nenhuma etapa de identidade foi gasta. A execução continua aberta: reabra a conversa do ponto salvo ou feche o briefing pelo resumo editável acima, que é o que libera a etapa de identidade.
     </p>}
 
     {can.closed && <p className="chat-closed" role="status">
@@ -200,7 +201,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
     </p>}
 
     {snapshot.state === 'failed' && <p className="error-banner" role="alert">
-      A conversa parou: {snapshot.error ?? 'o servidor não conseguiu continuar.'} Nada foi fechado e nada foi enviado ao curador.
+      A conversa parou: {snapshot.error ?? 'o servidor não conseguiu continuar.'} Nada foi fechado e nada foi enviado ao curador; reabra a conversa do ponto salvo ou feche o briefing pelo resumo editável.
     </p>}
 
     {snapshot.directions.length > 0 && <div className="chat-directions">

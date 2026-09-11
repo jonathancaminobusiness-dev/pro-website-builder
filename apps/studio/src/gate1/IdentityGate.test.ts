@@ -127,6 +127,15 @@ describe('Gate 1 execution progress', () => {
     expect(markup).not.toContain('>Executar etapa de identidade<');
   });
 
+  it('holds the identity stage closed while the conversation is still being read', () => {
+    const pending: BriefingConversationController = { ...controllerFor(null), state: initialConversationState('identity-progress-fixture') };
+    const markup = renderGate(snapshot('queued'), false, false, pending);
+
+    expect(markup).toContain('Abrindo a conversa desta execução…');
+    expect(markup).toContain('disabled="">Abrindo a conversa desta execução…');
+    expect(markup).not.toContain('>Executar etapa de identidade<');
+  });
+
   it('enables the identity stage once the captain closed the briefing', () => {
     const markup = renderGate(snapshot('queued'), false, false, controllerFor(conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T09:00:00.000Z', messageCount: 4 })));
 

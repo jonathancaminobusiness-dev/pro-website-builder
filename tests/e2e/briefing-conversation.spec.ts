@@ -116,13 +116,23 @@ test('says plainly that a cancelled conversation sent nothing to the curator', a
 
   const chat = page.locator('.briefing-chat');
   await expect(chat.getByText('Nada foi enviado ao curador')).toBeVisible();
-  await expect(chat.getByRole('button', { name: 'Fechar briefing' })).toHaveCount(0);
   // A cancellation answers no question, so it carries no question id.
   const cancels = api.writes.filter((write) => write.body.intent === 'cancel');
   expect(cancels).toHaveLength(1);
   expect(cancels[0]?.body.questionId).toBeUndefined();
   // Cancelling closed no briefing, so it enabled no stage either.
   await expect(page.getByRole('button', { name: 'Feche o briefing para executar' })).toBeDisabled();
+
+  // Cancelling is not a dead end: the persisted text can still be reopened and
+  // closed, which is what enables the stage.
+  await expect(chat.getByRole('button', { name: 'Reabrir do ponto salvo' })).toBeEnabled();
+  await chat.getByRole('button', { name: 'Reabrir do ponto salvo' }).click();
+  const summary = page.getByLabel(/Briefing final, editável/);
+  await expect(summary).toHaveValue(ENTRY);
+  await page.getByRole('button', { name: 'Fechar briefing' }).click();
+
+  await expect(chat.locator('.chat-closed')).toContainText('Briefing fechado');
+  await expect(page.getByRole('button', { name: 'Executar etapa de identidade' })).toBeEnabled();
 });
 
 test('reads the ceiling from the contract and closes manually once it is reached', async ({ page }) => {
