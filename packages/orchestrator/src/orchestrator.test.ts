@@ -34,6 +34,14 @@ describe('orchestrator', () => {
     expect(new RunPlanner(store).plan('run-default', root.id, 'brief').tasks.map((task) => task.deadlineMs)).toEqual(deadlines);
   });
 
+  it('gives the identity stage enough time for refinement and the second critic read', () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const identity = new RunPlanner(store).plan('run-identity-critical-path', root.id, 'brief').tasks.find((task) => task.stage === 'identity');
+
+    expect(identity?.deadlineMs).toBe(45 * 60_000);
+  });
+
   it('gives each stage its own write boundary and refuses a later stage that touches the identity', () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());

@@ -5,7 +5,11 @@ export interface RunPlan { runId: string; tasks: AgentTask[]; edges: [string, st
 
 const readablePaths = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
-export const stageDeadlinesMs: Record<AgentTask['stage'], number> = { identity: 15 * 60_000, prototype: 15 * 60_000, finalization: 20 * 60_000 };
+// Identity has a serial refinement and a second critic read after the initial
+// fan-out. Its stage budget must cover that critical path after the
+// accessibility critics' ten-minute default, while each worker still keeps its
+// own deadline for fail-fast recovery.
+export const stageDeadlinesMs: Record<AgentTask['stage'], number> = { identity: 45 * 60_000, prototype: 15 * 60_000, finalization: 20 * 60_000 };
 
 function valueAt(ir: DesignIR, path: string): unknown {
   let current: unknown = ir;
