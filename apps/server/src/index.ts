@@ -1,5 +1,4 @@
 import { mkdir } from 'node:fs/promises';
-import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { RenderHub } from '@pwb/render-hub';
 import { renderDesign } from '@pwb/renderer';
@@ -36,6 +35,26 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // moved on from.
   const identityLoading = new Map<string, Promise<IdentityRun | undefined>>();
   const newIdentityRun = (id: string, briefing?: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir, ...(briefing !== undefined ? { briefing } : {}), ...(identityDeadlines ? { deadlines: identityDeadlines } : {}) });
+  /**
+   * One run object per id, for every reader: the prototype registry asks for the
+   * identity run it is seeded from through the same loader the API uses, so a
+   * Gate 1 the captain decided in an earlier process is read back rather than
+   * missed.
+   */
+  const loadIdentityRun = async (id: string): Promise<IdentityRun | undefined> => {
+    const existing = identityRuns.get(id);
+    if (existing) return existing;
+    const inFlight = identityLoading.get(id);
+    if (inFlight) return inFlight;
+    const loading = (async () => {
+      const run = newIdentityRun(id);
+      if (!await run.restore()) return undefined;
+      identityRuns.set(id, run);
+      return run;
+    })();
+    identityLoading.set(id, loading);
+    try { return await loading; } finally { identityLoading.delete(id); }
+  };
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
@@ -52,6 +71,18 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // preview origin, so contrast, focus, axe, overflow and stability are observed rather than assumed.
   const registry = new PrototypeRunRegistry({
     repository,
+    // Gate 2 runs on what Gate 1 approved, and on nothing else: the seed is read
+    // from the identity run's own gate, so a request naming an undecided or a
+    // since-changed identity is refused instead of measuring a fixture.
+    identity: async ({ identityRunId, versionId }) => {
+      const runId = identityRunId ?? (versionId ? repository.identityApprovalRun(versionId) : undefined);
+      if (!runId) return undefined;
+      const run = await loadIdentityRun(runId);
+      const handoff = run?.snapshot().handoff;
+      const approved = run?.approvedVersion();
+      if (!run || !handoff || !approved) return undefined;
+      return { identityRunId: runId, projectId: run.projectId, versionId: handoff.versionId, identityHash: handoff.identityHash, approvedAt: handoff.approvedAt, stale: handoff.stale, ir: approved.ir };
+    },
     modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
     evidence: new RenderHubEvidenceSource({
       hub: new RenderHub({ cacheDir: renderCacheDir }),
@@ -89,9 +120,9 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     },
     loadRun: async (id) => {
       const existing = runs.get(id);
-      if (existing) return existing;
+      if (existing && !existing.reloadableFromLedger(await repository.listApprovals(id))) return existing;
       const run = new FixtureRun({ repository, provider, release });
-      if (!await run.restore(id)) return undefined;
+      if (!await run.restore(id)) return existing;
       runs.set(id, run);
       return run;
     },
@@ -107,27 +138,10 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
           return run;
         } finally { identityClaimed.delete(id); }
       },
-      loadRun: async (id) => {
-        const existing = identityRuns.get(id);
-        if (existing) return existing;
-        const inFlight = identityLoading.get(id);
-        if (inFlight) return inFlight;
-        const loading = (async () => {
-          const run = newIdentityRun(id);
-          if (!await run.restore()) return undefined;
-          identityRuns.set(id, run);
-          return run;
-        })();
-        identityLoading.set(id, loading);
-        try { return await loading; } finally { identityLoading.delete(id); }
-      },
+      loadRun: loadIdentityRun,
     },
   });
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);
   await new Promise<void>((resolve) => api.listen(apiPort, '127.0.0.1', resolve));
   return { api, preview, close: async () => { await preview.close(); await new Promise<void>((resolve, reject) => api.close((error) => error ? reject(error) : resolve())); database.sqlite.close(); } };
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  startServer().then(({ api, preview }) => { const { port } = api.address() as AddressInfo; console.log(`pro-website-builder server listening on http://127.0.0.1:${port}; preview on ${preview.origin}`); }).catch((error: unknown) => { console.error(error instanceof Error ? error.message : 'Server failed.'); process.exitCode = 1; });
 }

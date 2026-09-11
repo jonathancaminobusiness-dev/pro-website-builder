@@ -109,6 +109,17 @@ export class ProjectRepository {
     });
   }
 
+  /**
+   * The run whose Gate 1 approved this version, so a prototype run can be asked
+   * for by the approved version alone. The approvals table is the one place a
+   * closed gate is recorded, and Gate 1 writes exactly one approved row per
+   * decision, so the newest row wins if a version was approved twice.
+   */
+  identityApprovalRun(versionId: string): string | undefined {
+    const row = this.db.sqlite.prepare("SELECT run_id AS runId FROM approvals WHERE stage = 'identity' AND decision = 'approved' AND version_id = ? ORDER BY rowid DESC LIMIT 1").get(versionId) as { runId: string } | undefined;
+    return row?.runId;
+  }
+
   async getRun(runId: string): Promise<{ id: string; projectId: string; briefing: string } | undefined> {
     const row = this.db.sqlite.prepare('SELECT id, project_id AS projectId, briefing FROM runs WHERE id = ?').get(runId) as { id: string; projectId: string; briefing: string } | undefined;
     return row;

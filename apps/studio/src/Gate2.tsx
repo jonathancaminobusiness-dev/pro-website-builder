@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { rememberedIdentityRun } from './identityRun.js';
 import './gate2.css';
 
 type Verdict = 'pass' | 'revise' | 'uncertain';
@@ -20,12 +21,16 @@ interface Report {
   projection: { verdict: Verdict; rubric: Array<{ criterion: string; score: number; evidence: string }>; findings: Issue[] };
 }
 
+/** The Gate 1 execution a run was seeded from; the whole point of the run is to measure that identity. */
+interface Chain { identityRunId: string; identityVersionId: string; identityHash: string; projectId: string; }
+
 interface Progress {
   runId: string; status: 'queued' | 'running' | 'settled' | 'failed' | 'interrupted'; step: string; detail: string;
-  startedAt: string; updatedAt: string; error?: string;
+  startedAt: string; updatedAt: string; chain?: Chain; error?: string;
 }
 
 interface Result {
+  identityHash: string;
   stopReason: string; stopDetail: string; gate: 'needs_review' | 'vetoed'; journey: string;
   before: { versionId: string; label: string }; after: { versionId: string; label: string }; repaired: boolean;
   routes: Array<{ route: string; title: string }>; viewports: number[]; states: string[]; colorSchemes: Array<'light' | 'dark'>;
@@ -157,6 +162,7 @@ export default function Gate2(): ReactElement {
   const [lens, setLens] = useState<'perception' | 'comprehension' | 'projection'>('projection');
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [gateReason, setGateReason] = useState('');
+  const identityRunId = rememberedIdentityRun();
 
   const adopt = useCallback((next: Snapshot): void => {
     setSnapshot(next);
@@ -219,7 +225,10 @@ export default function Gate2(): ReactElement {
   const start = async (): Promise<void> => {
     setBusy(true); setError('');
     try {
-      const created = await request<Snapshot>('/api/prototype/runs', { method: 'POST', body: JSON.stringify({ approverRole: 'captain', runId: `gate2-${Date.now()}` }) });
+      // The stage starts from the identity Gate 1 approved, named by the run the
+      // captain decided it on. Without one the server refuses: there is nothing
+      // to prototype until an identity is approved.
+      const created = await request<Snapshot>('/api/prototype/runs', { method: 'POST', body: JSON.stringify({ approverRole: 'captain', runId: `gate2-${Date.now()}`, identityRunId: rememberedIdentityRun() }) });
       window.location.hash = `${GATE2_ROUTE}/${encodeURIComponent(created.runId)}`;
       setRunId(created.runId);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); }
@@ -247,6 +256,7 @@ export default function Gate2(): ReactElement {
         <section className="gate2-intro">
           <p>O protótipo é composto por agentes em paralelo sobre a identidade congelada, verificado por checagens determinísticas antes de qualquer modelo, e criticado por quatro sessões separadas. Nada roda até você pedir.</p>
           <p>A etapa mede cada revisão num navegador real, então leva minutos. A execução fica no endereço desta página: recarregar não perde a revisão, e reiniciar o servidor também não.</p>
+          <p className="gate2-chain">{identityRunId ? <>Esta execução parte da identidade aprovada no Gate 1 <code>{identityRunId}</code>.</> : <>Nenhum Gate 1 decidido neste navegador: <a href="#/">aprove uma identidade</a> antes de medir o protótipo.</>}</p>
           <button className="primary" onClick={() => void start()} disabled={busy || active !== undefined}>{busy ? 'Abrindo a execução…' : active ? 'Uma execução já está em andamento' : 'Executar a etapa de protótipo'}</button>
           {active && <p className="gate2-note">O servidor mede uma revisão por vez. <a href={`${GATE2_ROUTE}/${encodeURIComponent(active.runId)}`}>Acompanhe {active.runId}</a>.</p>}
           {recent.length > 0 && (
@@ -295,6 +305,7 @@ export default function Gate2(): ReactElement {
           <h1>{result.journey}</h1>
         </div>
         <div className="gate2-badges">
+          {snapshot.chain && <span className="qa-chip" title={`Gate 1 · ${snapshot.chain.identityRunId}`}>{result.identityHash === snapshot.chain.identityHash ? 'identidade do Gate 1 medida nesta revisão' : 'a identidade desta revisão não é a do Gate 1'}</span>}
           <span className={`status status-${result.gate}`}>{result.gate === 'vetoed' ? 'vetado pelo QA' : 'aguarda decisão'}</span>
           <span className="qa-chip" title={result.stopDetail}>parou por: {stopReasonCopy[result.stopReason] ?? result.stopReason}</span>
           <a className="gate2-back" href="#/">← pipeline</a>

@@ -6,6 +6,7 @@ import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type Sched
 import { ReleaseRun, type ReleaseApprover, type ReleaseContext, type ReleaseRunOptions, type ReleaseSnapshot } from './release-run.js';
 import type { ModelProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
+import { ignoringDuplicate } from './db/duplicates.js';
 import type { ProjectRepository } from './db/repository.js';
 
 type Stage = 'identity' | 'prototype' | 'finalization';
@@ -13,13 +14,6 @@ type FixtureStatus = 'queued' | 'needs_review' | 'rejected' | 'cancelled' | 'suc
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
 const STAGES: Stage[] = ['identity', 'prototype', 'finalization'];
-const duplicateCodes = new Set(['SQLITE_CONSTRAINT_PRIMARYKEY', 'SQLITE_CONSTRAINT_UNIQUE']);
-async function ignoringDuplicate(write: Promise<void>): Promise<void> {
-  try { await write; } catch (error) {
-    const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : '';
-    if (!duplicateCodes.has(code)) throw error;
-  }
-}
 
 export interface FixtureSnapshot {
   runId: string;
@@ -93,6 +87,9 @@ export class FixtureRun {
     const versions = await this.options.repository.listVersions(run.projectId);
     if (versions.length === 0) return false;
     this.runIdentifier = runId;
+    // A run read back from the ledger releases exactly like one this process
+    // created: Gate 3 belongs to the run, not to the object that first built it.
+    if (this.options.release) this.releaseRun = new ReleaseRun(runId, this.options.release);
     const byId = new Map(versions.map((version) => [version.id, version]));
     for (const version of versions) this.store.save({ id: version.id, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir });
     const approvals = await this.options.repository.listApprovals(runId);
@@ -103,7 +100,12 @@ export class FixtureRun {
     this.rendered = renderDesign(head.ir);
     this.lintErrorCount = lintDesign(head.ir).errorCount;
     this.approvals.push(...approvals);
-    this.stageIndex = Math.min(approved.length, STAGES.length);
+    // How far the chain got is how many leading stages closed, not how many rows
+    // the ledger holds: a gate decided twice is still one closed gate, and a
+    // chain whose Gate 1 and Gate 2 were closed by the identity and prototype
+    // runs arrives here as exactly those two rows.
+    this.stageIndex = STAGES.findIndex((stage) => !approved.some((entry) => entry.stage === stage));
+    if (this.stageIndex < 0) this.stageIndex = STAGES.length;
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
     const events = await this.options.repository.listEvents(runId);
@@ -155,6 +157,24 @@ export class FixtureRun {
     this.currentStage = null;
     this.openGate('approved');
     return this.snapshot();
+  }
+
+  /**
+   * Whether this object may be replaced by a fresh read of the ledger. Gates 1
+   * and 2 close in their own runs — in this process or another — so a chain run
+   * held in memory can be behind the approvals table it is judged by. A run with
+   * nothing in flight, nothing prepared, and a decision in the ledger it has not
+   * seen has no state of its own to lose, so the ledger is the better answer;
+   * one that is measuring, awaiting a decision or holding a prepared release is
+   * not replaceable.
+   */
+  reloadableFromLedger(approvals: Approval[]): boolean {
+    if (this.running || this.status !== 'queued' || this.currentStage !== null || this.scheduled !== undefined) return false;
+    if (this.releaseRun?.snapshot() !== undefined) return false;
+    // Only a decision this object never saw is worth rereading for; a run whose
+    // ledger says exactly what it already holds answers from memory.
+    const known = new Set(this.approvals.map((entry) => entry.id));
+    return approvals.some((entry) => !known.has(entry.id));
   }
 
   releaseEnabled(): boolean { return this.releaseRun !== undefined; }
@@ -267,6 +287,13 @@ export class FixtureRun {
     for (const stage of ['identity', 'prototype'] as const) {
       if (!this.approvedAt(stage)) return `O gate de release exige a aprovação do capitão na etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
     }
+    // An approval on a version the bundle does not descend from closes nothing:
+    // the gate has to have been decided on this document's own history.
+    const lineage = this.ancestry(this.currentVersion);
+    for (const stage of ['identity', 'prototype'] as const) {
+      const approval = this.approvedAt(stage)!;
+      if (!lineage.has(approval.versionId)) return `O bundle não descende da versão ${approval.versionId}, aprovada no gate de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
+    }
     if (!this.finalizationVersion) return 'A etapa de finalização ainda não produziu a versão que o gate de release compila.';
     if (this.status !== 'needs_review' || this.currentStage !== 'finalization') return 'O gate de finalização não está aberto: o release só é preparado e publicado enquanto a etapa aguarda a decisão do capitão.';
     return undefined;
@@ -318,6 +345,13 @@ export class FixtureRun {
   private discardPreparedRelease(): void {
     this.releaseGate = new PatchGate();
     if (this.options.release) this.releaseRun = new ReleaseRun(this.runIdentifier, this.options.release);
+  }
+
+  /** The compiled version and every ancestor of it this run holds, by id. */
+  private ancestry(version: VersionRecord): Set<string> {
+    const seen = new Set<string>();
+    for (let current: VersionRecord | undefined = version; current && !seen.has(current.id); current = current.parentId ? this.store.get(current.parentId) : undefined) seen.add(current.id);
+    return seen;
   }
 
   private approvedAt(stage: Stage): Approval | undefined {

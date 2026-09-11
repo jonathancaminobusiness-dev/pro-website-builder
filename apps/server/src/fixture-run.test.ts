@@ -531,3 +531,57 @@ describe('phase 0 fixture run', () => {
     second.sqlite.close();
   });
 });
+
+describe('the release gate reads the gates this document actually passed', () => {
+  it('refuses a bundle that does not descend from the version a gate was decided on', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-ancestry-'));
+    const dbPath = join(dir, 'ancestry.sqlite');
+    const first = openDatabase(dbPath);
+    const repository = new ProjectRepository(first);
+    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    await run.initialize('run-ancestry');
+    const root = run.snapshot().currentVersion;
+    await run.runNext();
+    await run.approve('identity', 'captain');
+    const identityVersion = run.snapshot().currentVersion;
+
+    // A revision of the same project that shares only the root with what Gate 1
+    // approved — a second branch, the way an alternative candidate is — carrying
+    // a prototype approval of its own.
+    const sibling = { ...createFixtureIR(), meta: { ...createFixtureIR().meta, versionId: 'v-sibling' } };
+    sibling.pages.routes[0]!.title = 'Outro ramo';
+    await repository.saveVersion({ id: 'v-sibling', projectId: root.ir.meta.projectId, parentId: root.id, hash: 'h-sibling', ir: sibling });
+    await repository.createApproval({
+      id: 'run-ancestry-prototype-sibling', runId: 'run-ancestry', projectId: root.ir.meta.projectId, stage: 'prototype',
+      approverRole: 'captain', versionId: 'v-sibling', versionHash: 'h-sibling', decision: 'approved', rationale: 'Aprovado em outro ramo.',
+    });
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-ancestry')).toBe(true);
+    // Both gates are closed and the finalization stage has run, so only the
+    // ancestry of the compiled document stands between this and a release.
+    const finalized = await restored.runNext();
+    expect(finalized.currentStage).toBe('finalization');
+    const blocker = restored.releaseBlocker();
+    expect(blocker).toMatch(/não descende/);
+    expect(blocker).toContain(identityVersion.id);
+    await expect(restored.prepareRelease()).rejects.toThrow(/não descende/);
+    second.sqlite.close();
+  });
+
+  it('opens the gate for a bundle that descends from both decided versions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-ancestry-ok-'));
+    const db = openDatabase(join(dir, 'ancestry.sqlite'));
+    const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    await run.initialize('run-ancestry-ok');
+    await atFinalizationGate(run);
+    const approved = run.snapshot().approvals.map((entry) => entry.versionId);
+    expect(run.releaseBlocker()).toBeUndefined();
+    const prepared = await run.prepareRelease();
+    expect(approved).toHaveLength(2);
+    expect(prepared.report.approvedVersionId).toBeTruthy();
+    db.sqlite.close();
+  });
+});

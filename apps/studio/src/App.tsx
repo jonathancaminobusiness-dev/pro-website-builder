@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Gate2 from './Gate2.js';
 import Gate3Panel from './Gate3Panel.js';
 import IdentityGate, { type IdentityGateSnapshot } from './gate1/IdentityGate.js';
+import { forgetIdentityRun, rememberedIdentityRun, rememberIdentityRun } from './identityRun.js';
 import { failureMessage, isMissing, RequestError, requestJson } from './request.js';
 
 interface Snapshot {
@@ -23,21 +24,6 @@ const stages = [{ id: 'identity', label: '01 Identidade' }, { id: 'prototype', l
 const views = [{ id: 'pipeline', label: 'Pipeline' }, { id: 'gate1', label: 'Gate 1 · identidade' }] as const;
 type ViewId = (typeof views)[number]['id'];
 
-/**
- * The one identity run this browser last worked on. A Gate 1 the captain left
- * open outlives both the tab and the server process, so the screen reopens it
- * from the ledger instead of starting an expensive fan-out again.
- */
-const IDENTITY_RUN_KEY = 'pwb.gate1.runId';
-function rememberedIdentityRun(): string {
-  try { return window.localStorage.getItem(IDENTITY_RUN_KEY) ?? ''; } catch { return ''; }
-}
-function rememberIdentityRun(runId: string): void {
-  try { window.localStorage.setItem(IDENTITY_RUN_KEY, runId); } catch { /* a browser that refuses storage still decides the gate in this session */ }
-}
-function forgetIdentityRun(): void {
-  try { window.localStorage.removeItem(IDENTITY_RUN_KEY); } catch { /* nothing to forget */ }
-}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return requestJson<T>(`${API_ORIGIN}${path}`, init);
@@ -82,6 +68,14 @@ export default function App() {
    * tab, including this one after a reload.
    */
   const [startingRun, setStartingRun] = useState(false);
+  /**
+   * The run Gate 3 compiles. Once Gate 1 closed, that is the chain the captain
+   * actually worked on — the identity execution, whose ledger also holds the
+   * Gate 2 approval recorded on a descendant of it — and not the fixed briefing.
+   */
+  const [chainRun, setChainRun] = useState<Snapshot | null>(null);
+  const [chainError, setChainError] = useState('');
+  const [chainBusy, setChainBusy] = useState(false);
   const [startRecoveryRunId, setStartRecoveryRunId] = useState('');
   const [recoveryExhaustedRunId, setRecoveryExhaustedRunId] = useState('');
   const startEpoch = useRef(0);
@@ -270,6 +264,29 @@ export default function App() {
     }, 1500);
     return () => { dropped = true; clearTimeout(timer); };
   }, [acceptIdentityRun, following, identity, identityGet, pollTick, queued, running, spent, startRecoveryPending, startingRun]);
+  // Gate 1 hands the chain on under the identity execution's own id: the
+  // approvals of all three gates are recorded against it, so that id is what
+  // Gate 3 prepares and publishes. A handoff the identity moved past is stale
+  // and hands nothing on until the captain approves the identity again.
+  const chainRunId = identity?.handoff && !identity.handoff.stale ? identity.runId : '';
+  useEffect(() => {
+    if (!chainRunId) { setChainRun(null); setChainError(''); return; }
+    let live = true;
+    void request<Snapshot>(`/api/runs/${encodeURIComponent(chainRunId)}`).then(
+      (next) => { if (live) { setChainRun(next); setChainError(''); } },
+      (cause: unknown) => { if (live) { setChainRun(null); setChainError(failureMessage(cause)); } },
+    );
+    return () => { live = false; };
+  }, [chainRunId, identity?.handoff?.versionId]);
+  const chainPrototype = chainRun?.approvals.find((entry) => entry.stage === 'prototype' && entry.decision === 'approved');
+  const runChainStage = (): void => {
+    if (!chainRunId) return;
+    setChainBusy(true); setChainError('');
+    void request<Snapshot>(`/api/runs/${encodeURIComponent(chainRunId)}/stage`, { method: 'POST' }).then(
+      (next) => setChainRun(next),
+      (cause: unknown) => setChainError(failureMessage(cause)),
+    ).finally(() => setChainBusy(false));
+  };
   const identityPost = (path: string, payload: Record<string, unknown> = {}) => request<IdentityGateSnapshot>(path, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', ...payload }) });
   const createIdentityRun = (briefing?: string) => {
     const previousGeneration = identityGeneration.current;
@@ -322,7 +339,18 @@ export default function App() {
       <section className="intro-panel"><p className="eyebrow">A identidade é o contrato</p><h2>Da direção visual ao site final, uma fonte de verdade.</h2><p>O editor mostra propostas tipadas; o renderer determinístico cuida do resultado. Os três gates desta versão são do capitão.</p><button className="primary" onClick={create} disabled={busy}>{busy ? 'Preparando…' : snapshot ? 'Reiniciar briefing' : 'Carregar briefing fixo'}</button></section>
       <section className="stage-panel"><div className="section-heading"><div><p className="eyebrow">Pipeline</p><h2>Três etapas, três decisões</h2></div>{snapshot && <span className={`status status-${snapshot.status}`}>{snapshot.status === 'needs_review' ? 'aguarda gate' : snapshot.status === 'rejected' ? 'rejeitado · reexecutar' : snapshot.status}</span>}</div><div className="stage-list">{stages.map((stage, index) => { const approval = snapshot?.approvals.find((item) => item.stage === stage.id); const active = snapshot?.currentStage === stage.id; return <div className={`stage-row ${active ? 'active' : ''}`} key={stage.id}><span className="stage-number">0{index + 1}</span><div><strong>{stage.label}</strong><small>{approval ? approval.decision === 'approved' ? 'Aprovado pelo capitão' : 'Rejeitado para revisão' : active ? 'Proposta pronta para revisão' : 'Bloqueada pelo gate anterior'}</small></div><span className="stage-dot" />{active && <span className="active-mark">●</span>}</div>; })}</div><div className="actions">{snapshot?.status === 'needs_review' ? <><button className="secondary" onClick={() => review('reject')} disabled={busy}>Rejeitar proposta</button>{snapshot.currentStage === 'finalization' ? <span className="qa-chip">Aprovar é publicar o bundle no Gate 3 abaixo</span> : <button className="primary" onClick={() => review('approve')} disabled={busy}>Aprovar gate</button>}</> : <button className="primary" onClick={runStage} disabled={!snapshot || busy || snapshot.status === 'succeeded'}>{busy ? 'Executando…' : snapshot?.status === 'succeeded' ? 'Release publicado' : snapshot?.status === 'rejected' ? 'Refazer etapa' : 'Executar próxima etapa'}</button>}</div></section>
       <section className="review-panel"><div className="section-heading"><div><p className="eyebrow">Revisão visual</p><h2>Preview isolado</h2></div><span className="qa-chip">linter: {snapshot?.lintErrorCount ?? 0} erros</span></div>{snapshot ? <><div className="route-tabs">{snapshot.rendered.routes.map((item) => <button key={item.route} className={route === item.route ? 'selected' : ''} onClick={() => setRoute(item.route)}>{item.route}</button>)}</div><iframe title="Preview do site" src={previewUrl} sandbox="" className="preview-frame" /></> : <div className="empty-state"><span>△</span><p>Carregue o briefing para abrir o primeiro contrato de identidade.</p></div>}</section>
-      <Gate3Panel key={snapshot?.runId ?? 'none'} runId={snapshot?.runId ?? null} apiOrigin={API_ORIGIN} onPublished={(run) => setSnapshot(run as Snapshot)} />
+      <section className="chain-panel">
+        <div className="section-heading"><div><p className="eyebrow">Finalização</p><h2>O que o Gate 3 compila</h2></div></div>
+        {chainRunId
+          ? <><p className="chain-line">Cadeia identidade → protótipo: Gate 1 <code>{chainRunId}</code> aprovou a versão <code>{identity!.handoff!.versionId}</code>{chainPrototype ? <> e o Gate 2 aprovou <code>{chainPrototype.versionId}</code>, que desce dela</> : <>; o Gate 2 ainda não aprovou nenhuma revisão desta identidade</>}.</p>
+            <div className="actions">
+              <button className="secondary" onClick={runChainStage} disabled={chainBusy || !chainPrototype || chainRun?.currentStage === 'finalization'}>{chainBusy ? 'Executando…' : 'Executar a etapa de finalização'}</button>
+              {!chainPrototype && <span className="qa-chip"><a href={GATE2_ROUTE}>Meça e aprove o protótipo no Gate 2</a></span>}
+            </div></>
+          : <p className="chain-line">Nenhuma identidade aprovada neste navegador: o Gate 3 abaixo compila o briefing fixo desta demonstração. Aprove uma identidade no Gate 1 para publicar a sua.</p>}
+        {chainError && <p className="error-banner" role="alert">{chainError}</p>}
+      </section>
+      <Gate3Panel key={chainRunId || snapshot?.runId || 'none'} runId={chainRunId || snapshot?.runId || null} apiOrigin={API_ORIGIN} onPublished={(run) => (chainRunId ? setChainRun(run as Snapshot) : setSnapshot(run as Snapshot))} />
       {error && <p className="error-banner" role="alert">{error}</p>}
     </main>}
     <footer><span>DesignIR → Preview → Export</span><span>renderer determinístico · preview em origem separada</span></footer>
