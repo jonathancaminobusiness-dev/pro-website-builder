@@ -58,9 +58,15 @@ describe('conversation contract', () => {
     ['a question with no reason', wire({ question: { id: 'q', prompt: 'p' } })],
     ['a direction that is not an object', wire({ directions: ['laço'] })],
     ['a time ceiling no clock can read', wire({ limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: 'amanhã de manhã' } })],
+    ['a summary that is not text', wire({ state: 'confirmation', summary: { text: CONSOLIDATED_SUMMARY } })],
     ['a body that is not an object', 'entry'],
   ])('refuses %s', (_label, payload) => {
     expect(() => parseConversationSnapshot(payload)).toThrow(ConversationContractError);
+  });
+
+  it('reads a conversation with no summary yet as an empty one', () => {
+    expect(parseConversationSnapshot(wire({ summary: undefined })).summary).toBe('');
+    expect(parseConversationSnapshot(wire({ summary: null })).summary).toBe('');
   });
 
   it('reads the ceiling from the snapshot rather than from a constant', () => {
