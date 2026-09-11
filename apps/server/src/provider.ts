@@ -1,5 +1,5 @@
 import { ClaudeRunner, CodexRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, type ClaudeRunnerOptions, type CodexJsonRunnerOptions, type ModelProvider, type RasterProvider } from '@pwb/providers';
-import { FakeIdentityProvider } from '@pwb/stage-identity';
+import { defaultIdentityDeadlines, FakeIdentityProvider, resolveIdentityStageDeadlines, type IdentityStageDeadlines } from '@pwb/stage-identity';
 
 export type ModelProviderName = 'fake' | 'claude-code' | 'codex';
 
@@ -43,7 +43,9 @@ export function createIdentityProvider(name: string = 'fake', options: ClaudeRun
 }
 
 /**
- * Where the Higgsfield MCP server is, when the owner wants imagery generated.
+ * Where the Higgsfield MCP server is, when the owner wants imagery generated,
+ * and how long one call to it may take: the raster lane's own deadline, so the
+ * client and the task it serves give up at the same moment.
  * Generation stays off unless `PWB_HIGGSFIELD_MCP_COMMAND` names a server (with
  * optional space-separated `PWB_HIGGSFIELD_MCP_ARGS`), so a fresh checkout and
  * a test run never reach the network and keep the placeholder path.
@@ -53,9 +55,13 @@ export function createIdentityProvider(name: string = 'fake', options: ClaudeRun
  * authentication, and a hosted MCP is reached through an owner-run bridge that
  * performs that authentication itself.
  */
-export function createRasterProvider(env: NodeJS.ProcessEnv = process.env): RasterProvider {
+export function createRasterProvider(env: NodeJS.ProcessEnv = process.env, deadlines: Partial<IdentityStageDeadlines> = defaultIdentityDeadlines): RasterProvider {
   const command = env.PWB_HIGGSFIELD_MCP_COMMAND?.trim();
   if (!command) return new HiggsfieldMcpProvider({ configured: false });
   const args = (env.PWB_HIGGSFIELD_MCP_ARGS ?? '').split(' ').map((argument) => argument.trim()).filter(Boolean);
-  return new HiggsfieldMcpProvider({ configured: true, transport: new McpToolTransport({ command, args }) });
+  // The client waits as long as the lane does. Its own default is two minutes and the raster lane's
+  // deadline is five, so leaving it unset made every generation between the two a failed asset with
+  // more than half its budget unspent - and the scheduler's abort, which is the real bound, never fired.
+  const timeoutMs = resolveIdentityStageDeadlines(deadlines).raster;
+  return new HiggsfieldMcpProvider({ configured: true, transport: new McpToolTransport({ command, args, timeoutMs }) });
 }

@@ -40,6 +40,17 @@ export interface PrototypeStageOptions {
 
 export interface RejectedRepairRecord { findingId: string; reason: string; }
 
+/**
+ * A section whose composer never delivered. Its window keeps the architect's
+ * placeholder nodes, so the revision is still a whole document the gate can
+ * measure and the captain can read; this record is what says the placeholder is
+ * a gap rather than a choice.
+ */
+export interface FailedSectionRecord { sectionId: string; route: string; reason: string; }
+
+/** How many further attempts a section composer gets before its window is handed on unfilled. */
+const COMPOSER_RETRIES = 1;
+
 export interface PrototypeStageOutcome {
   runId: string;
   manifest: RouteManifest;
@@ -58,6 +69,8 @@ export interface PrototypeStageOutcome {
   lint: LintReport;
   gate: 'needs_review' | 'vetoed';
   rejectedRepairs: RejectedRepairRecord[];
+  /** The sections no composer filled, empty on a complete run. The review is partial while it is not. */
+  failedSections: FailedSectionRecord[];
 }
 
 export class PrototypeStageError extends Error {
@@ -68,6 +81,10 @@ export class PrototypeStageError extends Error {
  * The prototype stage: a serial information architect, a parallel fan-out of section composers over
  * disjoint windows, a deterministic gate that vetoes before any critic runs, four parallel critics in
  * their own sessions, and one refinement cycle per pass of a loop that always stops for a stated reason.
+ *
+ * It writes `/pages` and `/stateFixtures`. Its boundary is wider - `stageWritablePaths.prototype` also
+ * carries `/assets` and `/reviewRecord` - but nothing here writes either: the review this stage produces
+ * is the `PrototypeStageOutcome` the Gate 2 screen reads, not a document subtree.
  */
 export class PrototypeStage {
   private get modelAlias(): string { return this.options.modelAlias; }
@@ -91,8 +108,10 @@ export class PrototypeStage {
     const architectVersion = this.applyPatch(manifestPatch(manifest, identity, this.architectTask(input, identity)), { ...PROTOTYPE_SCOPE, allowedPaths: ARCHITECT_ALLOWED_PATHS }, baseVersion.id, 'information-architect');
     await this.record('prototype.manifest.applied', { runId: input.runId, versionId: architectVersion.id, routes: manifest.routes.map((route) => route.route) });
 
-    const compositionVersion = await this.composeSections(input, manifest, architectVersion, identity);
-    await this.record('prototype.sections.applied', { runId: input.runId, versionId: compositionVersion.id, sections: manifest.routes.flatMap((route) => route.sections.map((section) => section.id)) });
+    const composed = await this.composeSections(input, manifest, architectVersion, identity);
+    const compositionVersion = composed.version;
+    const failedSections = composed.failures;
+    await this.record('prototype.sections.applied', { runId: input.runId, versionId: compositionVersion.id, sections: composed.composed, failedSections: failedSections.map((failure) => failure.sectionId) });
 
     let current = compositionVersion;
     const cycles: CycleRecord[] = [];
@@ -148,8 +167,9 @@ export class PrototypeStage {
       lint: lintDesign(current.ir),
       gate: finalQa.vetoes.length > 0 ? 'vetoed' : 'needs_review',
       rejectedRepairs,
+      failedSections,
     };
-    await this.record('prototype.stage.settled', { runId: input.runId, versionId: outcome.versionId, stopReason: outcome.stopReason, gate: outcome.gate, cycles: cycles.length });
+    await this.record('prototype.stage.settled', { runId: input.runId, versionId: outcome.versionId, stopReason: outcome.stopReason, gate: outcome.gate, cycles: cycles.length, failedSections: failedSections.map((failure) => failure.sectionId) });
     return outcome;
   }
 
@@ -163,7 +183,15 @@ export class PrototypeStage {
     return entry.value;
   }
 
-  private async composeSections(input: { runId: string; baseVersionId: string; signal?: AbortSignal }, manifest: RouteManifest, base: VersionRecord, identity: IdentitySpec): Promise<VersionRecord> {
+  /**
+   * The parallel fan-out, and the one place a section may be lost without losing the run. A composer
+   * that fails gets one more attempt from the scheduler; if it fails again its window keeps the
+   * architect's placeholders and the section is recorded as a gap, exactly as a critic that cannot
+   * answer degrades to `uncertain` instead of ending the stage. The other sections' compositions -
+   * and the browser time they cost - are kept, and the captain reviews a partial prototype that says
+   * which sections are missing. Only a run where every section failed has nothing to review.
+   */
+  private async composeSections(input: { runId: string; baseVersionId: string; signal?: AbortSignal }, manifest: RouteManifest, base: VersionRecord, identity: IdentitySpec): Promise<{ version: VersionRecord; composed: string[]; failures: FailedSectionRecord[] }> {
     const sections = manifest.routes.flatMap((route) => route.sections);
     const tasks = sections.map((section) => this.composerTask(input, manifest, section, base.id, identity));
     // The scheduler reports results in completion order, so a composer is always found by the section
@@ -179,22 +207,35 @@ export class PrototypeStage {
       const problems = validateComposition(composition, section, manifest, identity);
       if (problems.length > 0) throw new PrototypeStageError('section-composer', `A composição de ${section.id} viola seu contrato: ${problems.join(' ')}`);
       return compositionPatch(composition, manifest, task);
-    }, input.signal ? { signal: input.signal } : {});
+    }, { ...(input.signal ? { signal: input.signal } : {}), retries: COMPOSER_RETRIES });
 
-    const failure = result.results.find((entry) => entry.state !== 'succeeded');
-    if (failure) throw new PrototypeStageError('section-composer', failure.error instanceof Error ? failure.error.message : `A seção ${failure.task.id} não produziu uma composição.`);
+    const failures: FailedSectionRecord[] = [];
+    const bySection = new Map<string, Patch>();
+    for (const entry of result.results) {
+      const section = sectionOf(entry.task.id);
+      if (entry.state === 'succeeded' && entry.value) { bySection.set(section.id, entry.value); continue; }
+      const reason = entry.error instanceof Error ? entry.error.message : `A seção ${section.id} não produziu uma composição.`;
+      failures.push({ sectionId: section.id, route: section.route, reason });
+      await this.record('prototype.section.unavailable', { runId: input.runId, taskId: entry.task.id, sectionId: section.id, route: section.route, attempts: entry.task.attempt, reason });
+    }
+    // A cancelled run is not a partial result: every section was cut at once, and there is nothing the
+    // captain could review. The same is true of a run where no composer answered at all.
+    if (result.cancelled) throw new PrototypeStageError('section-composer', 'A composição das seções foi cancelada antes de qualquer resposta.');
+    if (bySection.size === 0) throw new PrototypeStageError('section-composer', `Nenhuma das ${sections.length} seções produziu uma composição: ${failures.map((failure) => `${failure.sectionId} (${failure.reason})`).join('; ')}`);
 
     // Fan-in: every composer patch is checked against the same base through the real patch gate, so an
     // overlap between two windows is refused here, and only the merged patch reaches the applier.
     const gate = new PatchGate();
-    const bySection = new Map(result.results.map((entry) => [sectionOf(entry.task.id).id, entry.value!]));
     // Merging in manifest order, not completion order, also keeps the merged patch byte-identical run to run.
     const patches: Patch[] = [];
+    const composed: string[] = [];
     for (const section of sections) {
       const patch = bySection.get(section.id);
-      if (!patch) throw new PrototypeStageError('section-composer', `A seção ${section.id} não produziu uma composição.`);
+      // A section that failed keeps the architect's placeholder window; `failures` is what says so.
+      if (!patch) continue;
       gate.commit(base.id, gate.validate(patch, { currentVersionId: base.id, stage: 'prototype', role: stageRoles.prototype, allowedPaths: sectionAllowedPaths(manifest, section.id) }));
       patches.push(patch);
+      composed.push(section.id);
     }
     const merged: Patch = {
       operations: patches.flatMap((patch) => patch.operations),
@@ -206,7 +247,7 @@ export class PrototypeStage {
       role: 'composer',
       idempotencyKey: hashJson(['sections', input.runId, base.id, patches.map((patch) => patch.idempotencyKey)]),
     };
-    return this.applyPatch(merged, { ...PROTOTYPE_SCOPE, allowedPaths: ['/pages/routes'] }, base.id, 'section-composer');
+    return { version: this.applyPatch(merged, { ...PROTOTYPE_SCOPE, allowedPaths: ['/pages/routes'] }, base.id, 'section-composer'), composed, failures };
   }
 
   private async critique(input: { runId: string; signal?: AbortSignal }, ir: DesignIR, identity: IdentitySpec, qa: QaReport, captures: CritiqueTask['captures'], cycle: number): Promise<CritiqueReport[]> {
@@ -254,9 +295,10 @@ export class PrototypeStage {
   }
 
   /**
-   * The deterministic gate over the full capture matrix. Only Tier 0 rules can veto, so this still
-   * stops the stage before a single model call; the Tier 1 observations ride along because they come
-   * from the same evidence and the human gate needs to see them.
+   * The deterministic gate over the full capture matrix. There is no document to measure until the
+   * architect and the composers have run, so this is not before every model call - it is before every
+   * critic: only Tier 0 rules can veto, and a vetoed revision is never handed to one. The Tier 1
+   * observations ride along because they come from the same evidence and the human gate needs to see them.
    */
   private async gateReport(version: VersionRecord, measured: Set<number>, signal?: AbortSignal): Promise<QaReport> {
     const bundle = await this.options.evidence.collect({ ir: version.ir, versionId: version.id, ...(signal ? { signal } : {}) });

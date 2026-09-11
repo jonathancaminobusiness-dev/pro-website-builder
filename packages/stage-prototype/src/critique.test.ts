@@ -128,7 +128,9 @@ describe('critique providers', () => {
     const args = calls[0]!;
     expect(args).toContain('--no-session-persistence');
     expect(args).toContain('--json-schema');
-    expect(args[args.indexOf('--session-id') + 1]).toBe('session-1');
+    // The process gets a fresh id, never the task's own name: the CLI takes a UUID, and a correction
+    // has to reach a session that has never seen the answer it is correcting.
+    expect(args[args.indexOf('--session-id') + 1]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(args[args.indexOf('--disallowed-tools') + 1]).toContain('Bash');
     expect(args[args.indexOf('--disallowed-tools') + 1]).not.toContain('Read');
     // "token" appears legitimately in the schema as a design token reference; a credential never does.

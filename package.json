@@ -10,7 +10,6 @@
     "run:fixture": "tsx scripts/run-fixture.ts",
     "run:prototype": "tsx scripts/run-prototype.ts",
     "typecheck": "tsc -b",
-    "lint": "corepack pnpm typecheck",
     "run:release": "tsx scripts/run-release.ts",
     "run:lighthouse": "tsx scripts/run-lighthouse.ts",
     "test:e2e:release": "playwright test --config playwright.release.config.ts",

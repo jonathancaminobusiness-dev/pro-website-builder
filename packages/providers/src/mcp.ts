@@ -12,7 +12,13 @@ export interface McpServerConfig { command: string; args?: string[]; timeoutMs?:
 
 const PROTOCOL_VERSION = '2025-06-18';
 const CLIENT_INFO = { name: 'pro-website-builder', version: '0.1.0' };
-const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * How long one JSON-RPC call may take when nobody said. It is a floor, not a
+ * budget: a lane that knows its own deadline passes it, because a client that
+ * gives up at two minutes on a five-minute lane turns a job that was still
+ * running into a failed asset with half its budget unspent.
+ */
+export const MCP_DEFAULT_TIMEOUT_MS = 120_000;
 
 interface JsonRpcAnswer { id?: number | string; result?: unknown; error?: { code: number; message: string } }
 type Call = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -107,7 +113,12 @@ function resultOf(answer: JsonRpcAnswer | undefined, method: string): unknown {
  * this process never keeps one.
  */
 export class McpToolTransport implements HiggsfieldMcpTransport {
-  constructor(private readonly config: McpServerConfig) {}
+  /** The resolved per-call timeout, so the caller can see what it will actually wait. */
+  readonly timeoutMs: number;
+
+  constructor(private readonly config: McpServerConfig) {
+    this.timeoutMs = config.timeoutMs ?? MCP_DEFAULT_TIMEOUT_MS;
+  }
 
   async callTool(name: string, arguments_: Record<string, unknown>, signal?: AbortSignal): Promise<{ uri: string; license?: string; termsNote?: string }> {
     const invoke = async (call: Call): Promise<McpToolResult> => await call('tools/call', { name, arguments: arguments_ }) as McpToolResult;
@@ -115,7 +126,7 @@ export class McpToolTransport implements HiggsfieldMcpTransport {
   }
 
   private async overStdio<T>(work: (call: Call) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const timeoutMs = this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const { timeoutMs } = this;
     const child = spawn(this.config.command, this.config.args ?? [], { shell: false, stdio: ['pipe', 'pipe', 'ignore'] });
     const waiting = new Map<number, { settle: (answer: JsonRpcAnswer) => void; fail: (error: Error) => void }>();
     const failAll = (error: Error): void => { for (const waiter of [...waiting.values()]) waiter.fail(error); waiting.clear(); };

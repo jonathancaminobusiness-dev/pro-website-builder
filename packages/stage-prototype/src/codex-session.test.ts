@@ -19,10 +19,12 @@ describe('Codex prototype session', () => {
     });
 
     await expect(session.ask({
-      sessionId: 'codex-session-test', prompt: 'fixture', schema: { type: 'object' },
+      prompt: 'fixture', schema: { type: 'object' },
       parse: (value) => answerSchema.parse(value), deadlineMs: 1000,
     })).resolves.toEqual({ answer: 'ok' });
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain('did not match the supplied schema');
+    // The correction names the violation itself; the generic complaint alone corrects for the wrong reason.
+    expect(prompts[1]).toContain('answer: Expected string, received number');
   });
 });

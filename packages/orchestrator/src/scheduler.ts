@@ -8,6 +8,15 @@ export interface RunOptions<T> {
   edges?: [string, string][];
   completed?: string[];
   settle?: (task: AgentTask, value: T, signal: AbortSignal) => Promise<GateVerdict>;
+  /**
+   * How many further attempts a task that failed on its own gets, as the next
+   * `attempt` number of the same task. Default 0: a caller that cannot use a
+   * second answer must not pay for one. A run that was cancelled is never
+   * retried, and neither is one the deadline cut: that attempt already spent
+   * the whole budget the task was given, and spending it twice is what the
+   * stage deadline above it cannot absorb.
+   */
+  retries?: number;
 }
 
 export class DeadlineExceededError extends Error {
@@ -53,7 +62,10 @@ export class Scheduler {
     for (const [from, to] of options.edges ?? []) dependencies.set(to, [...(dependencies.get(to) ?? []), from]);
     const satisfied = (dep: string): boolean => succeeded.has(dep) || completed.has(dep);
 
+    const retries = options.retries ?? 0;
+
     const runOne = async (task: AgentTask): Promise<void> => {
+      let retriesLeft = retries;
       for (let attempt = task.attempt; ; attempt += 1) {
         const current: AgentTask = { ...task, attempt };
         if (controller.signal.aborted) { results.push({ task: { ...current, state: 'cancelled' }, state: 'cancelled' }); return; }
@@ -70,6 +82,7 @@ export class Scheduler {
         } catch (error) {
           const expired = error instanceof DeadlineExceededError;
           const cancelled = !expired && (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError'));
+          if (!cancelled && !expired && retriesLeft > 0) { retriesLeft -= 1; continue; }
           results.push({ task: { ...current, state: cancelled ? 'cancelled' : 'failed' }, error, state: cancelled ? 'cancelled' : 'failed' });
           return;
         } finally {

@@ -31,6 +31,8 @@ interface Result {
   routes: Array<{ route: string; title: string }>; viewports: number[]; states: string[]; colorSchemes: Array<'light' | 'dark'>;
   qa: Array<{ id: string; tier: number; severity: string; title: string; message: string; nodeIds: string[] }>;
   lint: Array<{ id: string; severity: string; path: string; message: string }>;
+  /** Sections no composer filled; their windows still carry the architect's placeholders. */
+  failedSections: Array<{ sectionId: string; route: string; reason: string }>;
   cycles: Array<{ cycle: number; versionId: string; vetoes: number; rubricAverage: number; verdicts: Verdict[]; appliedFindingIds: string[]; rejectedCount: number }>;
   reports: Report[];
   issues: Issue[];
@@ -297,6 +299,11 @@ export default function Gate2(): ReactElement {
         <div className="gate2-badges">
           <span className={`status status-${result.gate}`}>{result.gate === 'vetoed' ? 'vetado pelo QA' : 'aguarda decisão'}</span>
           <span className="qa-chip" title={result.stopDetail}>parou por: {stopReasonCopy[result.stopReason] ?? result.stopReason}</span>
+          {(result.failedSections ?? []).length > 0 && (
+            <span className="qa-chip qa-chip-warning" title={(result.failedSections ?? []).map((failure) => `${failure.sectionId} (${failure.route}): ${failure.reason}`).join(' · ')}>
+              revisão parcial: {(result.failedSections ?? []).length} seção(ões) sem composição
+            </span>
+          )}
           <a className="gate2-back" href="#/">← pipeline</a>
         </div>
       </header>

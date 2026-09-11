@@ -228,8 +228,11 @@ describe('prototype stage', () => {
         return { ...composition, nodes: [{ ...root!, slots: { children: [...(root!.slots.children ?? []), 'home-hero-title'] } }, ...rest] };
       },
     };
-    await expect(stageFor(setup, trespasser).run({ runId: 'run-trespass', baseVersionId: setup.base.id }))
-      .rejects.toThrow(/home-hero-title, which belongs to another section/);
+    const outcome = await stageFor(setup, trespasser).run({ runId: 'run-trespass', baseVersionId: setup.base.id });
+
+    // The trespass is refused - and refusing it costs that one section, not the run.
+    expect(outcome.failedSections.map((failure) => failure.sectionId)).toEqual(['home-proof']);
+    expect(outcome.failedSections[0]!.reason).toMatch(/home-hero-title, which belongs to another section/);
   });
 
   it('refuses a composition that leaves the token system', async () => {
@@ -267,8 +270,64 @@ describe('prototype stage', () => {
         return section.id === 'home-hero' ? { ...composition, sectionId: 'home-proof' } : composition;
       },
     };
-    await expect(stageFor(setup, confused).run({ runId: 'run-wrong-section', baseVersionId: setup.base.id }))
-      .rejects.toThrow(/answers section home-hero; it declared home-proof/);
+    const outcome = await stageFor(setup, confused).run({ runId: 'run-wrong-section', baseVersionId: setup.base.id });
+
+    expect(outcome.failedSections.map((failure) => failure.sectionId)).toEqual(['home-hero']);
+    expect(outcome.failedSections[0]!.reason).toMatch(/answers section home-hero; it declared home-proof/);
+  });
+
+  it('degrades a failed section to a reviewable gap and keeps every other composition, after one retry', async () => {
+    const setup = harness();
+    const attempts: number[] = [];
+    // One section's composer never answers; the other eight do. A critic that cannot answer degrades
+    // to `uncertain` rather than ending the stage, and a composer that cannot answer degrades the same way.
+    const flaky: ComposerProvider = {
+      compose: async (task, section, manifest, signal) => {
+        if (section.id !== 'home-proof') return new FakeSectionComposer().compose(task, section, manifest, signal);
+        attempts.push(task.attempt);
+        throw new Error('O modelo não respondeu dentro do contrato.');
+      },
+    };
+    const outcome = await stageFor(setup, flaky).run({ runId: 'run-partial', baseVersionId: setup.base.id });
+
+    // One retry, and only one: the section is tried twice and then handed on as a gap.
+    expect(attempts).toEqual([1, 2]);
+    expect(outcome.failedSections).toEqual([{ sectionId: 'home-proof', route: '/', reason: 'O modelo não respondeu dentro do contrato.' }]);
+    expect(setup.events.map((event) => event.type)).toContain('prototype.section.unavailable');
+
+    // The rest of the run is real: every other section was composed and the review exists.
+    const ir = setup.store.get(outcome.compositionVersionId)!.ir;
+    const home = ir.pages.routes.find((page) => page.route === '/')!;
+    expect(home.nodes.find((node) => node.id === 'home-hero-title')!.props.text).not.toBe('Aguardando composição.');
+    // The failed window keeps the architect's placeholders, so the document is still whole and measurable.
+    expect(home.nodes.find((node) => node.id === 'home-proof-title')!.props.text).toBe('Aguardando composição.');
+    expect(outcome.gate).toBe('needs_review');
+    expect(outcome.reports.length).toBeGreaterThan(0);
+  });
+
+  it('retries a composer once and keeps the answer the second attempt gave', async () => {
+    const setup = harness();
+    let failures = 0;
+    const recovering: ComposerProvider = {
+      compose: async (task, section, manifest, signal) => {
+        if (section.id === 'home-proof' && failures === 0) { failures += 1; throw new Error('A primeira tentativa caiu.'); }
+        return new FakeSectionComposer().compose(task, section, manifest, signal);
+      },
+    };
+    const outcome = await stageFor(setup, recovering).run({ runId: 'run-retry', baseVersionId: setup.base.id });
+
+    expect(failures).toBe(1);
+    expect(outcome.failedSections).toEqual([]);
+    const ir = setup.store.get(outcome.compositionVersionId)!.ir;
+    expect(ir.pages.routes[0]!.nodes.find((node) => node.id === 'home-proof-title')!.props.text).not.toBe('Aguardando composição.');
+  });
+
+  it('has nothing to review when every section failed, and says so instead of publishing placeholders', async () => {
+    const setup = harness();
+    const silent: ComposerProvider = { compose: async () => { throw new Error('Nenhum compositor respondeu.'); } };
+
+    await expect(stageFor(setup, silent).run({ runId: 'run-empty', baseVersionId: setup.base.id }))
+      .rejects.toThrow(/Nenhuma das \d+ seções produziu uma composição/);
   });
 
   it('stops at the cycle ceiling instead of iterating while the rubric keeps climbing', async () => {

@@ -1,5 +1,5 @@
 import { ZodError } from 'zod';
-import { CodexCliError, CodexJsonRunner, type CodexJsonRunnerOptions, type JsonModelRunner } from '@pwb/providers';
+import { CodexCliError, CodexJsonRunner, correctionPrompt, type CodexJsonRunnerOptions, type JsonModelRunner } from '@pwb/providers';
 import type { ClaudeAsk, StructuredSession } from './claude-session.js';
 
 export class CodexSessionError extends Error {
@@ -19,8 +19,8 @@ export class CodexSession implements StructuredSession {
   }
 
   async ask<T>(input: ClaudeAsk<T>): Promise<T> {
+    let prompt = input.prompt;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const prompt = attempt === 0 ? input.prompt : `${input.prompt}\n\nYour previous answer did not match the supplied schema. Return only JSON matching it.`;
       const request = { prompt, schema: input.schema, deadlineMs: input.deadlineMs, ...(input.allowlist ? { allowlist: input.allowlist } : {}) };
       try {
         if (this.runner.runValidated) return await this.runner.runValidated(request, input.parse, input.signal);
@@ -29,7 +29,7 @@ export class CodexSession implements StructuredSession {
         const details = error as { name?: unknown; code?: unknown };
         if (details.name === 'AbortError' || details.code === 'ABORT_ERR') throw error;
         const schemaProblem = error instanceof ZodError || (error instanceof CodexCliError && error.code === 'SCHEMA_INVALID');
-        if (schemaProblem && attempt === 0) continue;
+        if (schemaProblem && attempt === 0) { prompt = correctionPrompt(input.prompt, error); continue; }
         if (error instanceof CodexCliError) throw new CodexSessionError(error.code, error.message);
         throw new CodexSessionError(schemaProblem ? 'SCHEMA_INVALID' : String(details.code ?? 'PROCESS_FAILED'), schemaProblem ? 'Codex returned an answer that does not match the supplied schema.' : `The Codex process failed with ${String(details.code ?? 'an unknown error')}.`);
       }

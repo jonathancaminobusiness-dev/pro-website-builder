@@ -85,7 +85,6 @@ export class ClaudeSectionComposer implements ComposerProvider {
   async compose(task: AgentTask, section: SectionPlan, manifest: RouteManifest, signal?: AbortSignal): Promise<SectionComposition> {
     const identity = task.documentSlice['/identity'] as IdentitySpec;
     return this.session.ask({
-      sessionId: `${task.id}-attempt-${task.attempt}`,
       prompt: renderComposerPrompt(task, section, manifest, identity),
       schema: stagePrototypeContractSchemaJson.SectionComposition,
       parse: (value) => sectionCompositionSchema.parse(value),

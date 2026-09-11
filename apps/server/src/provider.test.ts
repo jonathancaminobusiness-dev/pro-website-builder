@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureIR, idempotencyKey, type AgentTask } from '@pwb/domain';
-import { ClaudeRunner, CodexRunner, FakeModelProvider } from '@pwb/providers';
+import { ClaudeRunner, CodexRunner, FakeModelProvider, HiggsfieldMcpProvider, McpToolTransport, MCP_DEFAULT_TIMEOUT_MS } from '@pwb/providers';
+import { defaultIdentityDeadlines } from '@pwb/stage-identity';
 import { createIdentityProvider, createModelProvider, createRasterProvider, modelAlias, modelProviderName } from './provider.js';
 
 const request = { id: 'asset-job', digest: 'digest', prompt: 'papel impresso em duas tintas', model: 'higgsfield', aspect: '1:1', identityVersionId: 'v0' };
@@ -90,6 +91,23 @@ describe('raster provider selection', () => {
     expect(job.status).toBe('succeeded');
     expect(job.uri).toBe('higgsfield://from-args');
     expect(job.provenance).toMatchObject({ license: 'provider terms 2026', prompt: request.prompt, identityVersionId: 'v0' });
+  });
+
+  it('gives the MCP client the raster lane\'s own deadline, which its default is shorter than', () => {
+    // Nothing pins this in production, so the default is what a real run measures: two minutes against
+    // a five-minute lane turned every generation in between into a failed asset with the budget unspent.
+    expect(new McpToolTransport({ command: 'unused' }).timeoutMs).toBe(MCP_DEFAULT_TIMEOUT_MS);
+    expect(MCP_DEFAULT_TIMEOUT_MS).toBeLessThan(defaultIdentityDeadlines.raster);
+
+    const timeoutOf = (env: NodeJS.ProcessEnv, deadlines?: { raster: number }): number => {
+      const { options } = createRasterProvider(env, deadlines) as HiggsfieldMcpProvider;
+      if (!options.configured) throw new Error('The raster provider was expected to be configured.');
+      return (options.transport as McpToolTransport).timeoutMs;
+    };
+    expect(timeoutOf({ PWB_HIGGSFIELD_MCP_COMMAND: process.execPath })).toBe(defaultIdentityDeadlines.raster);
+
+    // A lane the owner slowed down slows the client with it; the two always give up together.
+    expect(timeoutOf({ PWB_HIGGSFIELD_MCP_COMMAND: process.execPath }, { raster: 9 * 60_000 })).toBe(9 * 60_000);
   });
 
   it('reaches no endpoint the environment merely names a url for', async () => {
