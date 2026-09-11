@@ -85,7 +85,9 @@ test('keeps the draft on a dead network and retries the same intent without a se
 
   await expect(chat.getByRole('alert')).toContainText('o que você escreveu continua aqui');
   await expect(answer).toHaveValue('Segurança clínica sem perder o carinho.');
-  await expect(chat.locator('.chat-pending')).toHaveCount(1);
+  // The failed answer is no longer in flight, so the log stops announcing it as
+  // being sent; the turn it becomes is counted once after the replay lands.
+  await expect(chat.locator('.chat-pending')).toHaveCount(0);
   // Nothing can rewrite the field the pending answer came from, by keyboard or
   // by a suggested option, so the replay cannot send text the screen replaced.
   await expect(answer).toHaveAttribute('readonly', '');
