@@ -3,7 +3,7 @@ import { createFixtureIR, flattenTokens, type Approval, type TokenValue } from '
 import { Applier, PatchGate, Scheduler, stageDeadlinesMs, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
-import { approvalOf, identityHash, identityLint, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
+import { approvalOf, identityHash, identityLint, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 import { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -255,10 +255,14 @@ export class IdentityRun {
   private async runStage(signal: AbortSignal): Promise<IdentityStageResult> {
     const deadlineMs = this.options.stageDeadlineMs ?? identityStageDeadlineMs();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadlineError = new Error(`The identity stage exceeded its ${deadlineMs}ms deadline.`);
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        this.abort?.abort();
-        reject(new Error(`The identity stage exceeded its ${deadlineMs}ms deadline.`));
+        // Carry the deadline through the signal so the stage can stop at its
+        // next phase boundary. A plain abort is reserved for captain stops,
+        // whose existing contract keeps an already-built fan-out reviewable.
+        this.abort?.abort({ code: IDENTITY_STAGE_DEADLINE_CODE, error: deadlineError });
+        reject(deadlineError);
       }, deadlineMs);
     });
     try {

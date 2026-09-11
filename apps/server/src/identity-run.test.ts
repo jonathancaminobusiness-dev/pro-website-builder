@@ -123,6 +123,40 @@ describe('identity run', () => {
     if (executorStarted) expect(aborted).toBe(true);
   });
 
+  it('stops downstream identity stages after a deadline aborts a critic', async () => {
+    const inner = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-critic-')) {
+          await new Promise<never>((_resolve, reject) => {
+            const abort = (): void => reject(new DOMException('The critic was aborted.', 'AbortError'));
+            if (signal?.aborted) abort();
+            else signal?.addEventListener('abort', abort, { once: true });
+          });
+        }
+        return inner.propose(task, signal);
+      },
+    };
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({
+      runId: 'identity-codex-critic-deadline-propagation',
+      repository,
+      provider,
+      stageDeadlineMs: 250,
+    });
+    await run.initialize();
+
+    const snapshot = await run.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const events = await repository.listEvents('identity-codex-critic-deadline-propagation');
+
+    expect(snapshot.status).toBe('failed');
+    expect(snapshot.error).toMatch(/identity stage exceeded its 250ms deadline/i);
+    expect(events.some((event) => event.type === 'identity.stage.gate_opened')).toBe(false);
+    expect(events.some((event) => event.payload.taskId && String(event.payload.taskId).startsWith('identity-refiner-'))).toBe(false);
+    expect(events.some((event) => event.payload.taskId && String(event.payload.taskId).startsWith('identity-art-director-'))).toBe(false);
+  });
+
   it('restores task failure details after a failed identity run restarts', async () => {
     const repository = new ProjectRepository(database);
     const provider = new CodexRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
