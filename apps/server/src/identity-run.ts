@@ -292,6 +292,10 @@ export class IdentityRun {
         this.status = 'needs_review';
         await this.checkpoint();
       }).catch(async (error: unknown) => {
+        // A run that failed holds nothing: the partial result goes with the
+        // stage it came from, so the snapshot never shows directions no gate
+        // can decide and the briefing is free again.
+        this.result = undefined;
         this.failure = error instanceof Error ? error.message : 'The identity stage failed.';
         this.status = 'failed';
         await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.stage.failed', payload: { reason: this.failure } }));
@@ -327,12 +331,15 @@ export class IdentityRun {
    * facts survive a restart — `restore` rebuilds the checkpoint and a lost
    * fan-out comes back as `interrupted` — so the same execution answers a
    * confirmation the same way before and after the process bounced. A stage
-   * that failed or was interrupted froze nothing: the captain may confirm a new
-   * briefing and start again on it.
+   * that failed or was interrupted froze nothing: it discards its result, so
+   * the captain may confirm a new briefing and start again on it. A result the
+   * run still holds counts as started whatever the status says, which is the
+   * guard that survives a failure path that forgot to discard one.
    */
   private briefingIsFrozen(): boolean {
+    if (this.result !== undefined) return true;
     if (this.status === 'failed' || this.status === 'interrupted') return false;
-    return this.status === 'running' || this.result !== undefined;
+    return this.status === 'running';
   }
 
   /**

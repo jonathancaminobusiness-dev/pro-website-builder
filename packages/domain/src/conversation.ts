@@ -159,9 +159,19 @@ function echoedToken(match: string): string {
   return normalizeForEcho(match).replace(/[.,;:!?)\]}'"]+$/, '');
 }
 
-function everyMatchWasSaid(pattern: RegExp, text: string, said: string): boolean {
+function tokensOf(pattern: RegExp, text: string): string[] {
   const all = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
-  return [...text.matchAll(all)].every((match) => said.includes(echoedToken(match[0])));
+  return [...text.matchAll(all)].map((match) => echoedToken(match[0]));
+}
+
+/**
+ * Whole tokens, never substrings: `#2E7` is not the `#2E7D32` the captain wrote
+ * and neither is `https://clinicax.com` the site they named, so a value the
+ * model shortened or invented is still its own.
+ */
+function everyMatchWasSaid(pattern: RegExp, text: string, said: string): boolean {
+  const spoken = new Set(tokensOf(pattern, said));
+  return tokensOf(pattern, text).every((token) => spoken.has(token));
 }
 
 /**
