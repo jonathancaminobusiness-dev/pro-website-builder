@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { openDatabase, ProjectRepository } from '../apps/server/src/db/repository.js';
 import { FixtureRun, type FixtureSnapshot } from '../apps/server/src/fixture-run.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
-import { createModelProvider } from '../apps/server/src/provider.js';
+import { createModelProvider, modelAlias, modelProviderName } from '../apps/server/src/provider.js';
 import { createRenderMatrix, qaFor, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../packages/render-hub/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 
@@ -47,10 +47,12 @@ async function main(): Promise<void> {
   await mkdir(releaseRoot, { recursive: true });
   const database = openDatabase(databasePath);
   try {
+    const providerName = modelProviderName(process.env.PWB_MODEL_PROVIDER);
     const run = new FixtureRun({
       repository: new ProjectRepository(database),
-      provider: createModelProvider(process.env.PWB_MODEL_PROVIDER),
-      release: { releaseRoot, evidenceDir, fontsDir, ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
+      provider: createModelProvider(providerName),
+      modelAlias: modelAlias(providerName),
+      release: { releaseRoot, evidenceDir, fontsDir, modelProvider: providerName },
     });
     await run.initialize('cli-fixture');
     let snapshot = await run.runAll();

@@ -36,7 +36,7 @@ export interface FixtureSnapshot {
 export class FixtureRun {
   private readonly store = new VersionStore();
   private readonly applier = new Applier(this.store, new PatchGate());
-  private readonly planner = new RunPlanner(this.store);
+  private readonly planner: RunPlanner;
   private readonly scheduler = new Scheduler();
   private readonly approvals: Approval[] = [];
   private currentVersion!: VersionRecord;
@@ -70,7 +70,11 @@ export class FixtureRun {
 
   private releaseRun: ReleaseRun | undefined;
 
-  constructor(private readonly options: { repository: ProjectRepository; provider: ModelProvider; release?: ReleaseRunOptions }) {}
+  constructor(private readonly options: { repository: ProjectRepository; provider: ModelProvider; release?: ReleaseRunOptions; modelAlias?: string }) {
+    // Every task the plan derives names the provider that will answer it, so a
+    // Codex run and a Claude run of the same task do not hash the same key.
+    this.planner = new RunPlanner(this.store, ...(this.options.modelAlias ? [this.options.modelAlias] as const : []));
+  }
 
   async initialize(runId: string): Promise<void> {
     this.runIdentifier = runId;

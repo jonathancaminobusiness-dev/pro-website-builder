@@ -10,7 +10,7 @@ import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
 import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
-import { createIdentityProvider, createModelProvider, createRasterProvider, modelProviderName } from './provider.js';
+import { createIdentityProvider, createModelProvider, createRasterProvider, modelAlias, modelProviderName } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
 import { identityDeadlinesFromEnvironment, identityProviderTimeoutMs } from './identity-deadlines.js';
 
@@ -38,7 +38,8 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // second instance would decide Gate 1 from a ledger the first has already
   // moved on from.
   const identityLoading = new Map<string, Promise<IdentityRun | undefined>>();
-  const newIdentityRun = (id: string, briefing?: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir, ...(briefing !== undefined ? { briefing } : {}), ...(identityDeadlines ? { deadlines: identityDeadlines } : {}) });
+  const alias = modelAlias(providerName);
+  const newIdentityRun = (id: string, briefing?: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir, modelAlias: alias, ...(briefing !== undefined ? { briefing } : {}), ...(identityDeadlines ? { deadlines: identityDeadlines } : {}) });
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
@@ -84,7 +85,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
       try {
-        const run = new FixtureRun({ repository, provider, release });
+        const run = new FixtureRun({ repository, provider, release, modelAlias: alias });
         await run.initialize(id);
         runs.set(id, run);
         return run;
@@ -93,7 +94,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     loadRun: async (id) => {
       const existing = runs.get(id);
       if (existing) return existing;
-      const run = new FixtureRun({ repository, provider, release });
+      const run = new FixtureRun({ repository, provider, release, modelAlias: alias });
       if (!await run.restore(id)) return undefined;
       runs.set(id, run);
       return run;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentTask, type DesignIR, type IdentitySpec } from '@pwb/domain';
-import { Applier, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
+import { Applier, PatchGate, Scheduler, VersionStore, type ScheduleResult, type VersionRecord } from '@pwb/orchestrator';
 import { CodexCliError } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import {
@@ -370,3 +370,47 @@ describe('control seed', () => {
     expect(events.map((event) => event.type)).toContain('prototype.cycle.decided');
   });
 });
+
+describe('prototype stage model alias', () => {
+  /** Records what the stage asked the scheduler to run, so every task site is observed, not assumed. */
+  class RecordingScheduler extends Scheduler {
+    readonly seen: AgentTask[] = [];
+    override async run<T>(tasks: AgentTask[], worker: (task: AgentTask, signal: AbortSignal) => Promise<T>, options: Parameters<Scheduler['run']>[2] = {}): Promise<ScheduleResult<T>> {
+      this.seen.push(...tasks);
+      return super.run(tasks, worker, options);
+    }
+  }
+
+  it('names the resolved provider on the architect, composer and critic tasks', async () => {
+    const setup = harness();
+    const scheduler = new RecordingScheduler({ maxActiveClaude: 3 });
+    const stage = new PrototypeStage({
+      store: setup.store, applier: setup.applier, scheduler,
+      architect: new FakeInformationArchitect(), composer: new FakeSectionComposer(),
+      critique: new FakeCritiqueProvider(), evidence: new DerivedEvidenceSource(),
+      brief: 'Compilar a identidade aprovada em um protótipo de três rotas.',
+      modelAlias: 'codex-gpt-5.6-sol',
+    });
+    await stage.run({ runId: 'run-alias', baseVersionId: setup.base.id });
+    const ids = scheduler.seen.map((task) => task.id);
+    expect(ids.some((id) => id.endsWith('-architect'))).toBe(true);
+    expect(ids.some((id) => id.includes('-compose-'))).toBe(true);
+    expect(ids.some((id) => id.includes('-critic-'))).toBe(true);
+    // Not one task may claim Claude produced it while Codex answered.
+    expect([...new Set(scheduler.seen.map((task) => task.modelAlias))]).toEqual(['codex-gpt-5.6-sol']);
+  });
+
+  it('still names Claude when no provider is given, as the default it always was', async () => {
+    const setup = harness();
+    const scheduler = new RecordingScheduler({ maxActiveClaude: 3 });
+    const stage = new PrototypeStage({
+      store: setup.store, applier: setup.applier, scheduler,
+      architect: new FakeInformationArchitect(), composer: new FakeSectionComposer(),
+      critique: new FakeCritiqueProvider(), evidence: new DerivedEvidenceSource(),
+      brief: 'Compilar a identidade aprovada em um protótipo de três rotas.',
+    });
+    await stage.run({ runId: 'run-alias-default', baseVersionId: setup.base.id });
+    expect([...new Set(scheduler.seen.map((task) => task.modelAlias))]).toEqual(['claude-local']);
+  });
+});
+

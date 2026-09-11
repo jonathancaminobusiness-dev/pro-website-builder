@@ -10,7 +10,7 @@ import {
   CodexSession, PrototypeStage, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
 } from '@pwb/stage-prototype';
 import type { ProjectRepository } from './db/repository.js';
-import { modelProviderName, type ModelProviderName } from './provider.js';
+import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
 
@@ -243,6 +243,7 @@ export class PrototypeRunRegistry {
       critique: model ? new ClaudeCritiqueRunner(codex ? { session: new CodexSession() } : {}) : new FakeCritiqueProvider(),
       evidence: this.options.evidence,
       brief: BRIEF,
+      modelAlias: modelAlias(this.modelProvider),
       onEvent: async (type, payload) => {
         // An aborted stage keeps unwinding for a few seconds; whatever it still reports must not
         // overwrite the terminal record the scheduler already settled.
@@ -255,7 +256,7 @@ export class PrototypeRunRegistry {
     const task = agentTaskSchema.parse({
       id: `${runId}-prototype`, attempt: 1, stage: 'prototype', role: stageRoles.prototype, state: 'queued', lane: 'raster',
       baseVersionId, inputDigest: hashJson([BRIEF, baseVersionId]), promptVersion: 'gate2-run-v1',
-      modelAlias: claude ? 'claude-local' : codex ? 'codex-gpt-5.6-sol' : 'fake', deadlineMs: DEFAULT_LOOP_BUDGET.deadlineMs + STAGE_DEADLINE_SLACK_MS,
+      modelAlias: modelAlias(this.modelProvider), deadlineMs: DEFAULT_LOOP_BUDGET.deadlineMs + STAGE_DEADLINE_SLACK_MS,
       allowedPaths: [], brief: BRIEF, documentSlice: { '/identity': identity },
     });
 

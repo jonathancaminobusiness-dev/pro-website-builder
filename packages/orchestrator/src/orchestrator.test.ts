@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTaskSchema, createFixtureIR, documentPathSchemas, hashJson, stageResultJsonSchemas, type AgentTask, type DesignIR } from '@pwb/domain';
+import { agentTaskSchema, createFixtureIR, documentPathSchemas, hashJson, idempotencyKey, stageResultJsonSchemas, type AgentTask, type DesignIR } from '@pwb/domain';
 import { CLAUDE_RUNNER_TIMEOUT_MS, FakeModelProvider } from '@pwb/providers';
 import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, VersionStore } from './index.js';
 
@@ -440,3 +440,19 @@ describe('orchestrator', () => {
     expect(result.results[0]?.state).toBe('cancelled');
   });
 });
+
+describe('run planner model alias', () => {
+  it('names the resolved provider on every task, and keeps their idempotency keys apart', () => {
+    const store = new VersionStore();
+    const base = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const claude = new RunPlanner(store).plan('run-claude', base.id, 'fixture');
+    const codex = new RunPlanner(store, 'codex-gpt-5.6-sol').plan('run-claude', base.id, 'fixture');
+    expect(claude.tasks.map((task) => task.modelAlias)).toEqual(['claude-local', 'claude-local', 'claude-local']);
+    expect(codex.tasks.map((task) => task.modelAlias)).toEqual(['codex-gpt-5.6-sol', 'codex-gpt-5.6-sol', 'codex-gpt-5.6-sol']);
+    // Same run, same brief, same base: only the provider differs, and the key must too.
+    for (const [index, task] of codex.tasks.entries()) {
+      expect(idempotencyKey(task)).not.toBe(idempotencyKey(claude.tasks[index]!));
+    }
+  });
+});
+

@@ -14,7 +14,7 @@ import {
   PrototypeStage, RenderHubEvidenceSource, type CritiqueProvider, type EvidenceSource,
 } from '../packages/stage-prototype/src/index.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
-import { createModelProvider, modelProviderName } from '../apps/server/src/provider.js';
+import { createModelProvider, modelAlias, modelProviderName } from '../apps/server/src/provider.js';
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
 const useBrowser = process.argv.includes('--render');
@@ -46,7 +46,7 @@ async function main(): Promise<void> {
       store, applier, scheduler: new Scheduler(),
       architect: model ? new ClaudeInformationArchitect(codex ? { session: new CodexSession() } : {}) : new FakeInformationArchitect(),
       composer: model ? new ClaudeSectionComposer(codex ? { session: new CodexSession() } : {}) : new FakeSectionComposer(),
-      critique, evidence, brief: BRIEF,
+      critique, evidence, brief: BRIEF, modelAlias: modelAlias(provider),
       onEvent: (type, payload) => { if (process.env.PWB_VERBOSE) console.error(type, JSON.stringify(payload)); },
     });
     const outcome = await stage.run({ runId: 'cli-prototype', baseVersionId: base.id });

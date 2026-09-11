@@ -31,6 +31,21 @@ function newRun(runId = 'identity-test'): IdentityRun {
 }
 
 describe('identity run', () => {
+  it('names the resolved provider on every task it queues, not Claude under Codex', async () => {
+    const inner = new FakeIdentityProvider();
+    const aliases: string[] = [];
+    const run = new IdentityRun({
+      runId: 'identity-alias', repository: new ProjectRepository(database),
+      modelAlias: 'codex-gpt-5.6-sol',
+      provider: { propose: async (task, signal) => { aliases.push(task.modelAlias); return inner.propose(task, signal); } },
+    });
+    await run.initialize();
+    await run.start();
+    expect(aliases.length).toBeGreaterThan(0);
+    // `idempotencyKey` hashes the alias, so a Codex proposal must not derive the key a Claude one would.
+    expect([...new Set(aliases)]).toEqual(['codex-gpt-5.6-sol']);
+  });
+
   it('passes the exact execution briefing to the curator and exposes it in the snapshot', async () => {
     const briefing = 'Nicho de cerâmica autoral para oficinas de bairro.';
     const inner = new FakeIdentityProvider();

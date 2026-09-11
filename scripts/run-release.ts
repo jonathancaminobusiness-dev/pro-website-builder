@@ -20,6 +20,7 @@
  */
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { modelProviderName } from '../apps/server/src/provider.js';
 import { ReleaseRun } from '../apps/server/src/release-run.js';
 import { Applier, PatchGate, VersionStore } from '../packages/orchestrator/src/index.js';
 import { loadReleaseDocument } from '../packages/stage-finalization/src/index.js';
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
     fontsDir,
     siteUrl,
     siteName,
-    ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}),
+    modelProvider: modelProviderName(process.env.PWB_MODEL_PROVIDER),
   });
   // A command line run has no durable log of its own, so its events are printed
   // beside the report instead of being dropped.
