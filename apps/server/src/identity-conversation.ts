@@ -7,10 +7,12 @@ import {
   BRIEFING_SUMMARY_MAX_LENGTH,
   briefingConversationSnapshotSchema,
   briefingConversationTurnSchema,
-  canBriefingConversationTransition,
+  briefingTurnNextStates,
   canConfirmBriefing,
   canSendBriefingMessage,
+  findTurnVisualOutput,
   hashJson,
+  visualOutputReason,
   type AgentResult,
   type AgentTask,
   type BriefingAnsweredQuestion,
@@ -307,6 +309,10 @@ export class BriefingConversation {
       return { ok: false, failure: { code: 'CONVERSATION_SCHEMA_INVALID', message: 'O modelo respondeu fora do contrato da conversa.' }, corrections: parsed.error.issues.map((issue) => `${issue.path.join('.') || 'raiz'}: ${issue.message}`) };
     }
     const turn = parsed.data;
+    const visual = findTurnVisualOutput(turn, captainWords(context));
+    if (visual.length > 0) {
+      return { ok: false, failure: { code: 'CONVERSATION_VISUAL_OUTPUT', message: 'O modelo tentou produzir saída visual, que pertence à etapa de identidade.' }, corrections: [`Saída visual recusada (${visual.join(', ')}). ${visualOutputReason(visual)}`] };
+    }
     const problems = this.illegal(turn, context);
     if (problems.length > 0) return { ok: false, failure: { code: 'CONVERSATION_ILLEGAL_TRANSITION', message: 'O modelo pediu um passo que a conversa não permite.' }, corrections: problems };
     return { ok: true, turn };
@@ -315,12 +321,12 @@ export class BriefingConversation {
   /** The rules the closed schema cannot state on its own: where the conversation is, and what it is allowed to do next. */
   private illegal(turn: BriefingConversationTurn, context: BriefingTurnContext): string[] {
     const problems: string[] = [];
-    if (context.closing) {
-      if (turn.nextState !== 'final') problems.push('O capitão confirmou o briefing, então este turno precisa de intent e nextState iguais a `final`.');
-      return problems;
+    if (!briefingTurnNextStates(context.state, context.closing).includes(turn.nextState)) {
+      if (context.closing) problems.push('O capitão confirmou o briefing, então este turno precisa de intent e nextState iguais a `final`.');
+      else if (turn.nextState === 'final') problems.push('Só a confirmação do capitão fecha o briefing; este turno não pode pedir `final`.');
+      else problems.push(`De \`${context.state}\` a conversa não pode ir para \`${turn.nextState}\`.`);
     }
-    if (turn.nextState === 'final') problems.push('Só a confirmação do capitão fecha o briefing; este turno não pode pedir `final`.');
-    else if (!canBriefingConversationTransition(context.state, turn.nextState)) problems.push(`De \`${context.state}\` a conversa não pode ir para \`${turn.nextState}\`.`);
+    if (context.closing) return problems;
     if (context.mustConclude && turn.intent === 'question') problems.push(`O limite de ${this.maxQuestions} perguntas foi atingido; ofereça um resumo em vez de perguntar.`);
     return problems;
   }
@@ -459,7 +465,7 @@ export class BriefingConversation {
   }
 
   private closedReason(): string {
-    if (this.data.state === 'cancelled') return 'Esta conversa foi cancelada. A execução continua disponível; comece uma nova conversa para mudar o briefing.';
+    if (this.data.state === 'cancelled') return 'Esta conversa foi cancelada. A execução continua com o briefing com que foi criada e a etapa de identidade ainda pode ser iniciada a partir dele.';
     if (this.data.state === 'failed') return 'Esta conversa foi encerrada em modo seguro. Edite o resumo e confirme o briefing para seguir.';
     return 'O briefing desta execução já foi confirmado; confirme uma nova revisão para mudá-lo.';
   }
@@ -500,6 +506,21 @@ const TRUNCATED = '\n[resumo cortado no limite do briefing; edite o que faltar a
 function withinBriefingLimit(summary: string): string {
   if (summary.length <= BRIEFING_SUMMARY_MAX_LENGTH) return summary;
   return `${summary.slice(0, BRIEFING_SUMMARY_MAX_LENGTH - TRUNCATED.length).trimEnd()}${TRUNCATED}`;
+}
+
+/**
+ * Everything the captain has written in this conversation, which is what
+ * decides whether a value the model gave back is theirs or its own invention.
+ */
+function captainWords(context: BriefingTurnContext): string {
+  return [
+    context.originalText,
+    context.normalizedText,
+    context.currentMessage,
+    context.confirmedSummary ?? '',
+    ...context.history.flatMap((entry) => entry.author === 'captain' ? [entry.text] : []),
+    ...context.askedQuestions.flatMap((entry) => entry.answer === undefined ? [] : [entry.answer]),
+  ].join('\n');
 }
 
 function normalizedMessage(error: unknown): string {

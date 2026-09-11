@@ -52,6 +52,21 @@ export function canBriefingConversationTransition(from: BriefingConversationStat
   return BRIEFING_CONVERSATION_TRANSITIONS[from].includes(to);
 }
 
+/**
+ * The moves a model may ask for on one turn, which is narrower than the moves
+ * the conversation can make. `cancelled` and `failed` are the server's to
+ * record, never a model's to request, and only the captain's confirmation
+ * reaches `final` — so the closing turn is the only one that may ask for it.
+ *
+ * The prompt advertises this list and the server validates against it, which is
+ * the point of computing it once: a turn spent on a move the validator refuses
+ * is a turn the captain paid for and lost.
+ */
+export function briefingTurnNextStates(state: BriefingConversationState, closing: boolean): BriefingConversationState[] {
+  if (closing) return ['final'];
+  return BRIEFING_CONVERSATION_TRANSITIONS[state].filter((next) => next !== 'cancelled' && next !== 'failed' && next !== 'final');
+}
+
 /** The states a captain may still send a message from; everything else is closed to model turns. */
 export function canSendBriefingMessage(state: BriefingConversationState): boolean {
   return state === 'entry' || state === 'recommendation' || state === 'question' || state === 'confirmation';
@@ -88,15 +103,6 @@ export const BRIEFING_CONCEPTUAL_DIRECTIONS = 3;
 
 // ------------------------------------------------------- visual refusal
 
-/**
- * Where a text came from. `authored` is what the model wrote as its own
- * proposal; `restated` is what the plan asks it to carry over from the captain
- * — the confirmed briefing repeated in `summary`, the facts and hypotheses that
- * give the captain's own words back. A hex value or a link the captain typed is
- * the captain's text, not visual output the model produced.
- */
-export type VisualOutputSource = 'authored' | 'restated';
-
 interface VisualOutputRule {
   readonly id: string;
   readonly pattern: RegExp;
@@ -114,8 +120,9 @@ interface VisualOutputRule {
  *
  * A generated artifact — markup, a code block, a token table, an embedded image
  * — is refused wherever it appears, because no captain asked for one. The rest
- * is refused only in text the model authored: refusing them in a restatement
- * would refuse the captain's own brief back to them.
+ * is refused unless the flagged value is one the captain themself wrote: a
+ * rebrand that names its current hex value gets that value back in the summary,
+ * while a hex value the model invented is visual output either way.
  */
 export const BRIEFING_VISUAL_OUTPUT_RULES: readonly VisualOutputRule[] = Object.freeze([
   { id: 'markup', pattern: /<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?>/i, why: 'A conversa de briefing não escreve HTML nem JSX.', authoredOnly: false },
@@ -124,13 +131,34 @@ export const BRIEFING_VISUAL_OUTPUT_RULES: readonly VisualOutputRule[] = Object.
   { id: 'css-declaration', pattern: /(?:^|[\s;{])(?:color|background(?:-color)?|font-family|font-size)\s*:/i, why: 'A conversa de briefing não escreve CSS.', authoredOnly: true },
   { id: 'token-path', pattern: /\b(?:color|font|space|radius|size)\.[a-z][a-z0-9]*\.[a-z0-9]/i, why: 'Tokens pertencem à etapa de identidade, não ao briefing.', authoredOnly: false },
   { id: 'data-uri', pattern: /data:image\//i, why: 'A conversa de briefing não devolve imagens.', authoredOnly: false },
-  { id: 'image-file', pattern: /\.(?:png|jpe?g|svg|webp|gif|avif)\b/i, why: 'A conversa de briefing não devolve arquivos de imagem.', authoredOnly: true },
-  { id: 'link', pattern: /https?:\/\//i, why: 'A conversa de briefing não referencia site, mockup ou preview.', authoredOnly: true },
+  { id: 'image-file', pattern: /[\w-]*\.(?:png|jpe?g|svg|webp|gif|avif)\b/i, why: 'A conversa de briefing não devolve arquivos de imagem.', authoredOnly: true },
+  { id: 'link', pattern: /https?:\/\/\S*/i, why: 'A conversa de briefing não referencia site, mockup ou preview.', authoredOnly: true },
 ]);
 
-/** The ids of every visual-output rule the text breaks, in declaration order. */
-export function findVisualOutput(text: string, source: VisualOutputSource = 'authored'): string[] {
-  return BRIEFING_VISUAL_OUTPUT_RULES.filter((rule) => (source === 'authored' || !rule.authoredOnly) && rule.pattern.test(text)).map((rule) => rule.id);
+function normalizeForEcho(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ');
+}
+
+function everyMatchWasSaid(pattern: RegExp, text: string, said: string): boolean {
+  const all = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  return [...text.matchAll(all)].every((match) => said.includes(normalizeForEcho(match[0])));
+}
+
+/**
+ * The ids of every visual-output rule the text breaks, in declaration order.
+ *
+ * `restatedFrom` is the captain's own words, passed only for the fields the
+ * plan asks the model to give back — the summary, the facts, the hypotheses. A
+ * rule that a captain may legitimately have written is broken there only by a
+ * value the captain never wrote; everything else is judged as the model's.
+ */
+export function findVisualOutput(text: string, restatedFrom?: string): string[] {
+  const said = restatedFrom === undefined ? undefined : normalizeForEcho(restatedFrom);
+  return BRIEFING_VISUAL_OUTPUT_RULES.filter((rule) => {
+    if (!rule.pattern.test(text)) return false;
+    if (said === undefined || !rule.authoredOnly) return true;
+    return !everyMatchWasSaid(rule.pattern, text, said);
+  }).map((rule) => rule.id);
 }
 
 export function visualOutputReason(ids: readonly string[]): string {
@@ -174,19 +202,6 @@ export const conceptualDirectionSchema = z.object({
 }).strict();
 export type ConceptualDirection = z.infer<typeof conceptualDirectionSchema>;
 
-function turnTexts(turn: { message: string; question?: BriefingQuestion | undefined; facts: string[]; hypotheses: string[]; unknowns: BriefingGap[]; summary?: string | undefined; directions?: ConceptualDirection[] | undefined }): Array<{ text: string; source: VisualOutputSource }> {
-  const authored = (text: string): { text: string; source: VisualOutputSource } => ({ text, source: 'authored' });
-  const restated = (text: string): { text: string; source: VisualOutputSource } => ({ text, source: 'restated' });
-  return [
-    authored(turn.message),
-    ...(turn.question ? [turn.question.text, turn.question.why, ...turn.question.options].map(authored) : []),
-    ...turn.facts.map(restated),
-    ...turn.hypotheses.map(restated),
-    ...turn.unknowns.flatMap((gap) => [authored(gap.gap), authored(gap.impact)]),
-    ...(turn.summary ? [restated(turn.summary)] : []),
-    ...(turn.directions ?? []).flatMap((direction) => [direction.label, direction.positioning, direction.tone, direction.visualLanguage, direction.palette, direction.typography, direction.composition, ...direction.applications].map(authored)),
-  ];
-}
 
 /**
  * The closed answer a model may give. `intent` and `nextState` must agree:
@@ -222,13 +237,37 @@ export const briefingConversationTurnSchema = z.object({
   if (turn.intent !== 'final' && turn.directions) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['directions'], message: 'Direções conceituais só existem no fechamento da conversa.' });
   }
-  for (const [index, entry] of turnTexts(turn).entries()) {
-    const violations = findVisualOutput(entry.text, entry.source);
-    if (violations.length === 0) continue;
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ['message', index], message: `Saída visual recusada (${violations.join(', ')}). ${visualOutputReason(violations)}` });
-  }
 });
 export type BriefingConversationTurn = z.infer<typeof briefingConversationTurnSchema>;
+
+function turnTexts(turn: BriefingConversationTurn): Array<{ text: string; restated: boolean }> {
+  const authored = (text: string): { text: string; restated: boolean } => ({ text, restated: false });
+  const restated = (text: string): { text: string; restated: boolean } => ({ text, restated: true });
+  return [
+    authored(turn.message),
+    ...(turn.question ? [turn.question.text, turn.question.why, ...turn.question.options].map(authored) : []),
+    ...turn.facts.map(restated),
+    ...turn.hypotheses.map(restated),
+    ...turn.unknowns.flatMap((gap) => [authored(gap.gap), authored(gap.impact)]),
+    ...(turn.summary ? [restated(turn.summary)] : []),
+    ...(turn.directions ?? []).flatMap((direction) => [direction.label, direction.positioning, direction.tone, direction.visualLanguage, direction.palette, direction.typography, direction.composition, ...direction.applications].map(authored)),
+  ];
+}
+
+/**
+ * The visual output a turn tries to produce, judged against everything the
+ * captain has actually written in this conversation. It lives beside the schema
+ * rather than inside it because the schema is closed over the turn alone, and
+ * whether a hex value is the model's invention or the captain's brand colour is
+ * a question only the transcript can answer.
+ */
+export function findTurnVisualOutput(turn: BriefingConversationTurn, captainText: string): string[] {
+  const broken = new Set<string>();
+  for (const entry of turnTexts(turn)) {
+    for (const id of findVisualOutput(entry.text, entry.restated ? captainText : undefined)) broken.add(id);
+  }
+  return BRIEFING_VISUAL_OUTPUT_RULES.filter((rule) => broken.has(rule.id)).map((rule) => rule.id);
+}
 
 // ------------------------------------------------------- the transcript
 
@@ -311,9 +350,6 @@ export const briefingConversationSnapshotSchema = z.object({
 export type BriefingConversationSnapshot = z.infer<typeof briefingConversationSnapshotSchema>;
 
 // ----------------------------------------------------------- the routes
-
-export const BRIEFING_CONVERSATION_ROUTE = '/api/identity/runs/:runId/conversation';
-export const BRIEFING_CONVERSATION_CONFIRM_ROUTE = '/api/identity/runs/:runId/conversation/confirm';
 
 export function briefingConversationPath(runId: string): string {
   return `/api/identity/runs/${encodeURIComponent(runId)}/conversation`;

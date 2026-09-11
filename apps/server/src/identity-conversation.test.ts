@@ -3,6 +3,7 @@ import {
   BRIEFING_CONVERSATION_MAX_QUESTIONS,
   BRIEFING_CONVERSATION_TRANSITIONS,
   briefingConversationTurnSchema,
+  briefingTurnNextStates,
   canBriefingConversationTransition,
   canConfirmBriefing,
   canSendBriefingMessage,
@@ -152,6 +153,19 @@ describe('briefing conversation state machine', () => {
     expect(snapshot.directions).toEqual([]);
   });
 
+  it('offers a correcting turn only the moves the validator accepts, never final', async () => {
+    const { conversation, tasks } = harness([succeeded(CONFIRMATION), succeeded(QUESTION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    const adjusted = await conversation.send({ message: 'Não é bem isso: o centro é a prevenção.', action: 'correct', idempotencyKey: nextKey() });
+
+    const advertised = /pode pedir é: (.+)\./.exec(tasks[1]!.brief)?.[1]?.split(', ') ?? [];
+    expect(advertised).toEqual(briefingTurnNextStates('confirmation', false));
+    expect(advertised).not.toContain('final');
+    expect(adjusted.state).toBe('question');
+    expect(tasks).toHaveLength(2);
+  });
+
   it('cancels without touching the execution or a briefing already confirmed', async () => {
     const { conversation, tasks } = harness([succeeded(RECOMMENDATION)]);
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
@@ -260,7 +274,7 @@ describe('briefing conversation safe answers', () => {
   it('accepts a summary that repeats a hex value and a link the captain wrote', async () => {
     const echoed = turn({ ...FINAL, summary: 'Queremos manter o verde #2E7D32 da marca atual; nosso site hoje é https://clinicax.com.br.' } as Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>);
     const { conversation, tasks } = harness([succeeded(CONFIRMATION), succeeded(echoed)]);
-    await conversation.send({ message: 'Queremos manter o verde #2E7D32 da marca atual.', action: 'answer', idempotencyKey: nextKey() });
+    await conversation.send({ message: 'Queremos manter o verde #2E7D32 da marca atual e nosso site hoje é https://clinicax.com.br.', action: 'answer', idempotencyKey: nextKey() });
 
     const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva que mantém o verde da marca atual.', idempotencyKey: nextKey() });
 
@@ -279,7 +293,30 @@ describe('briefing conversation safe answers', () => {
 
     expect(closed.directions).toEqual([]);
     expect(closed.briefing).toBe('Clínica de bairro preventiva.');
-    expect(closed.error?.code).toBe('CONVERSATION_SCHEMA_INVALID');
+    expect(closed.error?.code).toBe('CONVERSATION_VISUAL_OUTPUT');
+  });
+
+  it('refuses a hex value the model invented in hypotheses, which no captain ever wrote', async () => {
+    const invented = succeeded(turn({ intent: 'recommendation', nextState: 'recommendation', hypotheses: ['A paleta natural pede algo como #2E7D32 com areia #F5EDE1.'] }));
+    const { conversation, tasks } = harness([invented, invented]);
+
+    const snapshot = await conversation.send({ message: 'Somos uma clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(tasks[1]?.brief).toContain('Saída visual recusada (hex-color)');
+    expect(snapshot.fallback).toBe(true);
+    expect(snapshot.messages.every((message) => !message.text.includes('#2E7D32'))).toBe(true);
+    expect(snapshot.messages.flatMap((message) => message.turn?.hypotheses ?? [])).toEqual([]);
+  });
+
+  it('accepts a fact that gives back an image file the captain named', async () => {
+    const echoed = succeeded(turn({ intent: 'recommendation', nextState: 'recommendation', facts: ['O logo atual está em logo.png.'] }));
+    const { conversation, tasks } = harness([echoed]);
+
+    const snapshot = await conversation.send({ message: 'Nosso logo atual está no arquivo logo.png e queremos partir dele.', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(snapshot.state).toBe('recommendation');
+    expect(snapshot.fallback).toBe(false);
+    expect(tasks).toHaveLength(1);
   });
 });
 
@@ -512,10 +549,13 @@ describe('briefing conversation contract', () => {
     expect(findVisualOutput('color.brand.primary')).toContain('token-path');
     expect(findVisualOutput('veja https://exemplo.com')).toContain('link');
     expect(findVisualOutput('anexo logo.png')).toContain('image-file');
-    expect(findVisualOutput('use #0a7d5c', 'restated')).toEqual([]);
-    expect(findVisualOutput('veja https://exemplo.com', 'restated')).toEqual([]);
-    expect(findVisualOutput('<div>home</div>', 'restated')).toContain('markup');
-    expect(findVisualOutput('color.brand.primary', 'restated')).toContain('token-path');
+    expect(findVisualOutput('use #0a7d5c', 'a marca já usa #0a7d5c hoje')).toEqual([]);
+    expect(findVisualOutput('use #0a7d5c', 'a marca é verde e quente')).toContain('hex-color');
+    expect(findVisualOutput('veja https://exemplo.com', 'nosso site é https://exemplo.com')).toEqual([]);
+    expect(findVisualOutput('veja https://outro.com', 'nosso site é https://exemplo.com')).toContain('link');
+    expect(findVisualOutput('anexo mockup.png', 'o logo atual está em logo.png')).toContain('image-file');
+    expect(findVisualOutput('<div>home</div>', 'o capitão escreveu <div>home</div>')).toContain('markup');
+    expect(findVisualOutput('color.brand.primary', 'color.brand.primary')).toContain('token-path');
   });
 
   it('builds the safe summary out of the captain words alone', () => {

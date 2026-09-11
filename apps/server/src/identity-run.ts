@@ -131,7 +131,7 @@ export class IdentityRun {
   private conversationStarted = false;
   private readonly deadlines: IdentityStageDeadlines;
 
-  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; conversationTimeoutMs?: number; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
+  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
     this.briefing = options.briefing ?? IDENTITY_BRIEFING;
     this.conversationRun = new BriefingConversation({
       runId: options.runId,
@@ -147,7 +147,6 @@ export class IdentityRun {
         await options.repository.updateRunBriefing(options.runId, briefing);
       },
       initialText: () => this.briefing,
-      ...(options.conversationTimeoutMs === undefined ? {} : { timeoutMs: options.conversationTimeoutMs }),
     });
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     const ir = createFixtureIR();

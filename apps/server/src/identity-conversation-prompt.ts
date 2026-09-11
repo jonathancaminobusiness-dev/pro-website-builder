@@ -1,9 +1,9 @@
 import {
   BRIEFING_CONCEPTUAL_DIRECTIONS,
   BRIEFING_CONVERSATION_MAX_QUESTIONS,
-  BRIEFING_CONVERSATION_TRANSITIONS,
   BRIEFING_VISUAL_OUTPUT_RULES,
   briefingConversationTurnJsonSchema,
+  briefingTurnNextStates,
   type BriefingAnsweredQuestion,
   type BriefingConversationState,
   type BriefingGap,
@@ -57,13 +57,13 @@ function boundary(): string {
   ].join('\n');
 }
 
-function machine(state: BriefingConversationState): string {
-  const allowed = BRIEFING_CONVERSATION_TRANSITIONS[state].filter((next) => next !== 'cancelled' && next !== 'failed');
+function machine(state: BriefingConversationState, closing: boolean): string {
+  const allowed = briefingTurnNextStates(state, closing);
   return [
     `O estado atual da conversa é \`${state}\`.`,
     `A partir dele, o único \`nextState\` que você pode pedir é: ${allowed.join(', ')}.`,
     'O campo `intent` e o campo `nextState` precisam ser iguais.',
-    'Você nunca fecha o briefing sozinho: `final` só acontece quando o capitão confirma o resumo.',
+    closing ? 'O capitão já confirmou o resumo, e é isso que fecha o briefing.' : 'Você nunca fecha o briefing sozinho: `final` só acontece quando o capitão confirma o resumo.',
   ].join('\n');
 }
 
@@ -112,7 +112,7 @@ export function briefingConversationPrompt(context: BriefingTurnContext, correct
   return [
     FACILITATION,
     boundary(),
-    machine(context.state),
+    machine(context.state, context.closing),
     `Turno número ${context.turnNumber}. Perguntas já feitas: ${context.questionCount} de ${BRIEFING_CONVERSATION_MAX_QUESTIONS}.`,
     `Texto original do capitão:\n${context.originalText || '(ainda não há texto original)'}`,
     `Texto normalizado que vale como briefing:\n${context.normalizedText || '(ainda não há texto normalizado)'}`,
