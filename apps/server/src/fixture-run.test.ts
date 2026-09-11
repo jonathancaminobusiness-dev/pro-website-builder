@@ -546,6 +546,72 @@ describe('phase 0 fixture run', () => {
     third.sqlite.close();
   });
 
+  it('stops reporting a proposal a later restart no longer holds, instead of blaming the next stage', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-stale-'));
+    const dbPath = join(dir, 'stale.sqlite');
+    // Each attempt proposes something of its own, so the re-run after the restart
+    // lands on a version of its own instead of recreating the discarded one.
+    const fake = new FakeModelProvider();
+    const varying: ModelProvider = {
+      async propose(task, signal) {
+        const result = await fake.propose(task, signal);
+        return { ...result, proposal: { ...result.proposal!, operations: [{ op: 'replace', path: '/reviewRecord/findings', value: [`proposta da tentativa ${task.attempt}`] }] } };
+      },
+    };
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    await original.initialize('run-stale');
+    const abandoned = (await original.runNext()).currentVersion.id;
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const resumed = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    expect(await resumed.restore('run-stale')).toBe(true);
+    expect(resumed.snapshot().discardedStage).toBe('identity');
+    expect((await resumed.runNext()).currentVersion.id).not.toBe(abandoned);
+    await resumed.approve('identity', 'captain');
+    second.sqlite.close();
+
+    const third = openDatabase(dbPath);
+    const again = new FixtureRun({ repository: new ProjectRepository(third), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    expect(await again.restore('run-stale')).toBe(true);
+    const after = again.snapshot();
+    expect(after.approvals.filter((entry) => entry.decision === 'approved')).toHaveLength(1);
+    expect(after.discardedStage).toBeUndefined();
+    third.sqlite.close();
+  });
+
+  it('does not report a rejected finalization as discarded when the release adopted a refinement', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-finalization-'));
+    const dbPath = join(dir, 'finalization.sqlite');
+    const releaseRoot = join(dir, 'releases');
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await original.initialize('run-finalization');
+    await atFinalizationGate(original);
+    await completeEvidence(original, join(releaseRoot, '..', 'evidence'));
+    const staged = original.snapshot().currentVersion.id;
+    await original.prepareRelease();
+    // Gate 3 adopts a refinement on top of the version the stage produced, the
+    // way ReleaseRun.prepare does when the refiner answers with a repair.
+    const context = original.releaseContext();
+    const refined = context.applier.apply(
+      { operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['refino adotado pelo gate 3'] }], baseVersionId: context.current.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'Refino determinístico.', confidence: 1, stage: 'finalization', role: 'compiler', idempotencyKey: 'refino-gate-3' },
+      { allowedPaths: ['/reviewRecord'], stage: 'finalization', role: 'compiler' },
+      context.current.id,
+    );
+    await context.adopt(refined);
+    expect(original.snapshot().currentVersion.id).not.toBe(staged);
+    await original.reject('finalization', 'captain');
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-finalization')).toBe(true);
+    expect(restored.snapshot().discardedStage).toBeUndefined();
+    second.sqlite.close();
+  });
+
   it('discards an ungated proposal when the process restarts before the captain decides', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-pending-'));
     const dbPath = join(dir, 'pending.sqlite');

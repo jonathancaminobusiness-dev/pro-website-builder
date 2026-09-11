@@ -104,8 +104,6 @@ export default function App() {
   }, []);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
 
-  useEffect(() => { currentSnapshot.current = snapshot; }, [snapshot]);
-
   useEffect(() => {
     const track = (): void => setHash(window.location.hash);
     window.addEventListener('hashchange', track);
@@ -155,14 +153,14 @@ export default function App() {
     if (!remembered) return;
     void request<Snapshot>(`/api/runs/${encodeURIComponent(remembered)}`).then(
       // A run the captain started in the meantime is the one on screen.
-      (next) => { setSnapshot((current) => current ?? next); },
+      (next) => { if (!currentSnapshot.current) commitSnapshot(next); },
       (cause: unknown) => {
         if (isMissing(cause)) { forgetRun(PIPELINE_RUN_KEY); return; }
         if (currentSnapshot.current) return;
         setError(failureMessage(cause));
       },
     );
-  }, []);
+  }, [commitSnapshot]);
 
   useEffect(() => { readRememberedPipelineRun(); }, [readRememberedPipelineRun]);
 
