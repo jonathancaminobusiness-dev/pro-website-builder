@@ -141,8 +141,13 @@ export function pendingMessage(state: ConversationUiState): string | null {
   return message;
 }
 
-/** What is happening right now, named for the captain and for the live region. */
+/**
+ * What is happening right now, named for the captain and for the live region.
+ * A failed request is no longer in flight, so it names nothing: the error block
+ * is what speaks then.
+ */
 export function progressLabel(state: ConversationUiState): string | null {
+  if (state.failure !== null) return null;
   switch (state.pending?.kind) {
     case 'resume': return 'Reabrindo a conversa desta execução…';
     case 'confirm': return 'Fechando o briefing…';

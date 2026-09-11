@@ -85,6 +85,10 @@ test('keeps the draft on a dead network and retries the same intent without a se
   await expect(chat.getByRole('alert')).toContainText('o que você escreveu continua aqui');
   await expect(answer).toHaveValue('Segurança clínica sem perder o carinho.');
   await expect(chat.locator('.chat-pending')).toHaveCount(1);
+  // Nothing can rewrite the field the pending answer came from, by keyboard or
+  // by a suggested option, so the replay cannot send text the screen replaced.
+  await expect(answer).toHaveAttribute('readonly', '');
+  await expect(chat.getByRole('button', { name: 'Experiência premium', exact: true })).toBeDisabled();
 
   await chat.getByRole('button', { name: 'Tentar novamente' }).click();
   await expect(page.getByLabel(/Briefing final, editável/)).toHaveValue(CONSOLIDATED_SUMMARY);
@@ -102,7 +106,8 @@ test('explains an off-contract response and lets the captain try again', async (
   const chat = page.locator('.briefing-chat');
 
   await expect(chat.getByRole('alert')).toContainText('não seguiu o contrato');
-  await chat.getByRole('button', { name: 'Reabrir do ponto salvo' }).click();
+  await expect(chat.getByRole('button', { name: 'Reabrir do ponto salvo' })).toHaveCount(0);
+  await chat.getByRole('button', { name: 'Tentar novamente' }).click();
   await expect(page.getByLabel(/Conte sobre o negócio/)).toBeVisible();
 });
 

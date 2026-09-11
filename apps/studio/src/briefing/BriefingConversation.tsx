@@ -79,10 +79,10 @@ export default function BriefingConversation(props: BriefingConversationProps): 
       <div className="section-heading">
         <div><p className="eyebrow">Antes do Gate 1</p><h2 id="briefing-chat-title">Conversa de briefing</h2></div>
       </div>
-      {state.availability === 'unreachable'
-        ? <p className="chat-progress" role="status">Não foi possível abrir a conversa desta execução.</p>
-        : <p className="chat-progress" role="status">{progress ?? 'Abrindo a conversa desta execução…'}</p>}
-      {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} onRetry={props.onRetry} onResume={props.onResume} />}
+      <p className="chat-progress" role="status">
+        {progress ?? (state.availability === 'unreachable' ? 'Não foi possível abrir a conversa desta execução.' : 'Abrindo a conversa desta execução…')}
+      </p>
+      {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} onRetry={props.onRetry} />}
     </section>;
   }
 
@@ -96,9 +96,10 @@ export default function BriefingConversation(props: BriefingConversationProps): 
   // a field bound to the draft is on screen to receive it.
   const draftVisible = showEntry || showQuestion;
   const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
+  const newExecutionExit = 'Não há texto salvo para fechar um briefing, então o caminho daqui é criar uma nova execução.';
   const haltedExit = showSummary
     ? 'Feche o briefing pelo resumo editável acima: é ele que libera a etapa de identidade.'
-    : 'Não há texto salvo para fechar um briefing, então o caminho daqui é criar uma nova execução.';
+    : newExecutionExit;
 
   return <section className="briefing-chat" aria-labelledby="briefing-chat-title">
     <div className="section-heading">
@@ -112,7 +113,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
 
     <p className="chat-counter" aria-live="polite">
       <span>{counter}</span>
-      {can.atLimit && <strong> · limite atingido: revise o resumo e feche o briefing manualmente.</strong>}
+      {can.atLimit && showSummary && <strong> · limite atingido: revise o resumo e feche o briefing manualmente.</strong>}
     </p>
 
     <ol className="chat-log" role="log" aria-live="polite" aria-label="Histórico da conversa de briefing">
@@ -123,7 +124,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         {readingList('Hipóteses do Studio', turn.hypotheses, 'hypotheses')}
         {readingList('Ainda desconhecido', turn.unknowns, 'unknowns')}
         {turn.question && <p className="chat-why"><strong>Por que isso muda a identidade.</strong> {turn.question.why}</p>}
-        {turn.role === 'captain' && draftVisible && <button className="secondary chat-correct" onClick={() => props.onCorrect(turn)} disabled={can.busy}>Corrigir esta resposta</button>}
+        {turn.role === 'captain' && draftVisible && <button className="secondary chat-correct" onClick={() => props.onCorrect(turn)} disabled={can.locked}>Corrigir esta resposta</button>}
       </li>)}
       {bubble !== null && <li className="chat-turn chat-captain chat-pending" aria-hidden={false}>
         <p className="chat-role">Você · enviando</p>
@@ -160,7 +161,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
       <p className="chat-why"><strong>Por que isso muda a identidade.</strong> {snapshot.question.why}</p>
       {snapshot.question.options && snapshot.question.options.length > 0 && <ul className="chat-options" aria-label="Respostas sugeridas">
         {snapshot.question.options.map((option) => <li key={option}>
-          <button className="secondary" onClick={() => props.onDraftChange(option)} disabled={can.busy}>{option}</button>
+          <button className="secondary" onClick={() => props.onDraftChange(option)} disabled={can.locked}>{option}</button>
         </li>)}
       </ul>}
       <label htmlFor="briefing-chat-answer">Sua resposta</label>
@@ -206,8 +207,12 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         a failed conversation — still has an exit. */}
     {!can.closed && <div className="actions chat-exit">
       <button className="secondary" onClick={props.onCancel} disabled={!can.canCancel}>Cancelar conversa</button>
-      {!draftVisible && !showSummary && !halted && state.failure === null && <button className="secondary" onClick={props.onResume} disabled={can.locked}>Reabrir do ponto salvo</button>}
+      {!draftVisible && !showSummary && !halted && !can.atLimit && state.failure === null && <button className="secondary" onClick={props.onResume} disabled={can.locked}>Reabrir do ponto salvo</button>}
     </div>}
+
+    {can.atLimit && !showSummary && <p className="chat-cancelled" role="status">
+      A conversa chegou ao limite antes de qualquer texto ser salvo na execução. {newExecutionExit}
+    </p>}
 
     {snapshot.state === 'cancelled' && <p className="chat-cancelled" role="status">
       Conversa cancelada. Nada foi enviado ao curador e nenhuma etapa de identidade foi gasta, e ela não volta a abrir nesta execução. {haltedExit}
@@ -243,13 +248,12 @@ export default function BriefingConversation(props: BriefingConversationProps): 
 /**
  * The failed request and the two honest ways out of it: replay it exactly as it
  * was sent, or drop it and edit the field again. A panel with no conversation
- * yet has neither field nor pending body, so it offers the read instead.
+ * yet has no field to edit, so the replay is the only offer there.
  */
-function ChatFailure(props: { failure: { kind: string; message: string }; canRetry: boolean; onRetry: () => void; onDiscard?: () => void; onResume?: () => void }): ReactElement {
+function ChatFailure(props: { failure: { kind: string; message: string }; canRetry: boolean; onRetry: () => void; onDiscard?: () => void }): ReactElement {
   return <div className="chat-failure" role="alert">
     <p>{props.failure.message}</p>
     <div className="actions">
-      {props.onResume && <button className="secondary" onClick={props.onResume}>Reabrir do ponto salvo</button>}
       {props.onDiscard && props.canRetry && <button className="secondary" onClick={props.onDiscard}>Editar e reenviar</button>}
       {props.canRetry && <button className="primary" onClick={props.onRetry}>Tentar novamente</button>}
     </div>
