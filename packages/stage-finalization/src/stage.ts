@@ -7,7 +7,7 @@ import { criticTasks, type CriticTaskContext } from './critics.js';
 import type { ReleaseCriticProvider } from './critic-provider.js';
 import { partitionEvidence } from './evidence.js';
 import { evaluateReleaseGate } from './gate.js';
-import { checkPreviewReleaseParity } from './parity.js';
+import { checkPreviewReleaseParity, unreviewedFaces } from './parity.js';
 import { PatchRefiner } from './refiner.js';
 import { DeterministicReleaseSummarizer, type ReleaseSummarizerProvider } from './summarizer.js';
 
@@ -142,6 +142,11 @@ export class FinalizationStage {
     }
 
     const parity = checkPreviewReleaseParity(renderDesign(version.ir), compiled, new Map(version.ir.pages.routes.map((page) => [page.route, page.id])), input.previewFaces);
+    // Parity can only speak for faces a preview actually served. When none did,
+    // the faces the bundle self-hosts are coverage the gate does not have, and
+    // the captain is told which ones rather than reading silence as a match.
+    const unreviewed = unreviewedFaces(compiled, input.previewFaces);
+    if (unreviewed.length > 0) escalations.push(`Nenhum preview serviu este documento, então a paridade não comparou nenhuma face: o release publica ${unreviewed.join(', ')} sem que o capitão as tenha visto.`);
     const draft = evaluateReleaseGate({
       compiled,
       evidence: input.evidence,

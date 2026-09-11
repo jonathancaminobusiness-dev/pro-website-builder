@@ -10,7 +10,7 @@ import { renderDesign } from '@pwb/renderer';
 import {
   aggregateVetoes, checkPreviewReleaseParity, ClaudeReleaseCriticProvider, createReleaseHarness, criticTasks, DeterministicReleaseSummarizer,
   evaluateReleaseGate, evidenceCoverage, evidenceVetoes, FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage,
-  partitionEvidence, PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, VETO_CATALOG, writeEvidenceArtifact,
+  partitionEvidence, PatchRefiner, readEvidence, RELEASE_CRITICS, sealSummary, unreviewedFaces, VETO_CATALOG, writeEvidenceArtifact,
   type ReleaseCriticProvider, type ReleaseRefinerProvider, type ReleaseSummarizerProvider,
 } from './index.js';
 
@@ -168,6 +168,14 @@ describe('preview and release parity', () => {
   it('reports identical routes when the preview served the faces the release ships', () => {
     const { ir, compiled } = compiledWithFace();
     expect(checkPreviewReleaseParity(renderDesign(ir), compiled, pageIds(ir), compiled.fonts).matched).toBe(true);
+  });
+
+  it('names the self-hosted faces no preview ever compared', () => {
+    const { compiled } = compiledWithFace();
+    expect(unreviewedFaces(compiled, compiled.fonts)).toEqual([]);
+    expect(unreviewedFaces(compiled)).toEqual(['Fixture Sans 400 normal']);
+    // A bundle that self-hosts nothing has no face to report as unreviewed.
+    expect(unreviewedFaces(compiledFixture().compiled)).toEqual([]);
   });
 
   it('catches a release that ships a face the preview never served', () => {
@@ -510,6 +518,36 @@ describe('the finalization stage end to end with the deterministic providers', (
     expect(result.report.parity.matched).toBe(true);
     expect(result.report.summary?.gateAuthority).toBe('none');
     expect(result.report.escalations).toEqual([]);
+  });
+
+  it('escalates the faces it publishes when no preview served the document', async () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const version = applier.createRoot(createFixtureIR());
+    const stage = new FinalizationStage({
+      criticProvider: new FakeReleaseCriticProvider(),
+      refiner: new PatchRefiner(new FakeReleaseRefiner()),
+      compilerOptions: { ...COMPILER_OPTIONS, fonts: [FIXTURE_FACE] },
+    });
+    // The bundle carries a face, so the evidence has to name that release.
+    const faced = stage.compile(version.ir);
+    const measured = { releaseDigest: faced.digest, irHash: faced.irHash };
+    const evidence = [
+      artifact({ id: 'vitest', runner: 'vitest', engine: 'node', ...measured }),
+      artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', ...measured }),
+      artifact({ id: 'pw-chromium', runner: 'playwright', engine: 'chromium', ...measured }),
+      artifact({ id: 'pw-firefox', runner: 'playwright', engine: 'firefox', ...measured }),
+      artifact({ id: 'pw-webkit', runner: 'playwright', engine: 'webkit', ...measured }),
+      artifact({ id: 'lh-mobile', runner: 'lighthouse', engine: 'chromium', metrics: { performance: 0.98 }, ...measured }),
+    ];
+    // No `previewFaces`: exactly what `run:fixture` and `run:release` hand the stage.
+    const silent = await stage.run({ runId: 'run-no-preview', version, evidence, applier });
+    expect(silent.report.parity.matched).toBe(true);
+    expect(silent.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
+
+    // The same bundle, with the faces a preview really served, has nothing open.
+    const reviewed = await stage.run({ runId: 'run-preview', version, evidence, applier, previewFaces: faced.fonts });
+    expect(reviewed.report.escalations).toEqual([]);
   });
 
   it('keeps missing Codex setup errors actionable in the finalization report', async () => {
