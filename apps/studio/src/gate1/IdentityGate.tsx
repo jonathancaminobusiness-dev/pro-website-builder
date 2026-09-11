@@ -1,6 +1,8 @@
 import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
 import { renderBriefingCreateButton, renderBriefingEditor, renderBriefingReplacementConfirmation, renderBriefingReplacementOffer, type BriefingEditorElementFactory } from '@pwb/renderer/briefing-editor';
-import { createElement, useCallback, useState, type ReactElement } from 'react';
+import { createElement, useCallback, useEffect, useState, type ReactElement } from 'react';
+import BriefingConversation from '../briefing/BriefingConversation.js';
+import type { BriefingConversationController } from '../briefing/useBriefingConversation.js';
 
 export interface IdentityDirectionView {
   directionId: string;
@@ -74,6 +76,12 @@ export interface IdentityGateProps {
   onReject: (directionId: string, rationale: string) => void;
   onChangeToken: (tokenPath: string, value: string) => void;
   previewOrigin: string;
+  /**
+   * The briefing conversation for this execution. It is optional so a Studio
+   * built against a server without the conversation endpoints keeps the old
+   * free-text flow exactly as it was.
+   */
+  conversation?: BriefingConversationController;
 }
 
 export default function IdentityGate(props: IdentityGateProps): ReactElement {
@@ -85,9 +93,19 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [tokenPath, setTokenPath] = useState('color.accent');
   const [tokenValue, setTokenValue] = useState('#ff7a00');
   const [briefing, setBriefing] = useState(IDENTITY_BRIEFING);
-  // The briefing a replacement run would be created with is always written from
-  // scratch: nothing the captain did not read and choose is ever posted.
+  // The briefing a replacement run would be created with is never inherited
+  // silently: nothing the captain did not read and choose is ever posted. It
+  // starts blank, or — when a briefing was closed — at the summary the captain
+  // confirmed, still editable in the offer itself.
   const [replacementBriefing, setReplacementBriefing] = useState('');
+
+  // A closed briefing is the text a new execution would carry, so the field the
+  // replacement offer reads is the summary the captain confirmed, not the text
+  // that started the conversation.
+  const closedBriefing = props.conversation?.closedBriefing ?? null;
+  useEffect(() => {
+    if (closedBriefing) setBriefing(closedBriefing);
+  }, [closedBriefing]);
 
   const openRunForm = (label: string): ReactElement => <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
     <label htmlFor="gate1-open-run">{label}</label>
@@ -124,7 +142,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         onKeep: () => setConfirming(''),
         onCreate: () => props.onCreate(replacementBriefing.trim()),
       })
-    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => { setReplacementBriefing(''); setConfirming(asking); } });
+    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => { setReplacementBriefing(closedBriefing ?? ''); setConfirming(asking); } });
 
   const briefingEditor = renderBriefingEditor(briefingElementFactory, { value: briefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setBriefing });
   const briefingCreateButton = renderBriefingCreateButton(briefingElementFactory, { disabled: props.busy || briefing.trim() === '', onCreate: () => props.onCreate(briefing.trim()) });
@@ -181,6 +199,19 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
 
     {snapshot && <>
       <p className="gate-briefing">{snapshot.briefing}</p>
+      {props.conversation && <BriefingConversation
+        state={props.conversation.state}
+        onDraftChange={props.conversation.setDraft}
+        onSummaryChange={props.conversation.setSummary}
+        onSendEntry={props.conversation.sendEntry}
+        onAnswer={props.conversation.answer}
+        onSkip={props.conversation.skip}
+        onCancel={props.conversation.cancel}
+        onConfirm={props.conversation.confirm}
+        onRetry={props.conversation.retry}
+        onResume={props.conversation.resume}
+        onCorrect={props.conversation.correct}
+      />}
       <div className="actions gate-actions">
         {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
