@@ -172,7 +172,12 @@ export class PrototypeRunRegistry {
     this.runs.set(runId, record);
     await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.queued', payload: { runId, baseVersionId: base.id } });
     await this.persist(record);
-    this.lane = this.lane.then(() => this.execute(record, applier, base.id));
+    // The lane has to survive whatever this run does to it. `execute` handles its own failures, but
+    // anything it cannot - a repository that will not write, a bug above the scheduler - would
+    // otherwise reject the chain itself: an unhandled rejection, and every run queued behind this one
+    // waiting forever on a promise that already settled. So the run is failed here and the lane is
+    // handed on resolved.
+    this.lane = this.lane.then(() => this.execute(record, applier, base.id)).catch((error: unknown) => this.abandon(record, error));
     return this.snapshot(record);
   }
 
@@ -284,6 +289,17 @@ export class PrototypeRunRegistry {
       record.progress = { ...record.progress, status: 'failed', step: 'prototype.run.failed', detail: message, error: message, updatedAt: new Date().toISOString() };
       await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.failed', payload: { error: message } }).catch(() => undefined);
     }
+    await this.persist(record).catch(() => undefined);
+  }
+
+  /**
+   * The last resort for a run whose execution threw where nothing else could catch it. It records the
+   * failure on the run that caused it and swallows nothing else, so the lane keeps serving.
+   */
+  private async abandon(record: PrototypeRunRecord, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : 'A execução da etapa de protótipo falhou antes de produzir uma revisão.';
+    record.progress = { ...record.progress, status: 'failed', step: 'prototype.run.failed', detail: message, error: message, updatedAt: new Date().toISOString() };
+    await this.options.repository.appendEvent({ id: randomUUID(), runId: record.runId, type: 'prototype.run.failed', payload: { error: message } }).catch(() => undefined);
     await this.persist(record).catch(() => undefined);
   }
 
