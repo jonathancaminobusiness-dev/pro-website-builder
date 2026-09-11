@@ -386,6 +386,30 @@ describe('briefing conversation safe answers', () => {
     expect(refused.messages.every((message) => !message.text.includes('#2E7D32'))).toBe(true);
   });
 
+  it('keeps a colour the captain corrected into the brief exempt after the prompt history scrolled past it', async () => {
+    const echoed = turn({ intent: 'confirmation', nextState: 'confirmation', message: 'Fechando com o que você escreveu.', summary: 'Clínica de bairro preventiva que mantém o verde da marca.', facts: ['A marca atual usa o verde #2E7D32'] });
+    const { conversation, tasks } = harness([
+      succeeded(RECOMMENDATION), succeeded(QUESTION), succeeded(RECOMMENDATION), succeeded(QUESTION),
+      succeeded(RECOMMENDATION), succeeded(QUESTION), succeeded(RECOMMENDATION), succeeded(echoed),
+    ]);
+    await conversation.send({ message: 'Somos uma clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    // A correction is neither the entry text nor an answer to a question, so
+    // the transcript is the only durable record that the captain wrote it.
+    await conversation.send({ message: 'Mantenham o verde #2E7D32 da marca atual.', action: 'correct', idempotencyKey: nextKey() });
+    for (const message of ['Prevenção é o centro.', 'Segurança clínica.', 'Atendemos cães e gatos.', 'Time pequeno.', 'Acompanhamento é a promessa.']) {
+      await conversation.send({ message, action: 'answer', idempotencyKey: nextKey() });
+    }
+
+    const offered = await conversation.send({ message: 'Pode fechar assim.', action: 'answer', idempotencyKey: nextKey() });
+
+    const correction = offered.messages.findIndex((message) => message.text.includes('#2E7D32'));
+    expect(offered.messages.length - correction).toBeGreaterThan(12);
+    expect(offered.state).toBe('confirmation');
+    expect(offered.fallback).toBe(false);
+    expect(offered.messages.at(-1)?.turn?.facts).toEqual(['A marca atual usa o verde #2E7D32']);
+    expect(tasks).toHaveLength(8);
+  });
+
   it('still refuses a hex value the model wrote into a conceptual direction it authored', async () => {
     const painted = turn({ ...FINAL, directions: [{ ...direction('dir-um', 'Um'), palette: 'Base areia com verde #2E7D32 nos destaques.' }, direction('dir-dois', 'Dois'), direction('dir-tres', 'Três')] } as Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>);
     const { conversation } = harness([succeeded(CONFIRMATION), succeeded(painted), succeeded(painted)]);

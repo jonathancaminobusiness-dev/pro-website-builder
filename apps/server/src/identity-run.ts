@@ -141,9 +141,9 @@ export class IdentityRun {
       // turn takes up to a minute, and the captain can start the stage inside
       // it. The second ask is not redundant with the first — it is the one that
       // protects a running fan-out from being replaced under it.
-      guardTurn: () => {
+      guardTurn: (turn) => {
         this.refuseIfCancelled('create another one to work on a briefing.');
-        if (this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
+        if (!turn.cancelling && this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
       },
       onConfirmed: (briefing) => {
         this.briefing = briefing;

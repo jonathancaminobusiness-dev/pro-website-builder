@@ -338,6 +338,31 @@ describe('identity run', () => {
     expect(persisted?.conversation).toContain('confirmedAt');
   });
 
+  it('refuses a turn on a frozen execution but still lets the captain close the chat', async () => {
+    const repository = new ProjectRepository(database);
+    const conversationTasks: string[] = [];
+    const fake = new FakeIdentityProvider();
+    const provider: ModelProvider = {
+      async propose(task, signal) {
+        if (task.id.startsWith('identity-briefing-conversation')) conversationTasks.push(task.id);
+        return fake.propose(task, signal);
+      },
+    };
+    const run = new IdentityRun({ runId: 'identity-conversa-congelada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await run.conversation.send({ action: 'answer', idempotencyKey: 'turn-0' });
+    expect(run.conversation.state).toBe('recommendation');
+
+    await run.start();
+
+    await expect(run.conversation.send({ message: 'Pensando melhor, mudamos de ideia.', action: 'answer', idempotencyKey: 'turn-1' })).rejects.toThrow(/congelado/);
+    const stopped = await run.conversation.send({ action: 'cancel', idempotencyKey: 'turn-2' });
+
+    expect(stopped.state).toBe('cancelled');
+    expect(conversationTasks).toHaveLength(1);
+    expect(run.snapshot().directions).toHaveLength(3);
+  });
+
   it('keeps the briefing editable after the stage failed, with the same answer before and after a restart', async () => {
     const repository = new ProjectRepository(database);
     const fake = new FakeIdentityProvider();
