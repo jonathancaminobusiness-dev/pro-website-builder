@@ -123,16 +123,65 @@ test('says plainly that a cancelled conversation sent nothing to the curator', a
   // Cancelling closed no briefing, so it enabled no stage either.
   await expect(page.getByRole('button', { name: 'Feche o briefing para executar' })).toBeDisabled();
 
-  // Cancelling is not a dead end: the persisted text can still be reopened and
-  // closed, which is what enables the stage.
-  await expect(chat.getByRole('button', { name: 'Reabrir do ponto salvo' })).toBeEnabled();
-  await chat.getByRole('button', { name: 'Reabrir do ponto salvo' }).click();
+  // A cancelled conversation does not reopen on this execution and does not
+  // pretend to: the persisted text is still closable, and that is the exit.
+  await expect(chat.getByRole('button', { name: 'Reabrir do ponto salvo' })).toHaveCount(0);
+  await expect(chat.getByText('não volta a abrir nesta execução')).toBeVisible();
   const summary = page.getByLabel(/Briefing final, editável/);
   await expect(summary).toHaveValue(ENTRY);
   await page.getByRole('button', { name: 'Fechar briefing' }).click();
 
   await expect(chat.locator('.chat-closed')).toContainText('Briefing fechado');
   await expect(page.getByRole('button', { name: 'Executar etapa de identidade' })).toBeEnabled();
+});
+
+test('re-sends a corrected close as a new request instead of replaying the failed one', async ({ page }) => {
+  const api = await openConversation(page);
+  const chat = page.locator('.briefing-chat');
+
+  await page.getByLabel(/Conte sobre o negócio/).fill(ENTRY);
+  await page.getByRole('button', { name: 'Enviar para leitura' }).click();
+  await page.getByLabel('Sua resposta').fill('Segurança clínica sem perder o carinho.');
+  await page.getByRole('button', { name: 'Responder' }).click();
+
+  const summary = page.getByLabel(/Briefing final, editável/);
+  await expect(summary).toHaveValue(CONSOLIDATED_SUMMARY);
+  await page.route('**/conversation/confirm', (route) => route.abort('failed'), { times: 1 });
+  await page.getByRole('button', { name: 'Fechar briefing' }).click();
+
+  // The summary that produced the failed close is frozen until the captain says
+  // what to do with it: replay it, or drop it and edit.
+  await expect(chat.getByRole('alert')).toBeVisible();
+  await expect(summary).toHaveAttribute('readonly', '');
+  await chat.getByRole('button', { name: 'Editar e reenviar' }).click();
+
+  const corrected = `${CONSOLIDATED_SUMMARY} O acompanhamento é o diferencial.`;
+  await summary.fill(corrected);
+  await page.getByRole('button', { name: 'Fechar briefing' }).click();
+
+  await expect(chat.locator('.chat-closed')).toContainText('Briefing fechado');
+  const confirms = api.writes.filter((write) => write.path.endsWith('/confirm'));
+  expect(confirms).toHaveLength(1);
+  expect(confirms[0]?.body.summary).toBe(corrected);
+  await expect(page.locator('.chat-summary textarea')).toHaveValue(corrected);
+});
+
+test('says a conversation it could not read was not read, and keeps the stage closed', async ({ page }) => {
+  const api = new FakeConversationApi();
+  await api.install(page);
+  await page.route('**/conversation', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'falha ao ler' }) }), { times: 1 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await page.getByLabel('Briefing do projeto').fill(ENTRY);
+  await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+
+  const chat = page.locator('.briefing-chat');
+  await expect(chat.getByText('Não foi possível abrir a conversa desta execução')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Não foi possível abrir a conversa desta execução' })).toBeDisabled();
+
+  await chat.getByRole('button', { name: 'Tentar novamente' }).click();
+  await expect(page.getByLabel(/Conte sobre o negócio/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Feche o briefing para executar' })).toBeDisabled();
 });
 
 test('reads the ceiling from the contract and closes manually once it is reached', async ({ page }) => {

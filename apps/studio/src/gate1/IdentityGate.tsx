@@ -109,7 +109,11 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // counts as open rather than as absent.
   const conversationAvailability = props.conversation?.state.availability;
   const briefingOpen = conversationAvailability !== undefined && conversationAvailability !== 'absent' && closedBriefing === null;
-  const briefingLabel = conversationAvailability === 'unknown' ? 'Abrindo a conversa desta execução…' : 'Feche o briefing para executar';
+  const briefingLabel = conversationAvailability === 'unknown'
+    ? 'Abrindo a conversa desta execução…'
+    : conversationAvailability === 'unreachable'
+      ? 'Não foi possível abrir a conversa desta execução'
+      : 'Feche o briefing para executar';
   useEffect(() => {
     if (closedBriefing) setBriefing(closedBriefing);
   }, [closedBriefing]);
@@ -216,6 +220,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         onCancel={props.conversation.cancel}
         onConfirm={props.conversation.confirm}
         onRetry={props.conversation.retry}
+        onDiscard={props.conversation.discard}
         onResume={props.conversation.resume}
         onCorrect={props.conversation.correct}
       />}

@@ -127,6 +127,48 @@ describe('conversation ui state', () => {
     expect(can.canConfirm).toBe(true);
   });
 
+  it('locks the field a failed request came from until the captain replays or discards it', () => {
+    const failed = reduce(
+      opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
+      { type: 'begin', intent: { kind: 'confirm', request: { idempotencyKey: 'key-confirm', summary: CONSOLIDATED_SUMMARY } } },
+      { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
+    );
+    const can = affordances(failed, NOW);
+
+    expect(can.locked).toBe(true);
+    expect(can.canConfirm).toBe(false);
+    expect(can.canRetry).toBe(true);
+
+    const discarded = conversationReducer(failed, { type: 'discard' });
+    const after = affordances(discarded, NOW);
+
+    expect(discarded.pending).toBeNull();
+    expect(discarded.failure).toBeNull();
+    expect(discarded.summaryDraft).toBe(CONSOLIDATED_SUMMARY);
+    expect(after.locked).toBe(false);
+    expect(after.canConfirm).toBe(true);
+    expect(after.canRetry).toBe(false);
+  });
+
+  it('marks a conversation the server could not read as unreachable, never as absent', () => {
+    const failed = reduce(
+      initialConversationState('identity-unreadable'),
+      { type: 'begin', intent: { kind: 'resume' } },
+      { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
+    );
+
+    expect(failed.availability).toBe('unreachable');
+    expect(affordances(failed, NOW).ready).toBe(false);
+    expect(affordances(failed, NOW).canRetry).toBe(true);
+  });
+
+  it('offers no empty close for a cancelled conversation that persisted no text', () => {
+    const can = affordances(opened({ state: 'cancelled', messageCount: 0 }), NOW);
+
+    expect(can.summaryOpen).toBe(false);
+    expect(can.canConfirm).toBe(false);
+  });
+
   it('closes nothing further once the briefing is closed', () => {
     const can = affordances(opened({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T09:00:00.000Z', messageCount: 4 }), NOW);
 

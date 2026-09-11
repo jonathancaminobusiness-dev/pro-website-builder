@@ -33,11 +33,12 @@ export interface ConversationFailure {
 
 /**
  * `availability` is how the screen tells "this server has no conversation for
- * this run" (the old flow keeps working) from "we have not asked yet".
+ * this run" (the old flow keeps working, and only a 404 says so) from "we have
+ * not asked yet" and from "we asked and could not read it".
  */
 export interface ConversationUiState {
   runId: string;
-  availability: 'unknown' | 'available' | 'absent';
+  availability: 'unknown' | 'available' | 'absent' | 'unreachable';
   snapshot: ConversationSnapshot | null;
   /** The initial text or the answer being typed. Never cleared by a failure. */
   draft: string;
@@ -54,6 +55,7 @@ export type ConversationAction =
   | { type: 'summaryDraft'; value: string }
   | { type: 'begin'; intent: PendingIntent }
   | { type: 'retry' }
+  | { type: 'discard' }
   | { type: 'settled'; snapshot: ConversationSnapshot }
   | { type: 'failed'; failure: ConversationFailure };
 
@@ -102,6 +104,10 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
     // same idempotency key — and only clears the error the captain just read.
     case 'retry':
       return state.pending === null ? state : { ...state, failure: null };
+    // Giving up on the pending request instead of replaying it: the field it
+    // came from opens again and the next send is a new request with a new key.
+    case 'discard':
+      return { ...state, pending: null, failure: null };
     case 'settled': {
       const clearsDraft = state.pending?.kind === 'send' && (state.pending.request.intent === 'entry' || state.pending.request.intent === 'answer');
       return {
@@ -115,7 +121,11 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
       };
     }
     case 'failed':
-      return { ...state, failure: action.failure };
+      return {
+        ...state,
+        availability: state.snapshot === null && state.pending?.kind === 'resume' ? 'unreachable' : state.availability,
+        failure: action.failure,
+      };
   }
 }
 
@@ -143,7 +153,6 @@ export function progressLabel(state: ConversationUiState): string | null {
         case 'skip': return 'Pulando a pergunta…';
         case 'cancel': return 'Cancelando a conversa…';
       }
-      return 'Enviando…';
     default: return null;
   }
 }
@@ -153,6 +162,12 @@ export interface ConversationAffordances {
   ready: boolean;
   /** Any request is in flight: duplicate sends are refused while it is. */
   busy: boolean;
+  /**
+   * A request is outstanding — in flight, or failed and still replayable. The
+   * field that produced it stays read-only until the retry lands or the captain
+   * discards it, so a retry can never re-send text the screen has replaced.
+   */
+  locked: boolean;
   canSendEntry: boolean;
   canAnswer: boolean;
   canSkip: boolean;
@@ -177,24 +192,29 @@ export interface ConversationAffordances {
 export function affordances(state: ConversationUiState, now: Date): ConversationAffordances {
   const snapshot = state.snapshot;
   const busy = state.pending !== null && state.failure === null;
+  const locked = state.pending !== null;
   const ready = state.availability === 'available' && snapshot !== null;
   if (!ready || snapshot === null) {
-    return { ready: false, busy, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry: state.pending !== null && state.failure !== null };
+    return { ready: false, busy, locked, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry: state.pending !== null && state.failure !== null };
   }
   const closed = briefingClosed(snapshot);
   const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
   const atLimit = limitReached(snapshot, now) && !closed && !halted;
   const typed = state.draft.trim() !== '';
   const asking = !closed && snapshot.state === 'question' && snapshot.question !== undefined && !atLimit;
-  const summaryOpen = !closed && (snapshot.state === 'confirmation' || atLimit || halted);
+  // Nothing to close a briefing with is not an exit: a halted conversation with
+  // no persisted text says so rather than offering an empty close.
+  const closable = snapshot.summary !== '' || snapshot.briefing !== '';
+  const summaryOpen = !closed && closable && (snapshot.state === 'confirmation' || atLimit || halted);
   return {
     ready: true,
     busy,
-    canSendEntry: !busy && !atLimit && snapshot.state === 'entry' && typed,
-    canAnswer: !busy && asking && typed,
-    canSkip: !busy && asking,
-    canCancel: !busy && !closed && !halted,
-    canConfirm: !busy && summaryOpen && state.summaryDraft.trim() !== '',
+    locked,
+    canSendEntry: !locked && !atLimit && snapshot.state === 'entry' && typed,
+    canAnswer: !locked && asking && typed,
+    canSkip: !locked && asking,
+    canCancel: !locked && !closed && !halted,
+    canConfirm: !locked && summaryOpen && state.summaryDraft.trim() !== '',
     asking,
     summaryOpen,
     atLimit,
