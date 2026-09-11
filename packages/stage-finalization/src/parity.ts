@@ -115,8 +115,9 @@ function compareFonts(preview: ServedFace[], release: FontDecision[]): string[] 
 /**
  * The faces the release ships that no preview ever compared.
  *
- * `previewFaces` is absent whenever nothing served the document — every command
- * line run — and `compareFonts` then has nothing to compare, so every route
+ * `previewFaces` is absent whenever no origin served this version's document —
+ * a run whose preview the captain never opened — and `compareFonts` then has
+ * nothing to compare, so every route
  * reports as identical while the bundle still self-hosts faces the captain never
  * looked at. Naming those faces is what keeps that silence from reading as
  * parity: the gate raises them as an open point instead.
@@ -149,8 +150,9 @@ function compare(route: string, preview: DocumentView, release: DocumentView): s
  * preview. Both views come from the same DesignIR through the same renderer;
  * only the delivery differs, and this check is what says so.
  *
- * `previewFaces` are the faces the preview origin actually served. They are
- * absent only when no preview served this document — a command line run — and
+ * `previewFaces` are the faces the preview origin actually served for this
+ * version. They are absent only when no origin served it — a run whose preview
+ * the captain never opened; the command line runs serve one of their own — and
  * then the faces are the one thing this check cannot speak for.
  */
 export function checkPreviewReleaseParity(rendered: RenderedDocument, compiled: CompiledSite, pageIdByRoute: Map<string, string>, previewFaces?: ServedFace[]): ParityReport {

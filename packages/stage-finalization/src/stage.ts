@@ -33,8 +33,10 @@ export interface FinalizationStageInput {
   approved?: VersionRecord;
   evidence: EvidenceArtifact[];
   /**
-   * The faces the preview origin served the captain. Absent when no preview
-   * served this document, and then the parity check says nothing about faces.
+   * The faces the preview origin served the captain, read back out of the bytes
+   * that document declared. Absent when no preview served it, and then the
+   * parity check says nothing about faces: the stage escalates the ones the
+   * bundle self-hosts by name instead.
    */
   previewFaces?: ServedFace[];
   applier: Applier;
