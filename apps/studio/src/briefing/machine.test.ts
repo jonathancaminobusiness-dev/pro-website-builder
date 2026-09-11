@@ -55,7 +55,6 @@ describe('conversation ui state', () => {
     const state = reduce(opened(), { type: 'draft', value: 'Somos uma clínica veterinária de bairro.' }, { type: 'begin', intent: entryIntent }, { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) });
 
     expect(state.draft).toBe('Somos uma clínica veterinária de bairro.');
-    expect(state.failure?.kind).toBe('network');
     expect(state.failure?.message).toContain('Nada foi fechado');
     expect(affordances(state, NOW).canRetry).toBe(true);
   });
@@ -63,13 +62,12 @@ describe('conversation ui state', () => {
   it('explains an off-contract response and does not advance the conversation', () => {
     const state = reduce(opened(), { type: 'begin', intent: entryIntent }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
 
-    expect(state.failure?.kind).toBe('invalid');
     expect(state.failure?.message).toContain('não seguiu o contrato');
     expect(state.snapshot?.state).toBe('entry');
   });
 
   it('carries a refusal the server explained through as its own message', () => {
-    expect(classifyFailure(new RequestError('Briefing vazio não é aceito.', 400))).toEqual({ kind: 'refused', message: 'Briefing vazio não é aceito.' });
+    expect(classifyFailure(new RequestError('Briefing vazio não é aceito.', 400))).toEqual({ message: 'Briefing vazio não é aceito.' });
   });
 
   it('retries the pending intent with the key it already had, adding no second bubble', () => {
@@ -167,6 +165,16 @@ describe('conversation ui state', () => {
 
     expect(can.summaryOpen).toBe(false);
     expect(can.canConfirm).toBe(false);
+  });
+
+  it('closes a consolidated summary the server left unconfirmed', () => {
+    const state = opened({ state: 'final', briefing: 'texto original', summary: CONSOLIDATED_SUMMARY, messageCount: 4 });
+    const can = affordances(state, NOW);
+
+    expect(can.closed).toBe(false);
+    expect(state.summaryDraft).toBe(CONSOLIDATED_SUMMARY);
+    expect(can.summaryOpen).toBe(true);
+    expect(can.canConfirm).toBe(true);
   });
 
   it('closes nothing further once the briefing is closed', () => {

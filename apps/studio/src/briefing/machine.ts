@@ -24,10 +24,7 @@ export type PendingIntent =
   | { kind: 'send'; request: ConversationSendRequest }
   | { kind: 'confirm'; request: ConversationConfirmRequest };
 
-export type FailureKind = 'network' | 'invalid' | 'refused';
-
 export interface ConversationFailure {
-  kind: FailureKind;
   message: string;
 }
 
@@ -75,15 +72,15 @@ export function initialConversationState(runId: string): ConversationUiState {
 
 export function classifyFailure(cause: unknown): ConversationFailure {
   if (cause instanceof ConversationContractError) {
-    return { kind: 'invalid', message: 'A resposta da conversa não seguiu o contrato, então nada avançou e nada foi fechado. Tente de novo; se repetir, feche o briefing pelo resumo editável.' };
+    return { message: 'A resposta da conversa não seguiu o contrato, então nada avançou e nada foi fechado. Tente de novo; se repetir, feche o briefing pelo resumo editável.' };
   }
   if (cause instanceof RequestError && cause.status !== undefined) {
-    return { kind: 'refused', message: cause.message };
+    return { message: cause.message };
   }
   if (cause instanceof RequestError) {
-    return { kind: 'network', message: 'A conversa não chegou ao servidor. Nada foi fechado e o que você escreveu continua aqui. Tente novamente.' };
+    return { message: 'A conversa não chegou ao servidor. Nada foi fechado e o que você escreveu continua aqui. Tente novamente.' };
   }
-  return { kind: 'network', message: cause instanceof Error ? cause.message : 'Erro desconhecido na conversa.' };
+  return { message: cause instanceof Error ? cause.message : 'Erro desconhecido na conversa.' };
 }
 
 export function conversationReducer(state: ConversationUiState, action: ConversationAction): ConversationUiState {
@@ -210,7 +207,9 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
   // Nothing to close a briefing with is not an exit: a halted conversation with
   // no persisted text says so rather than offering an empty close.
   const closable = snapshot.summary !== '' || snapshot.briefing !== '';
-  const summaryOpen = !closed && closable && (snapshot.state === 'confirmation' || atLimit || halted);
+  // A `final` snapshot the server did not stamp `closedAt` on is a summary that
+  // was consolidated and not yet confirmed, so it closes the same way.
+  const summaryOpen = !closed && closable && (snapshot.state === 'confirmation' || snapshot.state === 'final' || atLimit || halted);
   return {
     ready: true,
     busy,

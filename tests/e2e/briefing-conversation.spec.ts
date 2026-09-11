@@ -222,6 +222,19 @@ test('reopens a restarted conversation at the persisted point instead of a defau
   await expect(page.getByLabel(/Conte sobre o negócio/)).toHaveCount(0);
 });
 
+test('closes a consolidated summary the server left unconfirmed, which unlocks the stage', async ({ page }) => {
+  await openConversation(page, { initial: { state: 'final', briefing: ENTRY, summary: CONSOLIDATED_SUMMARY, messageCount: 4 } });
+  const chat = page.locator('.briefing-chat');
+
+  await expect(page.getByRole('button', { name: 'Feche o briefing para executar' })).toBeDisabled();
+  const summary = page.getByLabel(/Briefing final, editável/);
+  await expect(summary).toHaveValue(CONSOLIDATED_SUMMARY);
+  await page.getByRole('button', { name: 'Fechar briefing' }).click();
+
+  await expect(chat.locator('.chat-closed')).toContainText('Briefing fechado');
+  await expect(page.getByRole('button', { name: 'Executar etapa de identidade' })).toBeEnabled();
+});
+
 test('leaves the old briefing flow alone when the server has no conversation for the run', async ({ page }) => {
   await openConversation(page, { absent: true });
 

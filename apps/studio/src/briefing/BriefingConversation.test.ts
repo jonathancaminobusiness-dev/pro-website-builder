@@ -300,6 +300,16 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('Pular esta pergunta');
   });
 
+  it('offers the close for a consolidated summary the server has not confirmed', () => {
+    const markup = render(state(conversationSnapshot({ state: 'final', briefing: 'texto original', summary: CONSOLIDATED_SUMMARY, messageCount: 4 })));
+
+    expect(markup).toContain('id="briefing-chat-summary"');
+    expect(markup).toContain(CONSOLIDATED_SUMMARY);
+    expect(markup).toContain('Fechar briefing');
+    expect(markup).not.toContain('disabled="">Fechar briefing');
+    expect(markup).not.toContain('Briefing fechado');
+  });
+
   it('shows the three directions as text and marks each as having no preview', () => {
     const markup = render(state(conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T09:00:00.000Z', directions: conceptualDirections(), messageCount: 4 })));
 

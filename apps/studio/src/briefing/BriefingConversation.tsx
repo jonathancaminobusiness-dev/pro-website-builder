@@ -250,7 +250,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
  * was sent, or drop it and edit the field again. A panel with no conversation
  * yet has no field to edit, so the replay is the only offer there.
  */
-function ChatFailure(props: { failure: { kind: string; message: string }; canRetry: boolean; onRetry: () => void; onDiscard?: () => void }): ReactElement {
+function ChatFailure(props: { failure: { message: string }; canRetry: boolean; onRetry: () => void; onDiscard?: () => void }): ReactElement {
   return <div className="chat-failure" role="alert">
     <p>{props.failure.message}</p>
     <div className="actions">
