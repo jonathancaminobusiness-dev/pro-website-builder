@@ -81,13 +81,13 @@ export function initialConversationState(): ConversationUiState {
 
 export function classifyFailure(cause: unknown): ConversationFailure {
   if (cause instanceof ConversationContractError) {
-    return { message: 'A resposta da conversa não seguiu o contrato, então nada avançou e nada foi fechado. Tente de novo; se repetir, feche o briefing pelo resumo editável.' };
+    return { message: 'A resposta da conversa não seguiu o contrato, então nada avançou e nada foi fechado.' };
   }
   if (cause instanceof RequestError && cause.status !== undefined) {
     return { message: cause.message };
   }
   if (cause instanceof RequestError) {
-    return { message: 'A conversa não chegou ao servidor. Nada foi fechado e o que você escreveu continua aqui. Tente novamente.' };
+    return { message: 'A conversa não chegou ao servidor. Nada foi fechado e o que você escreveu continua aqui.' };
   }
   return { message: cause instanceof Error ? cause.message : 'Erro desconhecido na conversa.' };
 }
@@ -102,7 +102,7 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
     case 'resumed':
       return state.snapshot === null
         ? { ...state, availability: 'absent', pending: null, failure: null }
-        : { ...state, failure: { message: 'Não foi possível reabrir a conversa desta execução: o servidor não a encontrou. Nada foi fechado e o que já foi lido continua aqui. Tente novamente.' } };
+        : { ...state, failure: { message: 'Não foi possível reabrir a conversa desta execução: o servidor não a encontrou. Nada foi fechado e o que já foi lido continua aqui.' } };
     case 'draft':
       return { ...state, draft: action.value };
     case 'summaryDraft':
@@ -142,10 +142,12 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
 
 /**
  * The captain's message that is in flight, shown once as a pending bubble. A
- * retry does not add a second one because it reuses the same pending intent.
+ * failed request is not in flight, so the error block speaks for it instead; a
+ * retry reuses the same pending intent, so the bubble returns without a second
+ * one being added.
  */
 export function pendingMessage(state: ConversationUiState): string | null {
-  if (state.pending?.kind !== 'send') return null;
+  if (state.failure !== null || state.pending?.kind !== 'send') return null;
   const { intent, message } = state.pending.request;
   if (intent === 'skip') return 'Pular esta pergunta';
   if (intent === 'cancel') return 'Cancelar a conversa';

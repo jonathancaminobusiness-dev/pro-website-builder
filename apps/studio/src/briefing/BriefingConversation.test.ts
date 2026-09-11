@@ -110,8 +110,38 @@ describe('briefing conversation panel', () => {
     const markup = render(state(conversationSnapshot(), { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'k', intent: 'entry', message: 'texto' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) }));
 
     expect(markup).toContain('não seguiu o contrato');
-    expect(markup).toContain('resumo editável');
+    expect(markup).toContain('Tente novamente.');
     expect(markup).toContain('Tentar novamente');
+  });
+
+  it('offers a way out of a cancel that failed over a briefing the captain had typed', () => {
+    const markup = render(state(
+      conversationSnapshot(),
+      { type: 'draft', value: 'Somos uma clínica veterinária de bairro.' },
+      { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-cancel', intent: 'cancel', message: '' } } },
+      { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
+    ));
+
+    expect(markup).toContain('o que você escreveu continua aqui');
+    expect(markup).toContain('Dispensar aviso');
+    expect(markup).not.toContain('Tentar novamente');
+    expect(markup).toContain('id="briefing-chat-entry"');
+    expect(markup).not.toContain('readOnly=""');
+  });
+
+  it('never leaves a failure with words but no action, and names only the action it renders', () => {
+    const markup = render(state(
+      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), questionTurn()], question: clarifyingQuestion(), messageCount: 2 }),
+      { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } },
+      { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
+      { type: 'draft', value: 'Segurança clínica.' },
+    ));
+
+    expect(markup).toContain('Nada foi fechado');
+    expect(markup).not.toContain('Tentar novamente');
+    expect(markup).not.toContain('Tente novamente.');
+    expect(markup).toContain('Dispensar aviso');
+    expect(markup).not.toContain('Você · enviando');
   });
 
   it('shows the editable summary and closes the briefing with the plan’s wording', () => {

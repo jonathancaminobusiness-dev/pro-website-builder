@@ -156,7 +156,18 @@ describe('conversation ui state', () => {
     expect(retried.pending?.kind === 'send' && retried.pending.request.idempotencyKey).toBe('key-entry');
     expect(retried.failure).toBeNull();
     expect(pendingMessage(retried)).toBe('Somos uma clínica veterinária de bairro.');
-    expect(pendingMessage(failed)).toBe(pendingMessage(retried));
+    // The failed request is not in flight, so the log stops announcing it as
+    // being sent; replaying it brings back the one bubble, never a second.
+    expect(pendingMessage(failed)).toBeNull();
+  });
+
+  it('stops announcing a failed skip as being sent', () => {
+    const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
+    const sending = reduce(asking, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } });
+    const failed = conversationReducer(sending, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
+
+    expect(pendingMessage(sending)).toBe('Pular esta pergunta');
+    expect(pendingMessage(failed)).toBeNull();
   });
 
   it('clears the answer field only when the server accepted the turn', () => {

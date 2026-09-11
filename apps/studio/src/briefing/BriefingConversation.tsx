@@ -82,7 +82,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
       <p className="chat-progress" role="status">
         {progress ?? (state.availability === 'unreachable' ? 'Não foi possível abrir a conversa desta execução.' : 'Abrindo a conversa desta execução…')}
       </p>
-      {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} canDiscard={can.canDiscard} onRetry={props.onRetry} onDiscard={props.onDiscard} />}
+      {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} discardLabel={null} onRetry={props.onRetry} onDiscard={props.onDiscard} />}
     </section>;
   }
 
@@ -134,7 +134,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
 
     {progress && <p className="chat-progress" role="status">{progress}</p>}
 
-    {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} canDiscard={can.canDiscard} onRetry={props.onRetry} onDiscard={props.onDiscard} />}
+    {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} discardLabel={can.canDiscard ? 'Editar e reenviar' : 'Dispensar aviso'} onRetry={props.onRetry} onDiscard={props.onDiscard} />}
 
     {showEntry && <div className="chat-compose">
       <label htmlFor="briefing-chat-entry">Conte sobre o negócio: nicho, promessa, provas e o que a identidade deve evitar</label>
@@ -247,16 +247,16 @@ export default function BriefingConversation(props: BriefingConversationProps): 
 }
 
 /**
- * The failed request and the two honest ways out of it: replay it exactly as it
- * was sent, or drop it and edit the field again. A request that carried no
- * field — a read of the conversation — has nothing to edit, so the replay is
- * the only offer there.
+ * The failed request and what can still be done about it. The block never names
+ * an action it does not render: the replay is offered only while the request is
+ * still the one the captain wants sent, and the panel with no conversation yet
+ * has nothing to dismiss the error in favour of.
  */
-function ChatFailure(props: { failure: { message: string }; canRetry: boolean; canDiscard: boolean; onRetry: () => void; onDiscard: () => void }): ReactElement {
+function ChatFailure(props: { failure: { message: string }; canRetry: boolean; discardLabel: string | null; onRetry: () => void; onDiscard: () => void }): ReactElement {
   return <div className="chat-failure" role="alert">
-    <p>{props.failure.message}</p>
+    <p>{props.failure.message} {props.canRetry ? 'Tente novamente.' : 'Dispense o aviso e siga com o que está na tela.'}</p>
     <div className="actions">
-      {props.canDiscard && <button className="secondary" onClick={props.onDiscard}>Editar e reenviar</button>}
+      {props.discardLabel && <button className="secondary" onClick={props.onDiscard}>{props.discardLabel}</button>}
       {props.canRetry && <button className="primary" onClick={props.onRetry}>Tentar novamente</button>}
     </div>
   </div>;
