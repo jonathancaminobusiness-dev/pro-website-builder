@@ -14,7 +14,19 @@ const identityDefaultAccessibilityCriticMs = 10 * 60_000;
 const identityRefinerMs = 8 * 60_000;
 const identityArtDirectorMs = 5 * 60_000;
 const identityHeadroomMs = 5 * 60_000;
-const identityCorrectedMs = (deadlineMs: number): number => deadlineMs * 2;
+
+export interface IdentityStageBudgetInput {
+  curatorMs: number;
+  directorMs: number;
+  initialCriticMs: number[];
+  refinerMs: number;
+  secondCriticMs: number[];
+  artDirectorMs: number;
+  directionCount: number;
+  maxActiveClaude: number;
+  correctiveAttempts: number;
+  headroomMs: number;
+}
 
 function criticDeadlineVariable(criticId: string): string {
   return `PWB_IDENTITY_CRITIC_${criticId.replaceAll('-', '_').toUpperCase()}_DEADLINE_MS`;
@@ -35,8 +47,8 @@ function repeated(value: number, count: number): number[] {
   return Array.from({ length: count }, () => value);
 }
 
-function claudeLaneDurationMs(durations: number[]): number {
-  const laneEndTimes = Array.from({ length: DEFAULT_MAX_ACTIVE_CLAUDE }, () => 0);
+function claudeLaneDurationMs(durations: number[], maxActiveClaude: number): number {
+  const laneEndTimes = Array.from({ length: maxActiveClaude }, () => 0);
   for (const duration of durations) {
     const lane = laneEndTimes.indexOf(Math.min(...laneEndTimes));
     laneEndTimes[lane]! += duration;
@@ -44,32 +56,50 @@ function claudeLaneDurationMs(durations: number[]): number {
   return Math.max(...laneEndTimes);
 }
 
-export function identityStageDeadlineMs(env: NodeJS.ProcessEnv = process.env): number {
-  const brandFitCriticMs = effectiveCriticDeadlineMs(env, 'brand-fit-critic', identityDefaultCriticMs);
-  const divergenceCriticMs = effectiveCriticDeadlineMs(env, 'divergence-critic', identityDefaultCriticMs);
-  const accessibilityCriticMs = effectiveCriticDeadlineMs(env, 'system-a11y-critic', identityDefaultAccessibilityCriticMs);
-  const initialCriticMs = claudeLaneDurationMs([
-    ...repeated(identityCorrectedMs(brandFitCriticMs), identityDirections),
-    identityCorrectedMs(divergenceCriticMs),
-    ...repeated(identityCorrectedMs(accessibilityCriticMs), identityDirections),
-  ]);
-  const secondCriticMs = claudeLaneDurationMs([
-    ...repeated(identityCorrectedMs(brandFitCriticMs), identityDirections),
-    ...repeated(identityCorrectedMs(accessibilityCriticMs), identityDirections),
-  ]);
+export function calculateIdentityStageDeadlineMs(input: IdentityStageBudgetInput): number {
+  const corrected = (deadlineMs: number): number => deadlineMs * (input.correctiveAttempts + 1);
+  const directorLaneMs = claudeLaneDurationMs(repeated(corrected(input.directorMs), input.directionCount), input.maxActiveClaude);
+  const initialCriticLaneMs = claudeLaneDurationMs(input.initialCriticMs.map(corrected), input.maxActiveClaude);
+  const secondCriticLaneMs = claudeLaneDurationMs(input.secondCriticMs.map(corrected), input.maxActiveClaude);
+  const artDirectorLaneMs = claudeLaneDurationMs(repeated(corrected(input.artDirectorMs), input.directionCount), input.maxActiveClaude);
   return [
-    identityCorrectedMs(identityCuratorMs),
-    claudeLaneDurationMs(repeated(identityCorrectedMs(identityDirectorMs), identityDirections)),
-    initialCriticMs,
-    identityDirections * identityRefinerMs,
-    secondCriticMs,
-    claudeLaneDurationMs(repeated(identityCorrectedMs(identityArtDirectorMs), identityDirections)),
-    identityHeadroomMs,
+    corrected(input.curatorMs),
+    directorLaneMs,
+    initialCriticLaneMs,
+    input.directionCount * input.refinerMs,
+    secondCriticLaneMs,
+    artDirectorLaneMs,
+    input.headroomMs,
   ].reduce((total, duration) => total + duration, 0);
 }
 
+function defaultIdentityStageBudget(env: NodeJS.ProcessEnv = process.env): IdentityStageBudgetInput {
+  const brandFitCriticMs = effectiveCriticDeadlineMs(env, 'brand-fit-critic', identityDefaultCriticMs);
+  const divergenceCriticMs = effectiveCriticDeadlineMs(env, 'divergence-critic', identityDefaultCriticMs);
+  const accessibilityCriticMs = effectiveCriticDeadlineMs(env, 'system-a11y-critic', identityDefaultAccessibilityCriticMs);
+  return {
+    curatorMs: identityCuratorMs,
+    directorMs: identityDirectorMs,
+    initialCriticMs: [
+      ...repeated(brandFitCriticMs, identityDirections),
+      divergenceCriticMs,
+      ...repeated(accessibilityCriticMs, identityDirections),
+    ],
+    refinerMs: identityRefinerMs,
+    secondCriticMs: [
+      ...repeated(brandFitCriticMs, identityDirections),
+      ...repeated(accessibilityCriticMs, identityDirections),
+    ],
+    artDirectorMs: identityArtDirectorMs,
+    directionCount: identityDirections,
+    maxActiveClaude: DEFAULT_MAX_ACTIVE_CLAUDE,
+    correctiveAttempts: 1,
+    headroomMs: identityHeadroomMs,
+  };
+}
+
 export const stageDeadlinesMs: Record<AgentTask['stage'], number> = {
-  get identity() { return identityStageDeadlineMs(); },
+  get identity() { return calculateIdentityStageDeadlineMs(defaultIdentityStageBudget()); },
   prototype: 15 * 60_000,
   finalization: 20 * 60_000,
 };

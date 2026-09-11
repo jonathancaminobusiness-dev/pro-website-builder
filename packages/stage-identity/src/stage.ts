@@ -26,7 +26,7 @@ import {
   type TokenValue,
 } from '@pwb/domain';
 import { lintDesign, type LintFinding, type LintReport } from '@pwb/linter';
-import { Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
+import { calculateIdentityStageDeadlineMs, Scheduler, type TaskScope, type VersionRecord, type VersionStore } from '@pwb/orchestrator';
 import type { ModelProvider, RasterProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { admitsGeneratedImagery, generateImageAsset, imageryAssetId, imageryPolicyViolations, plannedImagery, type IdentityAsset } from './art-director.js';
@@ -83,6 +83,47 @@ export const defaultIdentityDeadlines: IdentityStageDeadlines = {
   artDirector: 5 * 60_000,
   raster: 5 * 60_000,
 };
+
+const identityStageHeadroomMs = 5 * 60_000;
+
+export function resolveIdentityStageDeadlines(options?: Partial<IdentityStageDeadlines>): IdentityStageDeadlines {
+  const criticById = options?.critic !== undefined
+    ? options.criticById
+    : { ...defaultIdentityDeadlines.criticById, ...options?.criticById };
+  const { criticById: _defaultCriticById, ...defaultsWithoutCriticById } = defaultIdentityDeadlines;
+  const { criticById: _configuredCriticById, ...configuredWithoutCriticById } = options ?? {};
+  const deadlines = {
+    ...defaultsWithoutCriticById,
+    ...configuredWithoutCriticById,
+    ...(criticById === undefined ? {} : { criticById }),
+  };
+  for (const [criticId, deadline] of Object.entries(deadlines.criticById ?? {})) {
+    if (deadline === undefined || !Number.isSafeInteger(deadline) || deadline <= 0) throw new StageError(`Identity critic ${criticId} deadline must be a positive integer in milliseconds.`);
+  }
+  return deadlines;
+}
+
+export function identityStageDeadlineMs(deadlines: IdentityStageDeadlines, maxActiveClaude: number): number {
+  const criticDeadline = (criticId: IdentityCriticId): number => deadlines.criticById?.[criticId] ?? deadlines.critic;
+  const initialCriticMs = identityCritics.flatMap((critic) => critic.scope === 'matrix'
+    ? [criticDeadline(critic.id)]
+    : identityAxisBriefIds.map(() => criticDeadline(critic.id)));
+  const secondCriticMs = identityCritics
+    .filter((critic) => critic.scope === 'direction')
+    .flatMap((critic) => identityAxisBriefIds.map(() => criticDeadline(critic.id)));
+  return calculateIdentityStageDeadlineMs({
+    curatorMs: deadlines.curator,
+    directorMs: deadlines.director,
+    initialCriticMs,
+    refinerMs: deadlines.refiner,
+    secondCriticMs,
+    artDirectorMs: deadlines.artDirector,
+    directionCount: identityAxisBriefIds.length,
+    maxActiveClaude,
+    correctiveAttempts: 1,
+    headroomMs: identityStageHeadroomMs,
+  });
+}
 
 export interface IdentityStageOptions {
   runId: string;
@@ -256,21 +297,7 @@ export class IdentityStage {
   constructor(private readonly options: IdentityStageOptions) {
     this.scheduler = options.scheduler ?? new Scheduler();
     this.branches = new CandidateBranchStore(options.store);
-    // A role-level override is explicit and therefore replaces the role's
-    // default for every critic. Named overrides remain more specific than it.
-    const criticById = options.deadlines?.critic !== undefined
-      ? options.deadlines.criticById
-      : { ...defaultIdentityDeadlines.criticById, ...options.deadlines?.criticById };
-    const { criticById: _defaultCriticById, ...defaultsWithoutCriticById } = defaultIdentityDeadlines;
-    const { criticById: _configuredCriticById, ...configuredWithoutCriticById } = options.deadlines ?? {};
-    this.deadlines = {
-      ...defaultsWithoutCriticById,
-      ...configuredWithoutCriticById,
-      ...(criticById === undefined ? {} : { criticById }),
-    };
-    for (const [criticId, deadline] of Object.entries(this.deadlines.criticById ?? {})) {
-      if (deadline === undefined || !Number.isSafeInteger(deadline) || deadline <= 0) throw new StageError(`Identity critic ${criticId} deadline must be a positive integer in milliseconds.`);
-    }
+    this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     this.modelAlias = options.modelAlias ?? 'claude-local';
     this.now = options.now ?? (() => new Date().toISOString());
   }

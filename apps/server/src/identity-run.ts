@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { createFixtureIR, flattenTokens, type Approval, type TokenValue } from '@pwb/domain';
-import { Applier, PatchGate, Scheduler, stageDeadlinesMs, VersionStore, type VersionRecord } from '@pwb/orchestrator';
+import { Applier, DEFAULT_MAX_ACTIVE_CLAUDE, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
 import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
-import { approvalOf, identityHash, identityLint, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
+import { approvalOf, identityHash, identityLint, identityStageDeadlineMs as calculateIdentityStageDeadlineMs, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, resolveIdentityStageDeadlines, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 import { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -45,9 +45,11 @@ function mergeFailures(...groups: Array<Array<{ taskId: string; reason: string }
 
 const INTERRUPTED = 'The server restarted while the identity stage was running, so that fan-out was lost. Start the stage again.';
 
-function identityStageDeadlineMs(): number {
+function identityStageDeadlineMs(deadlines: Partial<IdentityStageDeadlines> | undefined, maxActiveClaude: number): number {
   const override = Number(process.env.PWB_STAGE_DEADLINE_MS);
-  return Number.isFinite(override) && override > 0 ? override : stageDeadlinesMs.identity;
+  return Number.isFinite(override) && override > 0
+    ? override
+    : calculateIdentityStageDeadlineMs(resolveIdentityStageDeadlines(deadlines), maxActiveClaude);
 }
 
 /** What the Gate 1 screen reads: three directions side by side, with everything the captain needs to decide. */
@@ -122,9 +124,11 @@ export class IdentityRun {
   private settling: Promise<void> | undefined;
   private abort: AbortController | undefined;
   private briefing: string;
+  private readonly deadlines: IdentityStageDeadlines;
 
   constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
     this.briefing = options.briefing ?? IDENTITY_BRIEFING;
+    this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
     this.rendered.set(this.root.id, renderDesign(this.root.ir));
@@ -145,7 +149,7 @@ export class IdentityRun {
       provider: this.options.provider,
       store: this.store,
       ...(this.options.scheduler ? { scheduler: this.options.scheduler } : {}),
-      ...(this.options.deadlines ? { deadlines: this.options.deadlines } : {}),
+      deadlines: this.deadlines,
       raster: this.options.raster ?? new HiggsfieldMcpProvider({ configured: false }),
       onEvent: (type, payload) => ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type, payload })),
     });
@@ -253,7 +257,7 @@ export class IdentityRun {
   }
 
   private async runStage(signal: AbortSignal): Promise<IdentityStageResult> {
-    const deadlineMs = this.options.stageDeadlineMs ?? identityStageDeadlineMs();
+    const deadlineMs = this.options.stageDeadlineMs ?? identityStageDeadlineMs(this.deadlines, this.options.scheduler?.maxActiveClaude ?? DEFAULT_MAX_ACTIVE_CLAUDE);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadlineError = new Error(`The identity stage exceeded its ${deadlineMs}ms deadline.`);
     const deadline = new Promise<never>((_, reject) => {
