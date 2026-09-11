@@ -67,7 +67,7 @@ describe('identity run', () => {
 
   it('normalizes a direct execution briefing before persistence and curator use', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({
+    const run = new IdentityRun({ modelAlias: 'fake',
       runId: 'identity-normalized-direct',
       repository,
       provider: new FakeIdentityProvider(),
@@ -83,11 +83,11 @@ describe('identity run', () => {
   it('persists a normalized briefing when restoring a legacy run', async () => {
     const repository = new ProjectRepository(database);
     const runId = 'identity-normalized-restore';
-    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
     await run.initialize();
     database.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run('  Nicho de cerâmica autoral.  ', runId);
 
-    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
 
     expect((await repository.getRun(runId))?.briefing).toBe('Nicho de cerâmica autoral.');
@@ -97,12 +97,12 @@ describe('identity run', () => {
   it('still serves a restored run when the canonicalizing briefing write fails', async () => {
     const repository = new ProjectRepository(database);
     const runId = 'identity-readonly-restore';
-    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
     await run.initialize();
     database.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run('  Nicho de cerâmica autoral.  ', runId);
     repository.updateRunBriefing = async (): Promise<void> => { throw new Error('database is locked'); };
 
-    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
 
     expect(restored.snapshot().status).not.toBe('unrecoverable');

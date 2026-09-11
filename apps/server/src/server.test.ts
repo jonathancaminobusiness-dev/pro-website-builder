@@ -134,7 +134,7 @@ describe('local API', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-cancel-'));
     const db = openDatabase(join(dir, 'cancel.sqlite'));
     const runs = new Map<string, FixtureRun>();
-    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
