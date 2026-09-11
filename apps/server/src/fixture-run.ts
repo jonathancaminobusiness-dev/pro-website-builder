@@ -29,15 +29,15 @@ export class ChainGateError extends Error {
 }
 
 /**
- * What the release gate says about the document this run holds, as a screen
+ * What the release gate credits for the document this run holds, as a screen
  * needs it. A client cannot answer this itself: which decisions count is decided
- * by the version graph, and the snapshot carries one version, not the graph.
+ * by the version graph, and the snapshot carries one version, not the graph. Why
+ * the gate refuses stays with the refusal, in the release route's own answer, so
+ * one rule is serialized in one place.
  */
 export interface ReleaseGateState {
   /** The version whose approval closes Gate 2 for this document, when one does. */
   prototypeVersionId?: string;
-  /** Why Gate 3 may not run yet, or absent when it may. */
-  blocker?: string;
 }
 
 export interface FixtureSnapshot {
@@ -78,10 +78,10 @@ export class FixtureRun {
   private failure: unknown;
   private running = false;
   /**
-   * Whether this run is a Gate 1 execution the chain hands on. Such a run is
-   * read back here so Gate 3 can compile what the captain approved, never so the
-   * generic stages can produce an identity or a prototype behind the gates that
-   * measure them.
+   * Whether this run belongs to the identity chain rather than to this object.
+   * Such a run is read back here so Gate 3 can compile what the captain
+   * approved, never so the generic stages can produce an identity or a prototype
+   * behind the gates that measure them.
    */
   private chained = false;
   private readonly attempts = new Map<Stage, number>();
@@ -143,9 +143,11 @@ export class FixtureRun {
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
     const events = await this.options.repository.listEvents(runId);
-    // The identity execution writes its own events under this id and nothing
-    // else does, so the log says whose chain this run is.
-    this.chained = events.some((event) => event.type.startsWith('identity.'));
+    // A run this object did not create is not this object's to drive. The chain's
+    // Gate 1 execution takes its id before it runs anything, so what says the run
+    // is someone else's is the absence of the event `initialize` always writes —
+    // not a decision that gate has not reached yet.
+    this.chained = !events.some((event) => event.type === 'run.created');
     this.started = events.some((event) => event.type === 'run.started');
     for (const event of events) if (event.type === 'task.queued') this.attempts.set(event.payload.stage as Stage, Number(event.payload.attempt));
     this.initialized = true;
@@ -323,13 +325,8 @@ export class FixtureRun {
 
   /** The gate's own verdict on this document, so no reader has to re-derive it. */
   private releaseGateState(): ReleaseGateState {
-    const lineage = this.ancestry(this.currentVersion);
-    const decided = this.decidedOn('prototype', lineage);
-    const blocker = this.releaseBlocker(lineage);
-    return {
-      ...(decided?.decision === 'approved' ? { prototypeVersionId: decided.versionId } : {}),
-      ...(blocker ? { blocker } : {}),
-    };
+    const decided = this.decidedOn('prototype', this.ancestry(this.currentVersion));
+    return decided?.decision === 'approved' ? { prototypeVersionId: decided.versionId } : {};
   }
 
   /**
@@ -341,12 +338,12 @@ export class FixtureRun {
    * closes this gate, and a closed gate does not reopen: preparing again would
    * move the document of a run that already finished.
    */
-  releaseBlocker(walked?: Set<string>): string | undefined {
+  releaseBlocker(): string | undefined {
     this.requireInitialized();
     // A gate is asked about the document being compiled, never about the stage in
     // the abstract: a decision on a revision this bundle does not descend from
     // says nothing about this bundle, and neither closes nor reopens its gate.
-    const lineage = walked ?? this.ancestry(this.currentVersion);
+    const lineage = this.ancestry(this.currentVersion);
     for (const stage of ['identity', 'prototype'] as const) {
       const decided = this.decidedOn(stage, lineage);
       if (decided?.decision === 'approved') continue;

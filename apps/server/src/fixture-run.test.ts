@@ -660,9 +660,8 @@ describe('a run of the identity chain', () => {
     expect(await run.restore('identity-chain')).toBe(true);
     // The verdict the screen reads credits the approved revision and says nothing
     // about the sibling, so the finalization stage is offered rather than locked.
-    const gate = run.snapshot().releaseGate;
-    expect(gate.prototypeVersionId).toBe(prototypeVersionId);
-    expect(gate.blocker).toMatch(/finalização ainda não produziu/);
+    expect(run.snapshot().releaseGate.prototypeVersionId).toBe(prototypeVersionId);
+    expect(run.releaseBlocker()).toMatch(/finalização ainda não produziu/);
     // The chain still stands on the revision the captain approved, so the gate it
     // hands to Gate 3 is open and the bundle descends from that revision.
     const finalized = await run.runNext();

@@ -130,6 +130,41 @@ describe('local API', () => {
     second.sqlite.close();
   });
 
+  it('refuses the chain gates of an identity execution the captain has not started yet', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-chain-open-'));
+    const db = openDatabase(join(dir, 'chain.sqlite'));
+    const repository = new ProjectRepository(db);
+    // Everything `IdentityRun.initialize` writes and nothing more: the id is
+    // taken and the root is stored, but the fan-out has not been asked for, so
+    // the run has no events at all yet.
+    const ir = createFixtureIR();
+    await repository.createProject({ id: ir.meta.projectId, name: 'Identity stage project' });
+    await repository.createRun({ id: 'identity-open', projectId: ir.meta.projectId, briefing: 'Briefing desta execução.' });
+    await repository.saveVersion({ id: ir.meta.versionId, projectId: ir.meta.projectId, hash: 'h-identity', ir });
+
+    const runs = new Map<string, FixtureRun>();
+    const build = async (): Promise<FixtureRun> => new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const server = createApiServer({
+      runs,
+      createRun: async (id) => { if (await repository.getRun(id)) throw new RunConflictError(id); const run = await build(); await run.initialize(id); runs.set(id, run); return run; },
+      loadRun: async (id) => { const cached = runs.get(id); if (cached) return cached; const run = await build(); if (!await run.restore(id)) return undefined; runs.set(id, run); return run; },
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+
+    // Driving the generic stage here would write a fixture-derived version and an
+    // approval into the ledger the captain's own Gate 1 is about to decide in.
+    const staged = await fetch(`${origin}/api/runs/identity-open/stage`, { method: 'POST', headers: studio });
+    expect(staged.status).toBe(409);
+    const approved = await fetch(`${origin}/api/runs/identity-open/approve`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', stage: 'identity' }) });
+    expect(approved.status).toBe(409);
+    expect(await repository.listApprovals('identity-open')).toEqual([]);
+    expect((await repository.listVersions(ir.meta.projectId)).map((version) => version.id)).toEqual([ir.meta.versionId]);
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    db.sqlite.close();
+  });
+
   it('refuses to run or close the chain gates of an identity execution through the fixture route', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-chain-'));
     const db = openDatabase(join(dir, 'chain.sqlite'));
