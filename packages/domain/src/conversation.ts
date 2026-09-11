@@ -393,8 +393,11 @@ export type BriefingConversationError = z.infer<typeof briefingConversationError
  */
 export const briefingConversationRevisionSchema = z.object({
   revision: z.number().int().positive(),
-  /** The terminal state this round ended in; only those two rounds are ever archived. */
-  closedAs: briefingConversationClosedStateSchema,
+  /**
+   * How this round ended: the two states a captain closes one in, plus
+   * `unreadable` for a round whose persisted record no build could read back.
+   */
+  closedAs: z.union([briefingConversationClosedStateSchema, z.literal('unreadable')]),
   closedAt: z.string().min(1),
   messages: z.array(briefingConversationMessageSchema).default([]),
   summary: z.string().optional(),
@@ -402,6 +405,13 @@ export const briefingConversationRevisionSchema = z.object({
   askedQuestions: z.array(briefingAnsweredQuestionSchema).default([]),
   questionCount: z.number().int().nonnegative().default(0),
   error: briefingConversationErrorSchema.optional(),
+  /**
+   * Present only on a round archived as `unreadable`: the bytes exactly as they
+   * were on disk, and why they were refused. The transcript nobody can parse is
+   * still the only copy of what was said, so opening the next round archives it
+   * rather than writing over it.
+   */
+  unreadable: z.object({ reason: z.string(), raw: z.string() }).optional(),
 }).strict();
 export type BriefingConversationRevision = z.infer<typeof briefingConversationRevisionSchema>;
 

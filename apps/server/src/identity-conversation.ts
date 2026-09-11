@@ -52,7 +52,7 @@ function parseProblem(issues: ReadonlyArray<{ path: Array<string | number>; mess
  * is the same fact: nothing on this execution was signed that anyone can read.
  */
 export function unreadableConversationReason(reason: string): string {
-  return `A conversa de briefing desta execução não pôde ser lida (${reason}), então nenhum briefing confirmado pode ser recuperado dela. Abra outra conversa nesta execução para recomeçar.`;
+  return `A conversa de briefing desta execução não pôde ser lida (${reason}), então nenhum briefing confirmado pode ser recuperado dela. Abra outra conversa nesta execução para recomeçar: o registro danificado é arquivado como está, e nada dele se perde.`;
 }
 
 /** A refusal the captain can act on, answered as 400/409 rather than as a fault. */
@@ -161,8 +161,12 @@ export class BriefingConversation {
   private queue: Promise<unknown> = Promise.resolve();
   /** How many turns this conversation has written to the execution; a written turn is never rolled back. */
   private commits = 0;
-  /** Set by `restore` when the execution's row exists but no readable conversation could be built from it. */
-  private unreadableReason: string | undefined;
+  /**
+   * Set by `restore` when the execution's row exists but no readable
+   * conversation could be built from it: why it was refused, and the bytes
+   * themselves, which are the only copy of what that round said.
+   */
+  private damaged: { reason: string; raw: string } | undefined;
   private readonly timeoutMs: number;
   private readonly maxQuestions: number;
   private readonly now: () => Date;
@@ -192,10 +196,10 @@ export class BriefingConversation {
     if (!serialized) return;
     let parsed: unknown;
     try { parsed = JSON.parse(serialized) as unknown; }
-    catch { this.unreadableReason = 'o texto salvo não é um JSON válido'; return; }
+    catch { this.damaged = { reason: 'o texto salvo não é um JSON válido', raw: serialized }; return; }
     const snapshot = briefingConversationSnapshotSchema.safeParse(parsed);
-    if (!snapshot.success) { this.unreadableReason = parseProblem(snapshot.error.issues); return; }
-    this.unreadableReason = undefined;
+    if (!snapshot.success) { this.damaged = { reason: parseProblem(snapshot.error.issues), raw: serialized }; return; }
+    this.damaged = undefined;
     const record = snapshot.data;
     this.data = {
       state: record.state,
@@ -220,7 +224,7 @@ export class BriefingConversation {
 
   get state(): BriefingConversationState { return this.data.state; }
   /** Why this execution's persisted conversation could not be read, when it could not. */
-  get unreadable(): string | undefined { return this.unreadableReason; }
+  get unreadable(): string | undefined { return this.damaged?.reason; }
   /** The briefing the captain confirmed, if any; the execution runs the identity stage on this. */
   get confirmedBriefing(): string | undefined { return this.data.briefing; }
 
@@ -260,7 +264,7 @@ export class BriefingConversation {
       directions: structuredClone(this.data.directions),
       ...(this.data.briefing === undefined ? {} : { briefing: this.data.briefing }),
       appliedKeys: [...this.data.appliedKeys],
-      ...(this.unreadableReason === undefined ? {} : { unreadable: { reason: this.unreadableReason } }),
+      ...(this.damaged === undefined ? {} : { unreadable: { reason: this.damaged.reason } }),
     };
   }
 
@@ -283,10 +287,13 @@ export class BriefingConversation {
   private enqueue<T>(run: () => Promise<T>): Promise<T> {
     const atomic = async (): Promise<T> => {
       const before = structuredClone(this.data);
+      // The damaged record rolls back with the rest: a reopen whose write fails
+      // leaves the execution damaged, never downgraded to the legacy flow.
+      const damagedBefore = this.damaged;
       const written = this.commits;
       try { return await run(); }
       catch (error) {
-        if (this.commits === written) this.data = before;
+        if (this.commits === written) { this.data = before; this.damaged = damagedBefore; }
         throw error;
       }
     };
@@ -406,13 +413,27 @@ export class BriefingConversation {
     // execution, or one whose briefing is frozen because it already holds
     // identity work, has nothing to gain from a round it could never close.
     this.options.guardTurn?.();
-    // The one route an unreadable execution still answers: the captain cannot
-    // read what was said, so they say it again in a round this server wrote.
-    if (this.unreadableReason !== undefined) {
-      const damaged = this.unreadableReason;
+    // The one route an unreadable execution still answers. What could not be
+    // read is archived exactly as it was found — it is the only copy of that
+    // round — and the captain says again, in a round this server wrote, what
+    // the damaged record no longer shows them.
+    if (this.damaged !== undefined) {
+      const damaged = this.damaged;
+      const archived: BriefingConversationRevision = {
+        revision: this.data.revision,
+        closedAs: 'unreadable',
+        closedAt: this.now().toISOString(),
+        messages: [],
+        openGaps: [],
+        askedQuestions: [],
+        questionCount: 0,
+        unreadable: { reason: damaged.reason, raw: damaged.raw },
+      };
       this.data = emptyState();
-      this.unreadableReason = undefined;
-      this.append({ author: 'system', text: `A conversa anterior desta execução não pôde ser lida (${damaged}), então esta é uma conversa nova; o que foi dito antes não é recuperável.`, state: 'entry' });
+      this.data.previousRevisions.push(archived);
+      this.data.revision = archived.revision + 1;
+      this.damaged = undefined;
+      this.append({ author: 'system', text: `A conversa ${archived.revision} desta execução não pôde ser lida (${damaged.reason}); o registro dela fica arquivado exatamente como estava. Esta é a conversa ${this.data.revision}.`, state: 'entry' });
       return await this.commit(input.idempotencyKey);
     }
     if (!canReopenBriefingConversation(this.data.state)) throw new ConversationError(this.reopenRefusal(), 409);
@@ -665,7 +686,7 @@ export class BriefingConversation {
   }
 
   private refuseUnreadable(): void {
-    if (this.unreadableReason !== undefined) throw new ConversationError(unreadableConversationReason(this.unreadableReason), 409);
+    if (this.damaged !== undefined) throw new ConversationError(unreadableConversationReason(this.damaged.reason), 409);
   }
 
   private closedReason(): string {

@@ -297,6 +297,51 @@ describe('briefing conversation state machine', () => {
     expect(opened.state).toBe('recommendation');
   });
 
+  it('archives the record it could not read exactly as it found it, instead of writing over it', async () => {
+    const written = harness([succeeded(RECOMMENDATION), succeeded(RECOMMENDATION)]);
+    await written.conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    await written.conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    // The row a build whose contract moved on leaves behind: still the only
+    // copy of that round, no longer parseable by this one.
+    const onDisk = JSON.stringify({ ...JSON.parse(written.conversation.serialize()) as Record<string, unknown>, messages: [{ escrito: 'por outra versão' }] });
+
+    const { conversation } = harness([succeeded(RECOMMENDATION)]);
+    conversation.restore(onDisk);
+    const reopened = await conversation.reopen({ idempotencyKey: nextKey() });
+
+    expect(reopened.unreadable).toBeUndefined();
+    expect(reopened.revision).toBe(2);
+    const archived = reopened.previousRevisions[0];
+    expect(archived?.closedAs).toBe('unreadable');
+    expect(archived?.unreadable?.raw).toBe(onDisk);
+    expect(archived?.unreadable?.reason).toContain('messages');
+    // What the captain said is still there, byte for byte, for whoever can read it.
+    expect(archived?.unreadable?.raw).toContain('Clínica veterinária de bairro.');
+  });
+
+  it('stays damaged when the reopen write fails, instead of falling back to an execution that never had a chat', async () => {
+    let refuseWrite = false;
+    const { conversation, tasks } = harness([succeeded(RECOMMENDATION)], {
+      persist: async () => { if (refuseWrite) throw new Error('SQLITE_BUSY'); },
+    });
+    conversation.restore('{ isto não é json');
+    refuseWrite = true;
+
+    await expect(conversation.reopen({ idempotencyKey: nextKey() })).rejects.toThrow(/SQLITE_BUSY/);
+
+    // The write that would have earned the repair never landed, so the
+    // execution is still the damaged one every route refuses.
+    expect(conversation.snapshot().unreadable?.reason).toMatch(/JSON/);
+    expect(conversation.snapshot().previousRevisions).toEqual([]);
+    await expect(conversation.send({ message: 'Olá.', action: 'answer', idempotencyKey: nextKey() })).rejects.toThrow(/não pôde ser lida/);
+    expect(tasks).toEqual([]);
+
+    refuseWrite = false;
+    const reopened = await conversation.reopen({ idempotencyKey: nextKey() });
+    expect(reopened.unreadable).toBeUndefined();
+    expect(reopened.previousRevisions[0]?.unreadable?.raw).toBe('{ isto não é json');
+  });
+
   it('refuses to reopen a conversation that is still open', async () => {
     const { conversation } = harness([succeeded(RECOMMENDATION)]);
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
