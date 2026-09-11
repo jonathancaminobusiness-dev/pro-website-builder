@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
 import { correctionPrompt } from '@pwb/providers';
@@ -28,7 +29,6 @@ export class ClaudeSessionError extends Error {
 }
 
 export interface ClaudeAsk<T> {
-  sessionId: string;
   prompt: string;
   schema: unknown;
   parse: (value: unknown) => T;
@@ -73,18 +73,25 @@ export class ClaudeSession implements StructuredSession {
       try {
         const stdout = await this.execute(this.executable, [
           '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(input.schema),
-          '--session-id', input.sessionId, '--no-session-persistence', '--max-turns', String(this.maxTurns),
+          // A fresh id per attempt, never derived from the task: a correction must reach a session that
+          // has never seen the answer it is correcting, and the CLI takes a UUID and nothing else.
+          '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.maxTurns),
           '--disallowed-tools', this.deniedTools,
         ], { ...(input.signal ? { signal: input.signal } : {}), timeoutMs: Math.min(this.timeoutMs, input.deadlineMs) });
         const raw: unknown = JSON.parse(stdout);
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
         return input.parse(structured);
       } catch (error) {
-        const details = error as { name?: unknown; code?: unknown };
+        const details = error as { name?: unknown; code?: unknown; signal?: unknown; killed?: unknown };
         if (details.name === 'AbortError' || details.code === 'ABORT_ERR') throw error;
         const schemaProblem = error instanceof SyntaxError || error instanceof ZodError;
         if (schemaProblem && attempt === 0) { prompt = correctionPrompt(input.prompt, error); continue; }
-        throw new ClaudeSessionError(schemaProblem ? 'SCHEMA_INVALID' : String(details.code ?? 'PROCESS_FAILED'), schemaProblem ? 'Claude returned an answer that does not match the supplied schema.' : `The Claude Code process failed with ${String(details.code ?? 'an unknown error')}.`);
+        if (schemaProblem) throw new ClaudeSessionError('SCHEMA_INVALID', 'Claude returned an answer that does not match the supplied schema.');
+        // A process the kernel killed is a different fact from one that exited with an error, and the
+        // caller escalates them differently; collapsing both into the exit code loses the deadline.
+        const killedBy = details.signal === undefined || details.signal === null ? '' : String(details.signal);
+        if (killedBy || details.killed === true) throw new ClaudeSessionError(killedBy || 'TIMEOUT', `The Claude Code process was terminated by ${killedBy || 'a timeout'}.`);
+        throw new ClaudeSessionError(String(details.code ?? 'PROCESS_FAILED'), `The Claude Code process failed with ${String(details.code ?? 'an unknown error')}.`);
       }
     }
     throw new ClaudeSessionError('RUNNER_EXHAUSTED', 'The Claude Code session did not produce an answer.');

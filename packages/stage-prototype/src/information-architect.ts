@@ -85,7 +85,6 @@ export class ClaudeInformationArchitect implements ArchitectProvider {
   async plan(task: AgentTask, signal?: AbortSignal): Promise<RouteManifest> {
     const identity = task.documentSlice['/identity'] as IdentitySpec;
     return this.session.ask({
-      sessionId: `${task.id}-attempt-${task.attempt}`,
       prompt: renderArchitectPrompt(task, identity),
       schema: stagePrototypeContractSchemaJson.RouteManifest,
       parse: (value) => routeManifestSchema.parse(value),
