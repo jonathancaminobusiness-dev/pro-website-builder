@@ -89,10 +89,11 @@ export async function handleIdentityRequest(
   if (request.method === 'GET' && !action) { send(200, run.snapshot()); return true; }
 
   // The briefing conversation: send a message, resume the history, close the
-  // briefing, or open the next round after a cancelled or failed one. It is a
-  // preparation layer, not a gate, so it carries no approver role; what it does
-  // carry is an idempotency key, because a retry after a timed-out model turn
-  // must never buy a second turn.
+  // briefing, or open the next round after a cancelled or failed one. Every
+  // route here carries an idempotency key, because a retry after a timed-out
+  // model turn must never buy a second turn; `confirm` also carries the
+  // approver role, because signing the briefing the fan-out will run on is a
+  // captain's act exactly as starting the stage on it is.
   if (action === 'conversation') {
     if (request.method === 'GET') {
       if (subAction) { send(404, { error: 'Not found.' }); return true; }
@@ -103,6 +104,7 @@ export async function handleIdentityRequest(
     const payload = await body(request);
     try {
       if (subAction === 'confirm') {
+        if (!captain(payload, send, 'confirm the briefing for')) return true;
         const confirmation = briefingConfirmRequestSchema.safeParse(payload);
         if (!confirmation.success) { send(400, { error: requestProblem(confirmation.error.issues) }); return true; }
         send(200, await run.conversation.confirm(confirmation.data));

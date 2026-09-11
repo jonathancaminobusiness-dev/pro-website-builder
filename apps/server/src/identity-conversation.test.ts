@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BRIEFING_CONVERSATION_MAX_QUESTIONS,
+  BRIEFING_CONVERSATION_STATES,
   BRIEFING_CONVERSATION_TRANSITIONS,
   briefingConversationTurnSchema,
   briefingTurnNextStates,
@@ -840,8 +841,19 @@ describe('briefing conversation contract', () => {
     expect(canBriefingConversationTransition('question', 'recommendation')).toBe(true);
     expect(canBriefingConversationTransition('confirmation', 'question')).toBe(true);
     // A summary answers a corrected summary only where the machine has nothing
-    // else to offer: below the cap the correction path is a question.
+    // else to offer: below the cap the correction path is a question, at the
+    // cap it is another summary — and the predicate says so in the same context
+    // the engine decides it, so the two can never disagree.
     expect(canBriefingConversationTransition('confirmation', 'confirmation')).toBe(false);
+    expect(canBriefingConversationTransition('confirmation', 'confirmation', { mustConclude: false })).toBe(false);
+    expect(canBriefingConversationTransition('confirmation', 'confirmation', { mustConclude: true })).toBe(true);
+    for (const state of BRIEFING_CONVERSATION_STATES) {
+      for (const mustConclude of [false, true]) {
+        for (const next of briefingTurnNextStates(state, { closing: false, mustConclude })) {
+          expect(canBriefingConversationTransition(state, next, { mustConclude })).toBe(true);
+        }
+      }
+    }
     expect(briefingTurnNextStates('confirmation', { closing: false, mustConclude: false })).toEqual(['question']);
     expect(briefingTurnNextStates('confirmation', { closing: false, mustConclude: true })).toEqual(['confirmation']);
     expect(canBriefingConversationTransition('final', 'question')).toBe(false);
@@ -877,6 +889,11 @@ describe('briefing conversation contract', () => {
     expect(findVisualOutput('anexo mockup.png', 'o logo atual está em logo.png')).toContain('image-file');
     expect(findVisualOutput('<div>home</div>', 'o capitão escreveu <div>home</div>')).toContain('markup');
     expect(findVisualOutput('color.brand.primary', 'color.brand.primary')).toContain('token-path');
+    // The same declaration read back from the captain's own sentence, moved to
+    // the start of the summary: the separator the pattern swallows is not part
+    // of what they said.
+    expect(findVisualOutput('Font-family: Georgia é a tipografia atual.', 'Hoje o site usa font-family: Georgia.')).toEqual([]);
+    expect(findVisualOutput('Hoje o site usa background-color: #eee.', 'a marca é verde e quente')).toContain('css-declaration');
   });
 
   it('builds the safe summary out of the captain words alone', () => {

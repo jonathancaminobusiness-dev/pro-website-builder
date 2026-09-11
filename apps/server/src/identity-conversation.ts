@@ -69,14 +69,12 @@ export interface BriefingConversationOptions {
    * Asked before a turn is spent, and free to refuse it with a
    * `ConversationError`: an execution the captain stopped, or one whose
    * briefing is frozen because it already holds identity work, must not buy a
-   * 60-second model call whose answer it could never take. `cancelling` marks
-   * the one move that buys nothing and moves nothing, so an execution may take
-   * a stop it would refuse a turn from. A confirmation asks twice — once before
-   * the turn and once at the moment the briefing is written — because the
-   * execution can be stopped or started while the turn runs, and only the
-   * second ask sees that.
+   * 60-second model call whose answer it could never take. A confirmation asks
+   * twice — once before the turn and once at the moment the briefing is
+   * written — because the execution can be stopped or started while the turn
+   * runs, and only the second ask sees that.
    */
-  guardTurn?: (turn: { cancelling: boolean }) => void;
+  guardTurn?: () => void;
   /**
    * Runs the confirmation's write and hand-off as one critical section. The
    * execution takes the same section to claim its stage, so a start can never
@@ -267,13 +265,17 @@ export class BriefingConversation {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
     // The execution answers before the conversation does, so a captain on a
     // frozen execution reads the same refusal from both routes instead of being
-    // sent to a revision the confirmation would refuse. A stop buys no turn and
-    // moves no briefing, so `cancelling` lets the captain close the chat on an
-    // execution that can no longer take a briefing.
-    this.options.guardTurn?.({ cancelling: input.action === 'cancel' });
+    // sent to a revision the confirmation would refuse.
+    this.options.guardTurn?.();
     if (!canSendBriefingMessage(this.data.state)) throw new ConversationError(this.closedReason(), 409);
 
     if (input.action === 'cancel') {
+      // A conversation nobody wrote in has nothing to close, and closing it
+      // anyway would strand the execution: `opened` would go true and the
+      // legacy start would lose the briefing the execution was created with.
+      // So the stop leaves it exactly as it found it — unopened — and the
+      // captain keeps both the legacy flow and the chat.
+      if (!this.opened) return await this.commit(input.idempotencyKey);
       this.append({ author: 'system', text: 'Conversa cancelada pelo capitão. Nada foi enviado ao curador e a execução continua reabrível: abra outra conversa nela quando quiser, que esta continua legível.', state: 'cancelled' });
       this.data.state = 'cancelled';
       this.data.attempt = 0;
@@ -309,7 +311,7 @@ export class BriefingConversation {
 
   private async runConfirm(input: { briefing: string; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
-    this.options.guardTurn?.({ cancelling: false });
+    this.options.guardTurn?.();
     if (!canConfirmBriefing(this.data.state)) throw new ConversationError(this.confirmRefusal(), 409);
     let briefing: string;
     try { briefing = normalizeIdentityBriefing(input.briefing); }
@@ -339,7 +341,7 @@ export class BriefingConversation {
     // execution takes the same section to claim its stage. Both asks stay:
     // refusing before the turn is what keeps the captain from paying for it.
     return await this.confirmSection(async () => {
-      this.options.guardTurn?.({ cancelling: false });
+      this.options.guardTurn?.();
       const snapshot = await this.commit(input.idempotencyKey, briefing);
       await this.options.onConfirmed?.(briefing, revision);
       return snapshot;
@@ -367,7 +369,7 @@ export class BriefingConversation {
     // The same ask every route that writes to this execution makes: a stopped
     // execution, or one whose briefing is frozen because it already holds
     // identity work, has nothing to gain from a round it could never close.
-    this.options.guardTurn?.({ cancelling: false });
+    this.options.guardTurn?.();
     if (!canReopenBriefingConversation(this.data.state)) throw new ConversationError(this.reopenRefusal(), 409);
 
     const closed: BriefingConversationRevision = {

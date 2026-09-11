@@ -48,7 +48,17 @@ export const BRIEFING_CONVERSATION_TRANSITIONS: Readonly<Record<BriefingConversa
   failed: ['final'],
 });
 
-export function canBriefingConversationTransition(from: BriefingConversationState, to: BriefingConversationState): boolean {
+/**
+ * Whether a move is legal, in the same context the engine decides it.
+ *
+ * The table above is the machine below the question cap. At the cap the one
+ * move it does not carry becomes legal — a corrected summary is answered with
+ * another summary, because asking is no longer available — so the predicate
+ * takes the same `mustConclude` the turn does and the Studio validating a
+ * snapshot can never refuse a state the server legitimately produced.
+ */
+export function canBriefingConversationTransition(from: BriefingConversationState, to: BriefingConversationState, context: { mustConclude: boolean } = { mustConclude: false }): boolean {
+  if (from === 'confirmation' && to === 'confirmation') return context.mustConclude;
   return BRIEFING_CONVERSATION_TRANSITIONS[from].includes(to);
 }
 
@@ -91,12 +101,11 @@ export function canReopenBriefingConversation(state: BriefingConversationState):
  */
 export function briefingTurnNextStates(state: BriefingConversationState, turn: { closing: boolean; mustConclude: boolean }): BriefingConversationState[] {
   if (turn.closing) return ['final'];
-  const allowed = BRIEFING_CONVERSATION_TRANSITIONS[state].filter((next) => {
+  return BRIEFING_CONVERSATION_STATES.filter((next) => {
     if (next === 'cancelled' || next === 'failed' || next === 'final') return false;
-    return !(turn.mustConclude && next === 'question');
+    if (turn.mustConclude && next === 'question') return false;
+    return canBriefingConversationTransition(state, next, turn);
   });
-  if (state === 'confirmation' && turn.mustConclude) allowed.push('confirmation');
-  return allowed;
 }
 
 /** The states a captain may still send a message from; everything else is closed to model turns. */
@@ -175,9 +184,13 @@ function normalizeForEcho(text: string): string {
  * A match that ends a sentence carries the punctuation the greedy patterns
  * swallow, so the token the captain wrote is compared without it: "o site é
  * https://clinicax.com.br." is the same URL the captain typed mid-sentence.
+ *
+ * The separator a pattern matches before the token is swallowed the same way:
+ * `font-family:` opening a sentence and the same declaration mid-sentence are
+ * one token, or a captain would be told they invented their own words.
  */
 function echoedToken(match: string): string {
-  return normalizeForEcho(match).replace(/[.,;:!?)\]}'"]+$/, '');
+  return normalizeForEcho(match).trim().replace(/^[;{(\[]+/, '').replace(/[.,;:!?)\]}'"]+$/, '').trim();
 }
 
 function tokensOf(pattern: RegExp, text: string): string[] {
@@ -477,9 +490,15 @@ export const briefingReopenRequestSchema = z.object({
 }).strict();
 export type BriefingReopenRequest = z.infer<typeof briefingReopenRequestSchema>;
 
+/**
+ * The one request of this module that carries an approver role. Confirming is
+ * the captain's signature — it decides the briefing the paid fan-out runs on —
+ * so it is asked for on the same terms every other Gate 1 mutation asks for it.
+ */
 export const briefingConfirmRequestSchema = z.object({
   /** The edited summary the captain is signing; it becomes the execution's briefing. */
   briefing: z.string().max(BRIEFING_SUMMARY_MAX_LENGTH),
+  approverRole: z.literal('captain'),
   idempotencyKey: z.string().trim().min(1).max(BRIEFING_IDEMPOTENCY_KEY_MAX_LENGTH),
 }).strict();
 export type BriefingConfirmRequest = z.infer<typeof briefingConfirmRequestSchema>;

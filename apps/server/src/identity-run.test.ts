@@ -187,6 +187,23 @@ describe('identity run', () => {
     expect(reopened.previousRevisions[0]?.closedAs).toBe('cancelled');
   });
 
+  it('keeps the legacy start when a cancel closes a conversation the captain never wrote in', async () => {
+    const repository = new ProjectRepository(database);
+    const run = new IdentityRun({ runId: 'identity-cancel-sem-conversa', repository, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+
+    const cancelled = await run.conversation.send({ action: 'cancel', idempotencyKey: 'cancel-1' });
+
+    // Nothing was said, so nothing was closed: the chat is exactly where a
+    // legacy execution leaves it, and the stage still runs on the briefing the
+    // execution was created with.
+    expect(cancelled.state).toBe('entry');
+    expect(cancelled.messages).toEqual([]);
+    const started = await run.start();
+    expect(started.briefing).toBe('Clínica veterinária de bairro, preventiva.');
+    expect(started.directions).toHaveLength(3);
+  });
+
   it('keeps the stage refused after a reopen until the next conversation signs a briefing', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({ runId: 'identity-conversa-reaberta', repository, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });

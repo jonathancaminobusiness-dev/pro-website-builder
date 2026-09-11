@@ -158,9 +158,9 @@ export class IdentityRun {
       // it, so the second ask is not redundant with the first: it is the one
       // that protects a running fan-out from being replaced under it.
       confirmSection: (work) => this.exclusive(work),
-      guardTurn: (turn) => {
+      guardTurn: () => {
         this.refuseIfTerminal('create another one to work on a briefing.');
-        if (!turn.cancelling && this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
+        if (this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
       },
       onConfirmed: (briefing) => {
         this.briefing = briefing;
