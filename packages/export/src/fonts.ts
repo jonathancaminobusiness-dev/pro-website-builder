@@ -170,8 +170,10 @@ function declaration(body: string, property: string): string | undefined {
  * The faces a stylesheet declares, parsed by a reader that shares no code with
  * `fontFaceCss`, so the two sides of a parity comparison cannot agree by
  * construction. A rule without a family or a file is not a face a view served.
+ * `href` addresses each file the way the bundle addresses it, which is the only
+ * spelling the comparison can match, so every caller states it.
  */
-export function parseFontFaceCss(css: string, href: (url: string) => string = (url) => url): ServedFace[] {
+export function parseFontFaceCss(css: string, href: (url: string) => string): ServedFace[] {
   const faces: ServedFace[] = [];
   for (const rule of css.matchAll(FONT_FACE_RULE)) {
     const body = rule[1]!;

@@ -12,6 +12,7 @@ import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
 import { createIdentityProvider, createModelProvider, createRasterProvider, modelAlias, modelProviderName } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
+import type { ReleaseRunOptions } from './release-run.js';
 import { siteFromEnvironment } from './site-environment.js';
 import { identityDeadlinesFromEnvironment, identityProviderTimeoutMs } from './identity-deadlines.js';
 
@@ -72,10 +73,12 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   const evidenceDir = options.evidenceDir ?? process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
   await mkdir(releaseRoot, { recursive: true });
   // Gate 3 compares the faces the captain was actually served against the ones
-  // the bundle ships, so the preview is read when a release is prepared.
-  const release = {
+  // the bundle ships, so the preview is read when a release is prepared, and
+  // only for the version being released: a run whose preview the captain never
+  // opened has no faces to compare and says so.
+  const release: ReleaseRunOptions = {
     releaseRoot, evidenceDir, fontsDir, siteUrl, siteName,
-    previewFaces: () => preview.servedFaces(),
+    previewFaces: (version) => preview.servedFaces(version.id),
   };
   const api = createApiServer({
     runs,
