@@ -102,9 +102,8 @@ export function createPreviewServer(getRendered: (versionId: string) => Rendered
  * Gate 3 compares the faces the captain was served against the faces the bundle
  * ships, and reads them from `servedFaces`, which answers only for a document
  * this origin really delivered. A script has no studio, so it starts the same
- * origin on an ephemeral port and serves the very version the gate is about to
- * compile — after the stage has produced it — instead of the silence that used
- * to read as parity.
+ * origin on an ephemeral port and serves the version the stage hands the gate,
+ * instead of the silence that used to read as parity.
  */
 export interface ServedPreview extends PreviewServer {
   /** Serves one route of this document and answers the faces it declared. */
@@ -121,7 +120,8 @@ export async function startServedPreview(fontsDir?: string): Promise<ServedPrevi
       const route = document.routes[0]?.route ?? '/';
       const response = await fetch(`${preview.origin}/preview/${versionId}${route}`);
       if (!response.ok) throw new Error(`O preview não serviu a rota ${route} da versão ${versionId}: HTTP ${response.status}.`);
-      return parseFontFaceCss(await response.text(), (url) => url.replace(/^\//, ''));
+      await response.text();
+      return preview.servedFaces() ?? [];
     },
   });
 }
