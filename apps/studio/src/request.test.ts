@@ -1,7 +1,7 @@
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isMissing, RequestError, requestJson } from './request.js';
+import { classifyConnectionFailure, connectionFailureMessage, isMissing, RequestError, requestJson } from './request.js';
 
 let running: Server | undefined;
 afterEach(async () => {
@@ -72,5 +72,49 @@ describe('api request', () => {
     const cause = await requestJson(url).catch((error: unknown) => error);
     expect(cause).toBeInstanceOf(RequestError);
     expect((cause as RequestError).status).toBe(502);
+  });
+});
+
+/**
+ * The captain sees one opaque console error for two very different situations,
+ * so the screen has to say which one happened and what to do about it.
+ */
+describe('connection failure', () => {
+  it('names the API origin and the command when nothing is listening', async () => {
+    const url = await serve((response) => response.end());
+    const server = running!;
+    running = undefined;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    expect(await classifyConnectionFailure(url)).toBe('unreachable');
+    const cause = await requestJson(url).catch((error: unknown) => error);
+    expect(cause).toBeInstanceOf(RequestError);
+    expect((cause as RequestError).reason).toBe('unreachable');
+    expect((cause as RequestError).message).toContain(new URL(url).origin);
+    expect((cause as RequestError).message).toContain('corepack pnpm --filter @pwb/server dev');
+  });
+
+  it('names the refused origin and the single-origin remedy when the server is up', async () => {
+    // Only a browser can answer one probe and refuse the other, so the probe is
+    // supplied: the normal request is blocked by the origin check and the
+    // opaque one completes, which is exactly what a real CORS refusal looks like.
+    const probe = (async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.mode === 'no-cors') return new Response(null, { status: 204 });
+      throw new TypeError('Failed to fetch');
+    }) as unknown as typeof fetch;
+
+    expect(await classifyConnectionFailure('http://127.0.0.1:4310/api/identity/runs/one', probe)).toBe('origin-refused');
+    const message = connectionFailureMessage('origin-refused', 'http://127.0.0.1:4310/api/identity/runs/one', 'http://localhost:5173');
+    expect(message).toContain('http://127.0.0.1:4310');
+    expect(message).toContain('http://localhost:5173');
+    expect(message).toContain('PWB_STUDIO_ORIGIN=http://localhost:5173');
+  });
+
+  it('keeps the neutral message when the API is reachable and welcomes this origin', async () => {
+    // One request failed while `/health` answers: nothing was learned about the
+    // server or the origin, so the screen must not accuse either of them.
+    const url = await serve((response) => { response.writeHead(200, { 'content-type': 'text/plain' }).end('ok'); });
+    expect(await classifyConnectionFailure(url)).toBe('unknown');
+    expect(connectionFailureMessage('unknown', url)).toBe('O servidor local não respondeu.');
   });
 });
