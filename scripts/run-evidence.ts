@@ -15,6 +15,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { compileRelease, loadFontSources } from '../packages/export/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 import { artifactHash, loadReleaseDocument, writeEvidenceArtifact } from '../packages/stage-finalization/src/index.js';
@@ -64,11 +65,7 @@ async function main(): Promise<void> {
   // gate can tell this run's evidence from what an earlier run left behind.
   const ir = await loadReleaseDocument(evidenceDir);
   const fonts = await loadFontSources(fontsDir);
-  const compiled = compileRelease(renderDesign(ir), ir, {
-    siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid',
-    siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder',
-    ...(fonts.length > 0 ? { fonts } : {}),
-  });
+  const compiled = compileRelease(renderDesign(ir), ir, { ...siteFromEnvironment(), ...(fonts.length > 0 ? { fonts } : {}) });
   const outcomes: RunnerOutcome[] = [
     await vitestEvidence({ digest: compiled.digest, irHash: compiled.irHash }),
     await run('playwright+axe', ['test:e2e:release']),

@@ -89,3 +89,25 @@ export function createPreviewServer(getRendered: (versionId: string) => Rendered
   };
   return preview;
 }
+
+/**
+ * A preview origin that has really served one route of this document.
+ *
+ * Gate 3 compares the faces the captain was served against the faces the bundle
+ * ships, and reads them from `servedFaces`, which answers only for a document
+ * the origin actually delivered. A command line run has no studio, so it starts
+ * the same origin on an ephemeral port and requests one route: the faces the
+ * gate then compares are faces a preview really served, instead of the silence
+ * that used to read as parity.
+ */
+export async function startServedPreview(getRendered: (versionId: string) => RenderedDocument | undefined, versionId: string, fontsDir?: string): Promise<PreviewServer> {
+  const preview = createPreviewServer(getRendered, 0, fontsDir);
+  await preview.start();
+  try {
+    const route = getRendered(versionId)?.routes[0]?.route ?? '/';
+    const response = await fetch(`${preview.origin}/preview/${versionId}${route}`);
+    if (!response.ok) throw new Error(`O preview não serviu a rota ${route} da versão ${versionId}: HTTP ${response.status}.`);
+    await response.text();
+    return preview;
+  } catch (error) { await preview.close(); throw error; }
+}
