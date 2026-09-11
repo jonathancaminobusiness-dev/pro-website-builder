@@ -41,6 +41,8 @@
 .gate2-block + .gate2-block { margin-top: 26px; padding-top: 22px; border-top: 1px solid #ddd4c9; }
 .gate2-block h2 { margin: 0 0 6px; font-size: 1rem; letter-spacing: -.03em; }
 .gate2-note { margin: 0 0 12px; color: #7b878c; font-size: .78rem; line-height: 1.5; }
+.gate2-chain { margin: 0 0 12px; color: #4a5559; font-size: .82rem; line-height: 1.5; }
+.gate2-chain code { font-size: .78rem; }
 .gate2-checks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; max-height: 210px; overflow-y: auto; }
 .gate2-checks li { display: grid; gap: 4px; border-left: 3px solid #b9ac9f; padding: 6px 0 6px 10px; color: #4d5a5f; font-size: .78rem; line-height: 1.45; }
 .gate2-checks li.veto { border-color: #c0392b; }

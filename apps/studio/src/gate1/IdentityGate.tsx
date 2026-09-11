@@ -41,6 +41,8 @@ export interface IdentityGateSnapshot {
   approvals: Array<{ stage: string; decision: string; versionId: string; rationale: string }>;
   assets: Array<{ id: string; alt: string; status: string; provenance: { license: string; prompt?: string; termsNote?: string } }>;
   previewVersionId?: string;
+  /** What the next stage plans against once Gate 1 closes; stale once the identity moved after it. */
+  handoff?: { directionId: string; versionId: string; identityHash: string; approvedAt: string; stale: boolean };
   failures: Array<{ taskId: string; reason: string }>;
   error?: string;
 }

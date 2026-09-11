@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "predev": "corepack pnpm --filter @pwb/server... build",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/main.ts"
   },
   "dependencies": {
     "@pwb/domain": "workspace:*",

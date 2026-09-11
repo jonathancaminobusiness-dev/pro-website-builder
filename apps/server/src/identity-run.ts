@@ -485,6 +485,16 @@ export class IdentityRun {
     return this.snapshot();
   }
 
+  /**
+   * The version Gate 1 closed on, as the prototype stage has to start from it.
+   * Nothing is returned while the gate is open, and what comes back is the
+   * document with the approved direction's imagery already on it.
+   */
+  approvedVersion(): VersionRecord | undefined {
+    const versionId = this.stage.approvedVersionId;
+    return versionId ? this.store.get(versionId) : undefined;
+  }
+
   renderedFor(versionId: string): RenderedDocument | undefined { return this.rendered.get(versionId); }
 
   /** The briefing conversation this execution carries; the API's three conversation routes are its only callers. */

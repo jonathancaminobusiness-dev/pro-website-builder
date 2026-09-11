@@ -65,8 +65,20 @@ test.describe('Gate 2 review screen', () => {
   test.setTimeout(300_000);
 
   test('compares A with B on the same route and width, and records the captain decision', async ({ page }) => {
+    // The stage runs on the identity the captain approved, so Gate 1 is decided first;
+    // what the run measures has to be that identity and not a fixture.
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+    await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+    await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+    await expect(page.locator('.direction-card')).toHaveCount(3, { timeout: 60_000 });
+    await page.getByLabel(/Motivo da decisão/).fill('Esta direção é a identidade que o protótipo deve carregar.');
+    await page.locator('.direction-card', { hasText: 'modular-technical' }).getByRole('button', { name: 'Aprovar esta direção' }).click();
+    await expect(page.locator('.gate-record')).toContainText('Decisão registrada.');
+
     await page.goto('/#/gate-2');
     await expect(page.getByRole('heading', { name: 'Hierarquia, comportamento e caráter' })).toBeVisible();
+    await expect(page.locator('.gate2-chain')).toContainText('parte da identidade aprovada no Gate 1');
 
     await page.getByRole('button', { name: 'Executar a etapa de protótipo' }).click();
 
@@ -79,6 +91,8 @@ test.describe('Gate 2 review screen', () => {
     const compare = page.locator('.compare');
     // The run measures every declared state at the representative widths in a real browser.
     await expect(compare).toBeVisible({ timeout: 240_000 });
+    // The identity measured in the revision under review is the one Gate 1 recorded.
+    await expect(page.getByText('identidade do Gate 1 medida nesta revisão')).toBeVisible();
 
     // A reload finds the same run: the review is addressable, not held in a tab's memory.
     await page.reload();
