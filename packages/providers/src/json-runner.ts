@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
 import { CLAUDE_RUNNER_TIMEOUT_MS, execFileExecutor } from './claude-runner.js';
+import { claudeModelFlags, resolveClaudeInvocation } from './claude-model.js';
 import type { ClaudeRunnerOptions } from './model.js';
 
 /**
@@ -84,10 +85,6 @@ export class JsonRunnerError extends Error {
 export const JSON_RUNNER_DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 
 /** The production spawn: no shell, the request's own deadline, and nothing of the parent environment beyond it. */
-const executeClaudeJson: ClaudeExecutor = async (executable, args, options) => await execFileAsync(executable, args, {
-  shell: false, timeout: options.timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...(options.signal ? { signal: options.signal } : {}),
-});
-
 const executeClaudeJson = execFileExecutor(8 * 1024 * 1024);
 
 export class ClaudeJsonRunner implements JsonModelRunner {
@@ -95,7 +92,7 @@ export class ClaudeJsonRunner implements JsonModelRunner {
 
   /** `execute` is injected by tests; production spawns the owner's local Claude Code binary with no shell. */
   constructor(options: ClaudeRunnerOptions = {}) {
-    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, execute: executeClaudeJson, ...options };
+    this.options = { executable: 'claude', timeoutMs: CLAUDE_RUNNER_TIMEOUT_MS, maxTurns: 4, execute: executeClaudeJson, ...options, ...resolveClaudeInvocation(options) };
   }
 
   async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
@@ -111,6 +108,7 @@ export class ClaudeJsonRunner implements JsonModelRunner {
         '--no-session-persistence',
         '--max-turns', String(this.options.maxTurns),
         '--disallowed-tools', JSON_RUNNER_DENIED_TOOLS,
+        ...claudeModelFlags(this.options),
       ], { timeoutMs: Math.min(this.options.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
       const raw: unknown = JSON.parse(stdout);
       return raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;

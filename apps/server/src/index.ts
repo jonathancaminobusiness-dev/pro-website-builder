@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
+import { claudeInvocationFromEnvironment } from '@pwb/providers';
 import { RenderHub } from '@pwb/render-hub';
 import { renderDesign } from '@pwb/renderer';
 import { RenderHubEvidenceSource } from '@pwb/stage-prototype';
@@ -20,6 +21,9 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   const renderCacheDir = options.renderCacheDir ?? process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
   await mkdir(join(dbPath, '..'), { recursive: true });
   await mkdir(renderCacheDir, { recursive: true });
+  // Every Claude worker names its model and effort explicitly, so a malformed
+  // override has to fail here rather than at the first spawn, hours into a run.
+  claudeInvocationFromEnvironment();
   // Recognised once, at startup: every consumer below is handed the resolved
   // name rather than a raw string it would have to compare for itself.
   const providerName = modelProviderName(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
