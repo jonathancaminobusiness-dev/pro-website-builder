@@ -266,9 +266,11 @@ export default function App() {
   }, [acceptIdentityRun, following, identity, identityGet, pollTick, queued, running, spent, startRecoveryPending, startingRun]);
   // Gate 1 hands the chain on under the identity execution's own id: the
   // approvals of all three gates are recorded against it, so that id is what
-  // Gate 3 prepares and publishes. A handoff the identity moved past is stale
-  // and hands nothing on until the captain approves the identity again.
-  const chainRunId = identity?.handoff && !identity.handoff.stale ? identity.runId : '';
+  // Gate 3 prepares and publishes. A handoff the identity moved past hands
+  // nothing on until the captain approves the identity again — but it stays the
+  // chain this screen is about, so the finalization panel keeps pointing at it.
+  const chainRunId = identity?.handoff ? identity.runId : '';
+  const chainStale = identity?.handoff?.stale ?? false;
   useEffect(() => {
     if (!chainRunId) { setChainRun(null); setChainError(''); return; }
     let live = true;
@@ -278,7 +280,9 @@ export default function App() {
     );
     return () => { live = false; };
   }, [chainRunId, identity?.handoff?.versionId]);
-  const chainPrototype = chainRun?.approvals.find((entry) => entry.stage === 'prototype' && entry.decision === 'approved');
+  // Where Gate 2 stands is its newest decision, the way the release gate reads it.
+  const chainPrototype = [...(chainRun?.approvals ?? [])].reverse().find((entry) => entry.stage === 'prototype');
+  const prototypeApproved = chainPrototype?.decision === 'approved';
   const runChainStage = (): void => {
     if (!chainRunId) return;
     setChainBusy(true); setChainError('');
@@ -342,10 +346,12 @@ export default function App() {
       <section className="chain-panel">
         <div className="section-heading"><div><p className="eyebrow">Finalização</p><h2>O que o Gate 3 compila</h2></div></div>
         {chainRunId
-          ? <><p className="chain-line">Cadeia identidade → protótipo: Gate 1 <code>{chainRunId}</code> aprovou a versão <code>{identity!.handoff!.versionId}</code>{chainPrototype ? <> e o Gate 2 aprovou <code>{chainPrototype.versionId}</code>, que desce dela</> : <>; o Gate 2 ainda não aprovou nenhuma revisão desta identidade</>}.</p>
+          ? <><p className="chain-line">{chainStale
+              ? <>Cadeia identidade → protótipo <code>{chainRunId}</code>: a identidade mudou depois do Gate 1; aprove-a de novo antes de medir o protótipo e publicar.</>
+              : <>Cadeia identidade → protótipo: Gate 1 <code>{chainRunId}</code> aprovou a versão <code>{identity!.handoff!.versionId}</code>{prototypeApproved ? <> e o Gate 2 aprovou <code>{chainPrototype!.versionId}</code>, que desce dela</> : chainPrototype ? <>; o Gate 2 devolveu <code>{chainPrototype.versionId}</code> para revisão</> : <>; o Gate 2 ainda não aprovou nenhuma revisão desta identidade</>}.</>}</p>
             <div className="actions">
-              <button className="secondary" onClick={runChainStage} disabled={chainBusy || !chainPrototype || chainRun?.currentStage === 'finalization'}>{chainBusy ? 'Executando…' : 'Executar a etapa de finalização'}</button>
-              {!chainPrototype && <span className="qa-chip"><a href={GATE2_ROUTE}>Meça e aprove o protótipo no Gate 2</a></span>}
+              <button className="secondary" onClick={runChainStage} disabled={chainBusy || chainStale || !prototypeApproved || chainRun?.currentStage === 'finalization'}>{chainBusy ? 'Executando…' : 'Executar a etapa de finalização'}</button>
+              {!chainStale && !prototypeApproved && <span className="qa-chip"><a href={GATE2_ROUTE}>Meça e aprove o protótipo no Gate 2</a></span>}
             </div></>
           : <p className="chain-line">Nenhuma identidade aprovada neste navegador: o Gate 3 abaixo compila o briefing fixo desta demonstração. Aprove uma identidade no Gate 1 para publicar a sua.</p>}
         {chainError && <p className="error-banner" role="alert">{chainError}</p>}

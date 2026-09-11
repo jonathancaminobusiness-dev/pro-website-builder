@@ -624,6 +624,23 @@ describe('a run of the identity chain', () => {
     db.sqlite.close();
   });
 
+  it('reopens Gate 2 when the newest decision on it is a return for revision', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-chain-revoked-'));
+    const db = openDatabase(join(dir, 'chain.sqlite'));
+    const repository = new ProjectRepository(db);
+    const { prototypeVersionId } = await seedChain(repository);
+    // The captain returned the revision after approving it, from a screen that
+    // was still holding the pre-decision snapshot.
+    await repository.createApproval({ id: 'gate2-run-prototype-1-rejected', runId: 'identity-chain', projectId: createFixtureIR().meta.projectId, stage: 'prototype', approverRole: 'captain', versionId: prototypeVersionId, versionHash: 'h-prototype', decision: 'rejected', rationale: 'Devolvido para revisão.' });
+
+    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    expect(await run.restore('identity-chain')).toBe(true);
+    expect(run.releaseBlocker()).toMatch(/devolvida para revisão/);
+    // The gate is open again, and it is not this route's to close.
+    await expect(run.runNext()).rejects.toThrow(/pertence à cadeia/);
+    db.sqlite.close();
+  });
+
   it('still runs and releases the finalization stage the chain hands to it', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-chain-ok-'));
     const db = openDatabase(join(dir, 'chain.sqlite'));

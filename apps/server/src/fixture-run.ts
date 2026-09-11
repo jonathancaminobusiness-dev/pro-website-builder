@@ -120,11 +120,11 @@ export class FixtureRun {
     this.rendered = renderDesign(head.ir);
     this.lintErrorCount = lintDesign(head.ir).errorCount;
     this.approvals.push(...approvals);
-    // How far the chain got is how many leading stages closed, not how many rows
-    // the ledger holds: a gate decided twice is still one closed gate, and a
-    // chain whose Gate 1 and Gate 2 were closed by the identity and prototype
-    // runs arrives here as exactly those two rows.
-    this.stageIndex = STAGES.findIndex((stage) => !approved.some((entry) => entry.stage === stage));
+    // How far the chain got is how many leading stages are closed *now*, not how
+    // many rows the ledger holds: a gate decided twice is still one gate, and
+    // what it stands at is its newest decision, so a revision returned for review
+    // after it was approved reopens that gate.
+    this.stageIndex = STAGES.findIndex((stage) => this.decidedAt(stage)?.decision !== 'approved');
     if (this.stageIndex < 0) this.stageIndex = STAGES.length;
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
@@ -245,7 +245,7 @@ export class FixtureRun {
   async reject(stage: Stage, approverRole: 'captain' | string, rationale = 'Captain requested a revision.'): Promise<FixtureSnapshot> {
     this.requireInitialized();
     if (approverRole !== 'captain') throw new Error('Only the captain can reject v1 gates.');
-    if (stage !== 'finalization') this.requireOwnStage(stage);
+    this.requireOwnStage(stage);
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting review.`);
     const rejection: Approval = { id: `${this.runId()}-${stage}-rejection-${this.approvals.length}`, stage, approverRole: 'captain', versionId: this.currentVersion.id, versionHash: this.currentVersion.hash, decision: 'rejected', rationale, createdAt: new Date().toISOString() };
     this.approvals.push(rejection);
@@ -319,13 +319,18 @@ export class FixtureRun {
   releaseBlocker(): string | undefined {
     this.requireInitialized();
     for (const stage of ['identity', 'prototype'] as const) {
-      if (!this.approvedAt(stage)) return `O gate de release exige a aprovação do capitão na etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
+      const decided = this.decidedAt(stage);
+      if (decided?.decision === 'approved') continue;
+      const name = stage === 'identity' ? 'identidade' : 'protótipo';
+      return decided
+        ? `A etapa de ${name} desta execução foi devolvida para revisão depois de aprovada; o gate de release exige a decisão mais recente aprovada.`
+        : `O gate de release exige a aprovação do capitão na etapa de ${name} desta execução.`;
     }
     // An approval on a version the bundle does not descend from closes nothing:
     // the gate has to have been decided on this document's own history.
     const lineage = this.ancestry(this.currentVersion);
     for (const stage of ['identity', 'prototype'] as const) {
-      const approval = this.approvedAt(stage)!;
+      const approval = this.decidedAt(stage)!;
       if (!lineage.has(approval.versionId)) return `O bundle não descende da versão ${approval.versionId}, aprovada no gate de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
     }
     if (!this.finalizationVersion) return 'A etapa de finalização ainda não produziu a versão que o gate de release compila.';
@@ -388,8 +393,13 @@ export class FixtureRun {
     return seen;
   }
 
-  private approvedAt(stage: Stage): Approval | undefined {
-    return [...this.approvals].reverse().find((entry) => entry.stage === stage && entry.decision === 'approved');
+  /**
+   * Where a gate stands: its newest decision, approval or rejection alike. Gates
+   * 1 and 2 are decided in their own runs and write into this ledger, so a
+   * decision that came after an approval is what the gate says now.
+   */
+  private decidedAt(stage: Stage): Approval | undefined {
+    return [...this.approvals].reverse().find((entry) => entry.stage === stage);
   }
 
   private launch(stage: Stage): Promise<void> {

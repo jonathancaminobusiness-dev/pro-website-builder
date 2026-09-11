@@ -61,6 +61,14 @@ export interface PrototypeRunRequest {
 /** Gate 2 was asked to run on an identity Gate 1 has not approved, or no longer approves. */
 export class Gate1NotApprovedError extends Error {}
 
+/**
+ * The gate of a review that is already decided. A decision writes a permanent
+ * `approvals` row the release gate reads, so a screen still holding the
+ * pre-decision snapshot must not overwrite it: the review is re-measured in a
+ * new run instead.
+ */
+export class Gate2AlreadyDecidedError extends Error {}
+
 export type PrototypeRunStatus = 'queued' | 'running' | 'settled' | 'failed' | 'interrupted';
 
 /**
@@ -395,6 +403,7 @@ export class PrototypeRunRegistry {
 
   async settle(runId: string, input: { decision: 'approved' | 'rejected'; rationale: string }): Promise<Gate2Snapshot> {
     const record = this.require(runId);
+    if (record.approval) throw new Gate2AlreadyDecidedError(`O Gate 2 desta revisão já foi ${record.approval.decision === 'approved' ? 'aprovado' : 'devolvido'} em ${record.approval.versionId}; recarregue a tela e meça outra revisão para decidir de novo.`);
     if (record.outcome.gate === 'vetoed' && input.decision === 'approved') throw new Error('A vetoed revision cannot be approved; the deterministic gate has to pass first.');
     const version = record.store.get(record.outcome.versionId);
     if (!version) throw new Error(`Run ${runId} has lost its reviewed revision.`);

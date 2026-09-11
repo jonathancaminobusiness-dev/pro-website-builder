@@ -173,9 +173,17 @@ export default function Gate2(): ReactElement {
   const act = useCallback(async (action: () => Promise<Snapshot>): Promise<void> => {
     setBusy(true); setError('');
     try { adopt(await action()); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); }
+    catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Erro desconhecido.');
+      // A refused decision usually means this tab is holding a snapshot someone
+      // else already decided from, so the screen rereads what is true now.
+      if (runId) {
+        try { adopt(await request<Snapshot>(`/api/prototype/runs/${encodeURIComponent(runId)}`)); }
+        catch { /* the refusal already says what happened */ }
+      }
+    }
     finally { setBusy(false); }
-  }, [adopt]);
+  }, [adopt, runId]);
 
   useEffect(() => { document.title = 'Gate 2 — protótipo'; }, []);
 

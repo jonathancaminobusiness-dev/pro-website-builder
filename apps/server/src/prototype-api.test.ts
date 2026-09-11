@@ -342,6 +342,14 @@ describe('Gate 2 runs on the identity Gate 1 approved', () => {
       const approvals = await api.repository.listApprovals('identity-chain');
       expect(approvals.map((entry) => [entry.stage, entry.decision, entry.versionId])).toEqual([['prototype', 'approved', result.after.versionId]]);
 
+      // A second tab still holding the pre-decision snapshot cannot overwrite the
+      // row the release gate reads: the decision stands and the tab is told so.
+      const again = await post(api.origin, '/api/prototype/runs/gate2-chain/gate', { approverRole: 'captain', decision: 'rejected', rationale: 'Devolver para revisão.' });
+      expect(again.status).toBe(409);
+      expect(again.payload.error).toMatch(/já foi aprovado/i);
+      expect((await api.repository.listApprovals('identity-chain')).map((entry) => [entry.stage, entry.decision])).toEqual([['prototype', 'approved']]);
+      expect((await settled(api.origin, 'gate2-chain')).result!.approval).toMatchObject({ decision: 'approved' });
+
       // And so does the lineage between the two, so Gate 3 can walk it.
       const versions = await api.repository.listVersions(seed.projectId);
       const byId = new Map(versions.map((version) => [version.id, version]));
