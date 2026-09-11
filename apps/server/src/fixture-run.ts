@@ -186,6 +186,15 @@ export class FixtureRun {
   async publishRelease(digest: string, rationale?: string, approverRole: ReleaseApprover = 'captain'): Promise<ReleaseManifest> {
     this.requireInitialized();
     if (!this.releaseRun) throw new Error('A finalização não está habilitada nesta execução.');
+    // A publish whose bytes and acceptance both landed, and whose record did
+    // not, is finished except for that record: publishing again writes it
+    // instead of refusing a gate this run already closed.
+    const pending = this.releaseRun.snapshot()?.published;
+    if (pending?.recordPending && this.exportManifest) {
+      if (digest !== pending.digest) throw new ReleasePublishRefusedError(`O capitão aprovou o bundle ${digest}, e o release publicado é ${pending.digest}.`);
+      await this.releaseRun.recordPublication();
+      return this.exportManifest;
+    }
     if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new ReleasePublishRefusedError('Stage finalization is not awaiting approval.');
     const unclean = this.lintRefusal('finalization', this.currentVersion);
     if (unclean) throw new ReleasePublishRefusedError(unclean);
@@ -282,6 +291,10 @@ export class FixtureRun {
    */
   releaseBlocker(): string | undefined {
     this.requireInitialized();
+    // A release whose bytes and acceptance both landed but whose publication
+    // record did not is published already; publishing it again writes only that
+    // record, so the closed gate does not stand in the way of it.
+    if (this.releaseRun?.snapshot()?.published?.recordPending) return undefined;
     for (const stage of ['identity', 'prototype'] as const) {
       if (!this.approvedAt(stage)) return `O gate de release exige a aprovação do capitão na etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
     }
@@ -308,14 +321,19 @@ export class FixtureRun {
       approveFinalization: async (approverRole, rationale, manifest) => {
         const version = this.currentVersion;
         const approval: Approval = { id: `${this.runId()}-finalization-approval`, stage: 'finalization', approverRole, versionId: version.id, versionHash: version.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
-        // Acceptance is the last step and it cannot fail halfway: everything
-        // durable is written first, and only then does the run become a
-        // succeeded one holding this manifest. A publish that dies before that
-        // point leaves the gate open, so the bytes it wrote can still be rolled
-        // back; once the gate is closed nothing is removed.
-        await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
-        await this.record('approval.recorded', { stage: 'finalization', decision: 'approved', versionId: approval.versionId });
-        await this.record('run.finished', { status: 'succeeded', digest: manifest.digest });
+        // Acceptance is one step: the approval and the two events that describe
+        // it commit together, and only then does the run become a succeeded one
+        // holding this manifest. A publish that dies anywhere before that commit
+        // leaves nothing durable behind, so the bytes it wrote can still be
+        // rolled back and a restarted server reads the run exactly as this one
+        // does; once the commit lands nothing is removed.
+        await this.options.repository.createApprovalWithEvents(
+          { ...approval, runId: this.runId(), projectId: this.projectId() },
+          [
+            { id: randomUUID(), runId: this.runId(), type: 'approval.recorded', payload: { stage: 'finalization', decision: 'approved', versionId: approval.versionId } },
+            { id: randomUUID(), runId: this.runId(), type: 'run.finished', payload: { status: 'succeeded', digest: manifest.digest } },
+          ],
+        );
         this.approvals.push(approval);
         this.stageIndex += 1;
         this.exportManifest = manifest;

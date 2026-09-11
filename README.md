@@ -248,11 +248,15 @@ nothing prepared in this execution, a digest the run no longer holds, a bundle
 prepared for another proposal, a document the linter rejects, a veto still
 standing, or an open point never accepted in writing. The studio can tell the
 release having moved from the server having broken. And the bytes never outlive
-the acceptance, which is the last step of a publish: the publication record and
-the gate's approval are written while the gate is still open, so a failure there
-removes the bundle this publish wrote rather than leaving it on disk with the
-run still needing review, and once the run is marked succeeded nothing is
-removed. A bundle that was already there — the
+the acceptance of them: the bundle is written first, then the finalization
+approval and the two events that describe it commit as one step, and only then
+is the publication appended to the release record. A publish that dies before
+that commit takes its bundle with it and records nothing, so a restarted server
+reads the run exactly as the live one does — still at the gate. Past the commit
+the release is published and nothing is removed again: a record that cannot be
+written yet is owed, the snapshot says so, and publishing the same digest again
+writes it. Appending the same publication twice is one publication recorded
+late, never a second one. A bundle that was already there — the
 same bytes published before — is never touched, because its own record stands
 for it.
 

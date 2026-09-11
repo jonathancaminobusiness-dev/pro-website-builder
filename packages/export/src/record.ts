@@ -47,9 +47,26 @@ export async function readReleasePublications(rootDir: string, digest: string): 
   catch (error) { throw new Error(`The release record ${path} is unreadable, so the publications of this bundle cannot be preserved: ${error instanceof Error ? error.message : 'invalid JSON or shape'}`); }
 }
 
+function samePublication(one: ReleasePublication, other: ReleasePublication): boolean {
+  return one.digest === other.digest && one.approvedVersionId === other.approvedVersionId && one.releasedVersionId === other.releasedVersionId
+    && one.irHash === other.irHash && one.approverRole === other.approverRole && one.rationale === other.rationale
+    && one.acceptedEscalations.length === other.acceptedEscalations.length && one.acceptedEscalations.every((escalation, index) => escalation === other.acceptedEscalations[index]);
+}
+
+/**
+ * Records one publication, or leaves the record alone when it already holds
+ * exactly this one. Appending is how a publish writes the acceptance it owes,
+ * and that write is retried until it lands, so the same publication arriving
+ * twice is one publication that was recorded late — not a second one. Two
+ * publications that differ in anything an auditor reads — the documents, the
+ * approver, what they accepted — are distinct entries, as republishing the same
+ * bytes from another run stays distinct.
+ */
 export async function appendReleasePublication(rootDir: string, entry: ReleasePublication): Promise<ReleasePublication[]> {
   await mkdir(rootDir, { recursive: true });
-  const publications = [...await readReleasePublications(rootDir, entry.digest), entry];
+  const recorded = await readReleasePublications(rootDir, entry.digest);
+  if (recorded.some((publication) => samePublication(publication, entry))) return recorded;
+  const publications = [...recorded, entry];
   await writeFile(recordPath(rootDir, entry.digest), `${JSON.stringify(publications, null, 2)}\n`, 'utf8');
   return publications;
 }

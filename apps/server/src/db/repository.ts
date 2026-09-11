@@ -95,6 +95,20 @@ export class ProjectRepository {
   async savePatch(patch: Patch, runId: string): Promise<void> { await this.write(() => { this.db.orm.insert(schema.patches).values({ id: hashJson(patch), runId, baseVersionId: patch.baseVersionId, payload: JSON.stringify(patch), createdAt: new Date().toISOString() }).run(); }); }
   async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(designIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }
   async createApproval(input: ApprovalInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.approvals).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
+  /**
+   * An approval and the events that describe it, committed as one step.
+   *
+   * A Gate 3 publish keeps the bytes it wrote only once this commits, so an
+   * acceptance that landed halfway — the approval row without its events — would
+   * leave a run a restarted server reads as finished with no bundle behind it.
+   * Re-running the same approval is the retry of that publish, not a conflict.
+   */
+  async createApprovalWithEvents(approval: ApprovalInput, events: EventInput[]): Promise<void> {
+    await this.write(() => this.db.sqlite.transaction(() => {
+      this.db.orm.insert(schema.approvals).values({ ...approval, createdAt: new Date().toISOString() }).onConflictDoNothing().run();
+      for (const event of events) this.db.orm.insert(schema.events).values({ id: event.id, runId: event.runId, type: event.type, payload: JSON.stringify(event.payload), createdAt: new Date().toISOString() }).run();
+    })());
+  }
   async appendEvent(input: EventInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.events).values({ id: input.id, runId: input.runId, type: input.type, payload: JSON.stringify(input.payload), createdAt: new Date().toISOString() }).run(); }); }
   async savePrototypeRun(input: PrototypeRunRow): Promise<void> {
     await this.write(() => {

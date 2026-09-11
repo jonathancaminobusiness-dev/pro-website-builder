@@ -1,7 +1,7 @@
 import { rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
-import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ServedFace } from '@pwb/export';
+import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ReleasePublication, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
 import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
@@ -83,7 +83,12 @@ export interface ReleaseSnapshot {
   refinedFromVersionId: string;
   report: ReleaseGateReport;
   catalog: typeof VETO_CATALOG;
-  published?: { directory: string; digest: string };
+  /**
+   * The bundle this run published. `recordPending` says the bytes and the
+   * acceptance are both durable but the publication record beside them is not
+   * yet written, so the release is published and its provenance is owed.
+   */
+  published?: { directory: string; digest: string; recordPending?: true };
 }
 
 function providers(name: ModelProviderName): { critic: ReleaseCriticProvider; refiner: ReleaseRefinerProvider; summarizer: ReleaseSummarizerProvider } {
@@ -113,6 +118,7 @@ export class ReleaseRun {
   private compiled: CompiledSite | undefined;
   private context: ReleaseContext | undefined;
   private preparing = false;
+  private pendingPublication: { entry: ReleasePublication; directory: string; versionId: string; escalations: string[] } | undefined;
 
   constructor(private readonly runId: string, private readonly options: ReleaseRunOptions) {}
 
@@ -193,17 +199,30 @@ export class ReleaseRun {
     if (escalations.length > 0 && reason === '') {
       throw new ReleasePublishRefusedError(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
-    // A bundle on disk is a published release, so it never outlives the record
-    // of who accepted it: if the publication cannot be appended or the gate
-    // cannot be approved, the bytes this publish wrote are removed again rather
-    // than left behind with the run still needing review. A bundle that was
-    // already there — the same bytes published before — is never touched: its
-    // own record is what stands for it.
+    // A bundle on disk is a published release, so it never outlives the
+    // acceptance of it: the bytes are written first and the gate is approved in
+    // one commit, and a publish that dies before that commit takes its bytes
+    // with it rather than leaving them behind with the run still needing
+    // review. A bundle that was already there — the same bytes published before
+    // — is never touched: its own record is what stands for it.
     const directory = join(this.options.releaseRoot, current.digest);
     const preexisting = await stat(directory).then(() => true, () => false);
     const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot);
     try {
-      await appendReleasePublication(this.options.releaseRoot, {
+      await this.context.approveFinalization(approverRole, reason, manifest);
+    } catch (error) {
+      if (!preexisting) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+    // Past the commit the release is published, so nothing is removed again.
+    // The record of who accepted it is written last and is owed until it lands:
+    // publishing this digest again writes it, and appending it twice is not a
+    // second publication.
+    this.pendingPublication = {
+      directory,
+      versionId: current.versionId,
+      escalations,
+      entry: {
         digest: manifest.digest,
         approvedVersionId: current.report.approvedVersionId,
         releasedVersionId: current.versionId,
@@ -211,14 +230,20 @@ export class ReleaseRun {
         approverRole,
         rationale: reason,
         acceptedEscalations: escalations,
-      });
-      await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole, rationale: reason, escalations });
-      await this.context.approveFinalization(approverRole, reason, manifest);
-    } catch (error) {
-      if (!preexisting) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
-    }
-    this.snapshotValue = { ...current, published: { directory, digest: manifest.digest } };
+      },
+    };
+    this.snapshotValue = { ...current, published: { directory, digest: manifest.digest, recordPending: true } };
+    await this.recordPublication();
     return manifest;
+  }
+
+  /** Writes the publication record a published bundle is still owed, if any. */
+  async recordPublication(): Promise<void> {
+    const pending = this.pendingPublication;
+    if (!pending || !this.context || !this.snapshotValue) return;
+    await appendReleasePublication(this.options.releaseRoot, pending.entry);
+    await this.context.record('release.published', { digest: pending.entry.digest, versionId: pending.versionId, approverRole: pending.entry.approverRole, rationale: pending.entry.rationale, escalations: pending.escalations });
+    this.pendingPublication = undefined;
+    this.snapshotValue = { ...this.snapshotValue, published: { directory: pending.directory, digest: pending.entry.digest } };
   }
 }
