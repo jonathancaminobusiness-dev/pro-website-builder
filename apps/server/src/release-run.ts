@@ -1,3 +1,4 @@
+import { rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
 import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ServedFace } from '@pwb/export';
@@ -192,19 +193,32 @@ export class ReleaseRun {
     if (escalations.length > 0 && reason === '') {
       throw new ReleasePublishRefusedError(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
+    // A bundle on disk is a published release, so it never outlives the record
+    // of who accepted it: if the publication cannot be appended or the gate
+    // cannot be approved, the bytes this publish wrote are removed again rather
+    // than left behind with the run still needing review. A bundle that was
+    // already there — the same bytes published before — is never touched: its
+    // own record is what stands for it.
+    const directory = join(this.options.releaseRoot, current.digest);
+    const preexisting = await stat(directory).then(() => true, () => false);
     const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot);
-    await appendReleasePublication(this.options.releaseRoot, {
-      digest: manifest.digest,
-      approvedVersionId: current.report.approvedVersionId,
-      releasedVersionId: current.versionId,
-      irHash: current.report.irHash,
-      approverRole,
-      rationale: reason,
-      acceptedEscalations: escalations,
-    });
-    await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole, rationale: reason, escalations });
-    await this.context.approveFinalization(approverRole, reason, manifest);
-    this.snapshotValue = { ...current, published: { directory: join(this.options.releaseRoot, manifest.digest), digest: manifest.digest } };
+    try {
+      await appendReleasePublication(this.options.releaseRoot, {
+        digest: manifest.digest,
+        approvedVersionId: current.report.approvedVersionId,
+        releasedVersionId: current.versionId,
+        irHash: current.report.irHash,
+        approverRole,
+        rationale: reason,
+        acceptedEscalations: escalations,
+      });
+      await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole, rationale: reason, escalations });
+      await this.context.approveFinalization(approverRole, reason, manifest);
+    } catch (error) {
+      if (!preexisting) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+    this.snapshotValue = { ...current, published: { directory, digest: manifest.digest } };
     return manifest;
   }
 }

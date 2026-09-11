@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -471,6 +471,32 @@ describe('Gate 3 over the local API', () => {
     expect(blocked.status).toBe(409);
     expect((await blocked.json() as { error: string }).error).toMatch(/CRITICAL_AA_REGRESSION/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
+  });
+
+  it('leaves no bundle on disk when the publication that accepts it cannot be recorded', async () => {
+    const { origin, runId, releaseRoot, run } = await harness();
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    // The release record beside the bundle is damaged, so appending this
+    // publication to it fails. The bundle is what a published release is, so it
+    // never survives the acceptance that was never written.
+    await mkdir(releaseRoot, { recursive: true });
+    const recordPath = join(releaseRoot, `${prepared.digest}.publications.json`);
+    await writeFile(recordPath, '[{"digest":', 'utf8');
+    const refused = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(refused.status).toBe(500);
+    expect((await refused.json() as { error: string }).error).toMatch(/unreadable/);
+    expect(await readdir(releaseRoot)).toEqual([`${prepared.digest}.publications.json`]);
+    // And the run is exactly where it was: still at the gate, unapproved.
+    expect(run.snapshot().status).toBe('needs_review');
+    expect(run.snapshot().approvals.filter((entry) => entry.stage === 'finalization' && entry.decision === 'approved')).toHaveLength(0);
+    expect(run.releaseSnapshot()?.published).toBeUndefined();
+
+    // Repairing the record publishes the same bundle, bytes and acceptance together.
+    await rm(recordPath, { force: true });
+    const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(published.status).toBe(200);
+    expect(await readdir(join(releaseRoot, prepared.digest))).toContain('manifest.json');
+    expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
   });
 
   it('has no release routes when the server does not serve the finalization stage', async () => {

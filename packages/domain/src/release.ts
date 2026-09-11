@@ -129,6 +129,26 @@ export const releaseGateReportSchema = z.object({
   approverRole: z.literal('captain'),
 });
 
+/**
+ * One publication of one bundle, as it is written beside the bundle directory.
+ *
+ * It is read back from a file nothing in this process wrote — a hand-edit, a
+ * half-flushed write, another tool — and it is the only durable home for the
+ * captain's written acceptance, so it is parsed like any other document that
+ * crosses a boundary rather than trusted for its type.
+ */
+export const releasePublicationSchema = z.object({
+  digest: z.string().min(1),
+  approvedVersionId: z.string().min(1),
+  releasedVersionId: z.string().min(1),
+  irHash: z.string().min(1),
+  approverRole: z.string().min(1),
+  rationale: z.string(),
+  acceptedEscalations: z.array(z.string()),
+});
+
+export const releasePublicationsSchema = z.array(releasePublicationSchema);
+
 export type ReleaseVetoId = z.infer<typeof releaseVetoIdSchema>;
 export type ReleaseVeto = z.infer<typeof releaseVetoSchema>;
 export type ReleaseCriticDimension = z.infer<typeof releaseCriticDimensionSchema>;
@@ -138,6 +158,7 @@ export type EvidenceArtifact = z.infer<typeof evidenceArtifactSchema>;
 export type ParityReport = z.infer<typeof parityReportSchema>;
 export type ReleaseSummary = z.infer<typeof releaseSummarySchema>;
 export type ReleaseGateReport = z.infer<typeof releaseGateReportSchema>;
+export type ReleasePublication = z.infer<typeof releasePublicationSchema>;
 
 /** The rubric minimum the plan sets for every absolute score. */
 export const RELEASE_RUBRIC_MINIMUM = 3;
