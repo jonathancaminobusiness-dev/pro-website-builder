@@ -8,13 +8,14 @@ export interface PreviewServer {
   server: Server;
   origin: string;
   /**
-   * The faces the last document this origin really served declared, or
-   * `undefined` when it has served none. They are read back out of the bytes
-   * that left the origin, so a 404, a font file or an unrelated route answers
-   * nothing, and Gate 3 comparing them against the compiled bundle is a real
-   * comparison rather than the fonts directory against itself.
+   * The faces the document of this version declared when this origin served it,
+   * or `undefined` when it never served that version. They are read back out of
+   * the bytes that left the origin, so a 404, a font file or another version
+   * answers nothing, and Gate 3 comparing them against the compiled bundle is a
+   * real comparison rather than the fonts directory against itself — nor one
+   * version's document standing in for another's.
    */
-  servedFaces(): ServedFace[] | undefined;
+  servedFaces(versionId: string): ServedFace[] | undefined;
   start(): Promise<void>;
   close(): Promise<void>;
 }
@@ -38,7 +39,7 @@ const NO_FACES: FacePlan = { css: '' };
  */
 export function createPreviewServer(getRendered: (versionId: string) => RenderedDocument | undefined, port = 4311, fontsDir?: string): PreviewServer {
   let cached: { key: string; plan: FacePlan } | undefined;
-  let served: ServedFace[] | undefined;
+  const served = new Map<string, ServedFace[]>();
   const built = new Map<string, Buffer>();
 
   const faces = async (): Promise<FacePlan> => {
@@ -71,7 +72,7 @@ export function createPreviewServer(getRendered: (versionId: string) => Rendered
     try { plan = await faces(); }
     catch (error) { response.writeHead(500, { ...previewHeaders(), 'Content-Type': 'text/plain; charset=utf-8' }).end(error instanceof Error ? error.message : 'The fonts of this project could not be read.'); return; }
     const body = plan.css === '' ? match.html : match.html.replace('</head>', `<style>${plan.css}</style></head>`);
-    served = parseFontFaceCss(body, (url) => url.replace(/^\//, ''));
+    served.set(requested[1]!, parseFontFaceCss(body, (url) => url.replace(/^\//, '')));
     response.writeHead(200, previewHeaders()).end(body);
   };
 
@@ -81,7 +82,7 @@ export function createPreviewServer(getRendered: (versionId: string) => Rendered
   const preview: PreviewServer = {
     server,
     origin: `http://127.0.0.1:${port}`,
-    servedFaces: () => served,
+    servedFaces: (versionId) => served.get(versionId),
     start: () => new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(port, '127.0.0.1', () => {
@@ -100,8 +101,8 @@ export function createPreviewServer(getRendered: (versionId: string) => Rendered
  * A preview origin a command line run serves its own document from.
  *
  * Gate 3 compares the faces the captain was served against the faces the bundle
- * ships, and reads them from `servedFaces`, which answers only for a document
- * this origin really delivered. A script has no studio, so it starts the same
+ * ships, and reads them from `servedFaces`, which answers only for the version
+ * whose document this origin really delivered. A script has no studio, so it starts the same
  * origin on an ephemeral port and serves the version the stage hands the gate,
  * instead of the silence that used to read as parity.
  */
@@ -121,7 +122,7 @@ export async function startServedPreview(fontsDir?: string): Promise<ServedPrevi
       const response = await fetch(`${preview.origin}/preview/${versionId}${route}`);
       if (!response.ok) throw new Error(`O preview não serviu a rota ${route} da versão ${versionId}: HTTP ${response.status}.`);
       await response.text();
-      return preview.servedFaces() ?? [];
+      return preview.servedFaces(versionId) ?? [];
     },
   });
 }

@@ -10,7 +10,8 @@ import { defineConfig, devices } from '@playwright/test';
  * measurement and the decision.
  *
  * The harness binds an ephemeral port in `globalSetup` and publishes its origin
- * through `PWB_RELEASE_ORIGIN`, so a run never competes for a fixed port.
+ * through `PWB_RELEASE_ORIGIN`, so a run competes for no port unless
+ * `PWB_RELEASE_PORT` pins one (see `README.md`).
  *
  * All three engines always run. A browser that cannot launch on a given host
  * leaves no artifact, and the gate reports the gap as missing evidence the
