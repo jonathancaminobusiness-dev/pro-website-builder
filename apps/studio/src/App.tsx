@@ -26,7 +26,6 @@ const stages = [{ id: 'identity', label: '01 Identidade' }, { id: 'prototype', l
 const views = [{ id: 'pipeline', label: 'Pipeline' }, { id: 'gate1', label: 'Gate 1 · identidade' }] as const;
 type ViewId = (typeof views)[number]['id'];
 
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return requestJson<T>(`${API_ORIGIN}${path}`, init);
 }

@@ -33,9 +33,9 @@ const imageryCopy: Record<string, string> = {
 };
 
 /**
- * The images live in o ledger da revisão, não nas seções: esta etapa ainda não
- * posiciona imagem em página, então elas contam para procedência e licença sem
- * aparecer no preview.
+ * The images live in the revision's ledger, not in its sections: this stage does
+ * not place an image on a page yet, so they count for provenance and licensing
+ * without appearing in the preview.
  */
 const IMAGERY_NOTE = 'As imagens do Gate 1 ficam no registro e na licença desta revisão; esta etapa ainda não as posiciona nas seções.';
 
