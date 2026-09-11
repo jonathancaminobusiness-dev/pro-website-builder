@@ -34,11 +34,13 @@ export interface BriefingConversationController {
 export function useBriefingConversation(client: ConversationClient, runId: string | null): BriefingConversationController {
   const [state, dispatch] = useReducer(conversationReducer, initialConversationState());
   const generation = useRef(0);
+  const lastAttempt = useRef<PendingIntent | null>(null);
   const latest = useRef(state);
   latest.current = state;
 
   const run = useCallback(async (intent: PendingIntent, targetRunId: string): Promise<void> => {
     const epoch = generation.current;
+    lastAttempt.current = intent;
     dispatch({ type: 'begin', intent });
     try {
       const snapshot = intent.kind === 'resume'
@@ -57,6 +59,7 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
 
   useEffect(() => {
     generation.current += 1;
+    lastAttempt.current = null;
     dispatch({ type: 'reset' });
     if (runId) void run({ kind: 'resume' }, runId);
   }, [run, runId]);
@@ -73,7 +76,7 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
     resume: () => { if (runId) void run({ kind: 'resume' }, runId); },
     retry: () => {
       if (!runId) return;
-      void run(latest.current.pending ?? { kind: 'resume' }, runId);
+      void run(latest.current.pending ?? lastAttempt.current ?? { kind: 'resume' }, runId);
     },
     discard: () => dispatch({ type: 'discard' }),
     sendEntry: () => send('entry', latest.current.draft.trim()),

@@ -139,6 +139,29 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('disabled="">Cancelar conversa');
   });
 
+  it('names no cancel where its own copy says a new execution is the only way forward', () => {
+    const markup = render(state(conversationSnapshot({ state: 'entry', messageCount: 0, limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T09:00:00.000Z' } })));
+
+    expect(markup).toContain('criar uma nova execução');
+    expect(markup).not.toContain('Cancelar conversa');
+    expect(markup).not.toContain('Reabrir do ponto salvo');
+  });
+
+  it('reopens the question after a failed skip, which took no field with it', () => {
+    const markup = render(state(
+      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), questionTurn()], question: clarifyingQuestion(), messageCount: 2 }),
+      { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } },
+      { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) },
+    ));
+
+    expect(markup).toContain('não seguiu o contrato');
+    expect(markup).toContain('Tentar novamente');
+    expect(markup).not.toContain('Editar e reenviar');
+    expect(markup).not.toContain('disabled="">Pular esta pergunta');
+    expect(markup).not.toContain('disabled="">Cancelar conversa');
+    expect(markup).not.toContain('readOnly=""');
+  });
+
   it('offers a failed conversation the close it can still do, and no cancel it cannot', () => {
     const markup = render(state(conversationSnapshot({ state: 'failed', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], error: 'o modelo não respondeu', messageCount: 1 })));
 

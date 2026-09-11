@@ -102,6 +102,29 @@ test('keeps the draft on a dead network and retries the same intent without a se
   await expect(chat.locator('.chat-turn', { hasText: 'Segurança clínica sem perder o carinho.' })).toHaveCount(1);
 });
 
+test('keeps the panel usable when a skip is refused, and replays the skip on demand', async ({ page }) => {
+  const api = await openConversation(page);
+  const chat = page.locator('.briefing-chat');
+
+  await page.getByLabel(/Conte sobre o negócio/).fill(ENTRY);
+  await page.getByRole('button', { name: 'Enviar para leitura' }).click();
+  await expect(chat.locator('#briefing-chat-question')).toHaveCount(1);
+
+  await page.route('**/conversation', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ runId: 'identity-conversation-e2e', state: 'recommendation' }) }), { times: 1 });
+  await page.getByRole('button', { name: 'Pular esta pergunta' }).click();
+
+  await expect(chat.getByRole('alert')).toContainText('não seguiu o contrato');
+  // A skip carried no field, so nothing it could have replaced stays frozen.
+  await expect(page.getByRole('button', { name: 'Cancelar conversa' })).toBeEnabled();
+  await expect(page.getByLabel('Sua resposta')).not.toHaveAttribute('readonly', '');
+
+  await chat.getByRole('button', { name: 'Tentar novamente' }).click();
+
+  await expect(page.getByLabel(/Briefing final, editável/)).toHaveValue(CONSOLIDATED_SUMMARY);
+  const skips = api.writes.filter((write) => write.body.intent === 'skip');
+  expect(skips).toHaveLength(1);
+});
+
 test('explains an off-contract response and lets the captain try again', async ({ page }) => {
   await openConversation(page, { breakNextResponse: true });
   const chat = page.locator('.briefing-chat');
