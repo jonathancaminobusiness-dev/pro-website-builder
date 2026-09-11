@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import type { FixtureRun } from './fixture-run.js';
+import { ChainGateError, type FixtureRun } from './fixture-run.js';
 import { handleIdentityRequest, type IdentityApiOptions } from './identity-api.js';
 import type { PrototypeRunRegistry } from './prototype-api.js';
 import { handlePrototypeRequest } from './prototype-routes.js';
@@ -12,6 +12,12 @@ export { RunConflictError };
 interface ApiOptions {
   runs: Map<string, FixtureRun>;
   createRun: (id: string) => Promise<FixtureRun>;
+  /**
+   * The run as the ledger has it. The loader owns the choice between the object
+   * this process holds and a fresh read, so it must answer with the cached run
+   * whenever that one is authoritative: a run that is measuring, awaiting a
+   * decision or holding a prepared release is not rebuildable from rows.
+   */
   loadRun?: (id: string) => Promise<FixtureRun | undefined>;
   identity?: IdentityApiOptions;
   prototypes?: PrototypeRunRegistry;
@@ -26,9 +32,8 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
 
 export function createApiServer(options: ApiOptions): Server {
   /**
-   * The run as the ledger has it. The loader owns the choice between the object
-   * this process holds and a fresh read: gates 1 and 2 close in their own runs,
-   * so a cached chain run with nothing in flight would otherwise answer for an
+   * The run as the ledger has it: gates 1 and 2 close in their own runs, so a
+   * cached chain run with nothing in flight would otherwise answer for an
    * approvals table it has never seen.
    */
   const resolveRun = async (runId: string): Promise<FixtureRun | undefined> =>
@@ -116,6 +121,11 @@ export function createApiServer(options: ApiOptions): Server {
         }
       }
       send(response, 404, { error: 'Not found.' });
-    } catch (error) { send(response, 500, { error: error instanceof Error ? error.message : 'Internal error.' }); }
+    } catch (error) {
+      // A gate this route does not own is a conflict, not a server fault: the
+      // chain's gates 1 and 2 are decided where they are measured.
+      if (error instanceof ChainGateError) { send(response, 409, { error: error.message }); return; }
+      send(response, 500, { error: error instanceof Error ? error.message : 'Internal error.' });
+    }
   });
 }
