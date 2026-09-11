@@ -74,17 +74,14 @@ export async function handleIdentityRequest(
   }
 
   // The `/confirm` and `/reopen` suffixes belong to the conversation and to
-  // nothing else, which the pattern states structurally by nesting them inside
-  // that alternative. The refusal below states the same rule where a reader of
-  // the handler sees it; both stay, because a pattern edit that loosens the
-  // nesting again would otherwise route `/start/confirm` into a paid fan-out.
+  // nothing else, which the pattern states by nesting them inside that
+  // alternative: `/start/confirm` matches nothing and never reaches a fan-out.
   const match = /^\/api\/identity\/runs\/([^/]+)(?:\/(?:(start|approve|reject|cancel|token)|(conversation)(?:\/(confirm|reopen))?))?$/.exec(pathname);
   if (!match) { send(404, { error: 'Not found.' }); return true; }
   const run = await resolve(options, decodeURIComponent(match[1]!));
   if (!run) { send(404, { error: 'Identity run not found.' }); return true; }
   const action = match[2] ?? match[3];
   const subAction = match[4];
-  if (subAction && action !== 'conversation') { send(404, { error: 'Not found.' }); return true; }
 
   if (request.method === 'GET' && !action) { send(200, run.snapshot()); return true; }
 
