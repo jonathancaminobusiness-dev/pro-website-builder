@@ -573,6 +573,17 @@ describe('immutable content-addressed bundle', () => {
       await writeFile(join(root, `${compiled.digest}.publications.json`), '[{"digest":', 'utf8');
       await expect(appendReleasePublication(root, entry)).rejects.toThrow(/unreadable/);
       await expect(readReleasePublications(root, compiled.digest)).rejects.toThrow(/unreadable/);
+
+      // Valid JSON that is not a list of publications is just as damaged: it is
+      // parsed, never cast, so nothing is appended to it and nothing carries its
+      // garbage forward.
+      const recordPath = join(root, `${compiled.digest}.publications.json`);
+      for (const damaged of ['{}', '[1,2]', '[{"digest":"abc"}]', JSON.stringify([{ ...entry, acceptedEscalations: 'nenhuma' }])]) {
+        await writeFile(recordPath, damaged, 'utf8');
+        await expect(readReleasePublications(root, compiled.digest)).rejects.toThrow(/unreadable/);
+        await expect(appendReleasePublication(root, entry)).rejects.toThrow(/unreadable/);
+        expect(await readFile(recordPath, 'utf8')).toBe(damaged);
+      }
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
