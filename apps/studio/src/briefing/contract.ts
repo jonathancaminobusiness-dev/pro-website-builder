@@ -210,7 +210,7 @@ export function parseConversationSnapshot(value: unknown): ConversationSnapshot 
     briefing: text(source.briefing, 'briefing'),
     turns,
     ...(source.question === undefined || source.question === null ? {} : { question: parseQuestion(source.question, 'question') }),
-    summary: typeof source.summary === 'string' ? source.summary : '',
+    summary: optionalText(source.summary, 'summary') ?? '',
     messageCount: count(source.messageCount, 'messageCount'),
     limits: parseLimits(source.limits),
     directions,
