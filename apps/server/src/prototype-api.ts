@@ -10,6 +10,7 @@ import {
   CodexSession, PrototypeStage, type CritiqueProvider, type EvidenceSource, type Finding, type PrototypeStageOutcome,
 } from '@pwb/stage-prototype';
 import type { ProjectRepository } from './db/repository.js';
+import { modelProviderName, type ModelProviderName } from './provider.js';
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
 
@@ -110,8 +111,14 @@ function describeStep(type: string, payload: Record<string, unknown>): string {
 
 export interface PrototypeRegistryOptions {
   repository: ProjectRepository;
-  /** `fake` keeps CI and the fixture deterministic; the named local providers run their CLI. */
-  modelProvider?: string;
+  /**
+   * `fake` keeps CI and the fixture deterministic; the named local providers run
+   * their CLI. It is a `ModelProviderName` and the constructor resolves it
+   * through `modelProviderName`, so `provider.ts` stays the one place a provider
+   * name is recognised: `'Codex'` or a trailing space is a startup error, never
+   * a deterministic run nobody asked for.
+   */
+  modelProvider?: ModelProviderName;
   /** Where the deterministic gate's evidence is measured; the server always hands it the RenderHub. */
   evidence: EvidenceSource;
   /** The revision a run starts from; tests inject a document with a known defect through it. */
@@ -129,7 +136,11 @@ export class PrototypeRunRegistry {
   private lane: Promise<void> = Promise.resolve();
   private readonly scheduler = new Scheduler();
 
-  constructor(private readonly options: PrototypeRegistryOptions) {}
+  private readonly modelProvider: ModelProviderName;
+
+  constructor(private readonly options: PrototypeRegistryOptions) {
+    this.modelProvider = modelProviderName(options.modelProvider);
+  }
 
   has(runId: string): boolean { return this.runs.has(runId); }
 
@@ -221,8 +232,8 @@ export class PrototypeRunRegistry {
   private async execute(record: PrototypeRunRecord, applier: Applier, baseVersionId: string): Promise<void> {
     const { runId } = record;
     const identity = record.store.get(baseVersionId)!.ir.identity;
-    const claude = this.options.modelProvider === 'claude-code';
-    const codex = this.options.modelProvider === 'codex';
+    const claude = this.modelProvider === 'claude-code';
+    const codex = this.modelProvider === 'codex';
     const model = claude || codex;
     const stage = new PrototypeStage({
       store: record.store, applier,

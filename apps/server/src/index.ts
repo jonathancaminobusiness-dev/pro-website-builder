@@ -10,7 +10,7 @@ import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
 import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
-import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
+import { createIdentityProvider, createModelProvider, createRasterProvider, modelProviderName } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
 import { identityDeadlinesFromEnvironment, identityProviderTimeoutMs } from './identity-deadlines.js';
 
@@ -20,9 +20,12 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   const renderCacheDir = options.renderCacheDir ?? process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
   await mkdir(join(dbPath, '..'), { recursive: true });
   await mkdir(renderCacheDir, { recursive: true });
-  const provider = createModelProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
+  // Recognised once, at startup: every consumer below is handed the resolved
+  // name rather than a raw string it would have to compare for itself.
+  const providerName = modelProviderName(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER);
+  const provider = createModelProvider(providerName);
   const identityDeadlines = options.identityDeadlines ?? identityDeadlinesFromEnvironment();
-  const identityProvider = createIdentityProvider(options.modelProvider ?? process.env.PWB_MODEL_PROVIDER, { timeoutMs: identityProviderTimeoutMs(identityDeadlines) });
+  const identityProvider = createIdentityProvider(providerName, { timeoutMs: identityProviderTimeoutMs(identityDeadlines) });
   const raster = createRasterProvider();
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
@@ -52,7 +55,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // preview origin, so contrast, focus, axe, overflow and stability are observed rather than assumed.
   const registry = new PrototypeRunRegistry({
     repository,
-    modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
+    modelProvider: providerName,
     evidence: new RenderHubEvidenceSource({
       hub: new RenderHub({ cacheDir: renderCacheDir }),
       baseUrl: preview.origin,
@@ -71,7 +74,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // the bundle ships, so the preview is read when a release is prepared.
   const release = {
     releaseRoot, evidenceDir, fontsDir, siteUrl, siteName,
-    modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
+    modelProvider: providerName,
     previewFaces: () => preview.servedFaces(),
   };
   const api = createApiServer({

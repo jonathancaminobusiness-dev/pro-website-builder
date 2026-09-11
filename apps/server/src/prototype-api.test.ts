@@ -268,3 +268,29 @@ describe('Gate 2 API', () => {
     } finally { db.sqlite.close(); }
   });
 });
+
+describe('prototype registry provider recognition', () => {
+  async function repository(): Promise<ProjectRepository> {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-provider-'));
+    return new ProjectRepository(openDatabase(join(dir, 'gate2.sqlite')));
+  }
+
+  it('refuses a provider name it does not recognise instead of running the fakes', async () => {
+    const repo = await repository();
+    for (const name of ['Codex', 'codex ', 'claude', '']) {
+      // `provider.ts` is the one place a name is recognised; a near miss is an
+      // error here, not a silent deterministic run under the wrong alias.
+      expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), modelProvider: name as never }))
+        .toThrow(/Unknown model provider/);
+    }
+  });
+
+  it('accepts every recognised name, and defaults to the fakes', async () => {
+    const repo = await repository();
+    for (const name of ['fake', 'claude-code', 'codex'] as const) {
+      expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), modelProvider: name })).not.toThrow();
+    }
+    expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource() })).not.toThrow();
+  });
+});
+
