@@ -27,10 +27,25 @@ afterEach(async () => {
 });
 
 function newRun(runId = 'identity-test'): IdentityRun {
-  return new IdentityRun({ runId, repository: new ProjectRepository(database), provider: new FakeIdentityProvider() });
+  return new IdentityRun({ modelAlias: 'fake', runId, repository: new ProjectRepository(database), provider: new FakeIdentityProvider() });
 }
 
 describe('identity run', () => {
+  it('names the resolved provider on every task it queues, not Claude under Codex', async () => {
+    const inner = new FakeIdentityProvider();
+    const aliases: string[] = [];
+    const run = new IdentityRun({
+      runId: 'identity-alias', repository: new ProjectRepository(database),
+      modelAlias: 'codex-gpt-5.6-sol',
+      provider: { propose: async (task, signal) => { aliases.push(task.modelAlias); return inner.propose(task, signal); } },
+    });
+    await run.initialize();
+    await run.start();
+    expect(aliases.length).toBeGreaterThan(0);
+    // `idempotencyKey` hashes the alias, so a Codex proposal must not derive the key a Claude one would.
+    expect([...new Set(aliases)]).toEqual(['codex-gpt-5.6-sol']);
+  });
+
   it('passes the exact execution briefing to the curator and exposes it in the snapshot', async () => {
     const briefing = 'Nicho de cerâmica autoral para oficinas de bairro.';
     const inner = new FakeIdentityProvider();
@@ -41,7 +56,7 @@ describe('identity run', () => {
         return inner.propose(task, signal);
       },
     };
-    const run = new IdentityRun({ runId: 'identity-custom-briefing', repository: new ProjectRepository(database), provider, briefing });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-custom-briefing', repository: new ProjectRepository(database), provider, briefing });
     await run.initialize();
 
     const snapshot = await run.start();
@@ -52,7 +67,7 @@ describe('identity run', () => {
 
   it('normalizes a direct execution briefing before persistence and curator use', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({
+    const run = new IdentityRun({ modelAlias: 'fake',
       runId: 'identity-normalized-direct',
       repository,
       provider: new FakeIdentityProvider(),
@@ -68,11 +83,11 @@ describe('identity run', () => {
   it('persists a normalized briefing when restoring a legacy run', async () => {
     const repository = new ProjectRepository(database);
     const runId = 'identity-normalized-restore';
-    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
     await run.initialize();
     database.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run('  Nicho de cerâmica autoral.  ', runId);
 
-    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
 
     expect((await repository.getRun(runId))?.briefing).toBe('Nicho de cerâmica autoral.');
@@ -82,12 +97,12 @@ describe('identity run', () => {
   it('still serves a restored run when the canonicalizing briefing write fails', async () => {
     const repository = new ProjectRepository(database);
     const runId = 'identity-readonly-restore';
-    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
     await run.initialize();
     database.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run('  Nicho de cerâmica autoral.  ', runId);
     repository.updateRunBriefing = async (): Promise<void> => { throw new Error('database is locked'); };
 
-    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
 
     expect(restored.snapshot().status).not.toBe('unrecoverable');
@@ -97,7 +112,7 @@ describe('identity run', () => {
 
   it('passes per-critic deadlines through to the identity stage', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({
+    const run = new IdentityRun({ modelAlias: 'fake',
       runId: 'identity-deadlines',
       repository,
       provider: new FakeIdentityProvider(),
@@ -124,7 +139,7 @@ describe('identity run', () => {
 
   it('exposes actionable Codex startup failures in the identity snapshot', async () => {
     const provider = new CodexRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
-    const run = new IdentityRun({ runId: 'identity-codex-failure', repository: new ProjectRepository(database), provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-codex-failure', repository: new ProjectRepository(database), provider });
     await run.initialize();
 
     const snapshot = await run.start();
@@ -150,7 +165,7 @@ describe('identity run', () => {
         else signal?.addEventListener('abort', onAbort, { once: true });
       });
     } });
-    const run = new IdentityRun({
+    const run = new IdentityRun({ modelAlias: 'fake',
       runId: 'identity-codex-stage-deadline',
       repository: new ProjectRepository(database),
       provider,
@@ -183,7 +198,7 @@ describe('identity run', () => {
       },
     };
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({
+    const run = new IdentityRun({ modelAlias: 'fake',
       runId: 'identity-codex-critic-deadline-propagation',
       repository,
       provider,
@@ -205,11 +220,11 @@ describe('identity run', () => {
   it('restores task failure details after a failed identity run restarts', async () => {
     const repository = new ProjectRepository(database);
     const provider = new CodexRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
-    const run = new IdentityRun({ runId: 'identity-codex-restore', repository, provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-codex-restore', repository, provider });
     await run.initialize();
     await run.start();
 
-    const restored = new IdentityRun({ runId: 'identity-codex-restore', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId: 'identity-codex-restore', repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
 
     expect(restored.snapshot().failures).toEqual(expect.arrayContaining([
@@ -220,7 +235,7 @@ describe('identity run', () => {
   it('clears restored task failures before retrying an interrupted run', async () => {
     const repository = new ProjectRepository(database);
     const runId = 'identity-codex-interrupted-retry';
-    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider() });
     await run.initialize();
     await repository.appendEvent({ id: 'identity-stage-started', runId, type: 'identity.stage.started', payload: {} });
     await repository.appendEvent({ id: 'identity-task-failed', runId, type: 'identity.task.failed', payload: { taskId: 'identity-curator', reason: 'previous provider failure' } });
@@ -230,7 +245,7 @@ describe('identity run', () => {
         return { taskId: task.id, status: 'failed', summary: 'current provider failure', errorCode: 'CURRENT_FAILURE' };
       },
     };
-    const restored = new IdentityRun({ runId, repository, provider: currentProvider });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: currentProvider });
     expect(await restored.restore()).toBe(true);
     expect(restored.snapshot().failures).toEqual(expect.arrayContaining([
       expect.objectContaining({ reason: 'previous provider failure' }),
@@ -247,7 +262,7 @@ describe('identity run', () => {
 
   it('persists every candidate version and the events behind the fan-out', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-events', repository, provider: new FakeIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-events', repository, provider: new FakeIdentityProvider() });
     await run.initialize();
     const snapshot = await run.start();
     const stored = database.sqlite.prepare('SELECT id, parent_id FROM versions').all() as Array<{ id: string; parent_id: string | null }>;
@@ -285,7 +300,7 @@ describe('identity run', () => {
         return { ...result, proposal: { ...result.proposal, operations: [{ op: 'replace', path: '/identity', value: converged }] } };
       },
     };
-    const run = new IdentityRun({ runId: 'identity-div030', repository: new ProjectRepository(database), provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-div030', repository: new ProjectRepository(database), provider });
     await run.initialize();
     const snapshot = await run.start();
     expect(snapshot.divergence?.passed).toBe(false);
@@ -313,7 +328,7 @@ describe('identity run', () => {
       },
     };
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-copy110', repository, provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-copy110', repository, provider });
     await run.initialize();
     const opened = await run.start();
     const candidate = opened.directions.find((direction) => direction.directionId === 'editorial-material')!;
@@ -354,7 +369,7 @@ describe('identity run', () => {
 
   it('follows the gate back to approved when a token change is undone', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-undo', repository, provider: new FakeIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-undo', repository, provider: new FakeIdentityProvider() });
     await run.initialize();
     const started = await run.start();
     const before = started.directions.find((direction) => direction.directionId === 'modular-technical')!.swatches.find((swatch) => swatch.path === 'color.accent')!.value;
@@ -373,7 +388,7 @@ describe('identity run', () => {
 
   it('persists every captain decision as its own row across a reopen and an undo', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-recur', repository, provider: new FakeIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-recur', repository, provider: new FakeIdentityProvider() });
     await run.initialize();
     const started = await run.start();
     const before = started.directions.find((direction) => direction.directionId === 'editorial-material')!.swatches.find((swatch) => swatch.path === 'color.accent')!.value;
@@ -396,7 +411,7 @@ describe('identity run', () => {
 
   it('records the written override with the decision it authorised', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-override', repository, provider: new FakeIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-override', repository, provider: new FakeIdentityProvider() });
     await run.initialize();
     await run.start();
     await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
@@ -486,7 +501,7 @@ describe('identity run', () => {
   it('drops the render cache entries the approved identity produced when a token changes', async () => {
     const cacheDir = join(directory, 'render-cache');
     await mkdir(cacheDir, { recursive: true });
-    const run = new IdentityRun({ runId: 'identity-prune', repository: new ProjectRepository(database), provider: new FakeIdentityProvider(), renderCacheDir: cacheDir });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-prune', repository: new ProjectRepository(database), provider: new FakeIdentityProvider(), renderCacheDir: cacheDir });
     await run.initialize();
     await run.start();
     await run.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada.' });
@@ -506,13 +521,13 @@ describe('identity run', () => {
 
   it('serves and decides an open Gate 1 after the server that opened it is gone', async () => {
     const repository = new ProjectRepository(database);
-    const first = new IdentityRun({ runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
+    const first = new IdentityRun({ modelAlias: 'fake', runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
     await first.initialize();
     const started = await first.start();
     expect(started.status).toBe('needs_review');
 
     // A second process holds nothing in memory: the run has to come back from the ledger.
-    const restored = new IdentityRun({ runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
     const snapshot = restored.snapshot();
     expect(snapshot.status).toBe('needs_review');
@@ -528,13 +543,13 @@ describe('identity run', () => {
 
   it('carries the captain decision and the generated assets across a restart', async () => {
     const repository = new ProjectRepository(database);
-    const first = new IdentityRun({ runId: 'identity-restart-approved', repository, provider: new FakeIdentityProvider() });
+    const first = new IdentityRun({ modelAlias: 'fake', runId: 'identity-restart-approved', repository, provider: new FakeIdentityProvider() });
     await first.initialize();
     await first.start();
     const decided = await first.approve({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Aprovada antes do reinício.' });
     if (decided.gate.state !== 'closed') throw new Error('unreachable');
 
-    const restored = new IdentityRun({ runId: 'identity-restart-approved', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId: 'identity-restart-approved', repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
     const snapshot = restored.snapshot();
     expect(snapshot.status).toBe('approved');
@@ -551,7 +566,7 @@ describe('identity run', () => {
   it('merges raster failures recorded after the approval checkpoint when restoring', async () => {
     const repository = new ProjectRepository(database);
     const runId = 'identity-raster-failure-restore';
-    const first = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    const first = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider() });
     await first.initialize();
     await first.start();
     const approved = await first.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
@@ -566,7 +581,7 @@ describe('identity run', () => {
       payload: { taskId: 'identity-imagery-modular-technical-texture-01', role: 'art-director', reason: 'The MCP tool answered with no image.' },
     });
 
-    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
     expect(restored.snapshot().failures).toEqual(expect.arrayContaining([
       expect.objectContaining({ taskId: 'identity-imagery-modular-technical-texture-01', reason: 'The MCP tool answered with no image.' }),
@@ -584,14 +599,14 @@ describe('identity run', () => {
         return inner.propose(task, signal);
       },
     };
-    const first = new IdentityRun({ runId: 'identity-midflight', repository, provider });
+    const first = new IdentityRun({ modelAlias: 'fake', runId: 'identity-midflight', repository, provider });
     await first.initialize();
     const running = first.start();
     while (!(await repository.listEvents('identity-midflight')).some((event) => event.type === 'identity.stage.started')) {
       await new Promise((resolve) => { setTimeout(resolve, 5); });
     }
 
-    const restored = new IdentityRun({ runId: 'identity-midflight', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId: 'identity-midflight', repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
     const snapshot = restored.snapshot();
     expect(snapshot.status).toBe('interrupted');
@@ -618,7 +633,7 @@ describe('identity run', () => {
 
     const upgraded = openDatabase(file);
     const repository = new ProjectRepository(upgraded);
-    const run = new IdentityRun({ runId: 'identity-legacy', repository, provider: new FakeIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-legacy', repository, provider: new FakeIdentityProvider() });
     expect(await run.restore()).toBe(true);
     expect(run.snapshot().status).toBe('queued');
     // The run the owner already paid for is still theirs to run: the row was
@@ -629,7 +644,7 @@ describe('identity run', () => {
   });
 
   it('does not invent a run the ledger never held', async () => {
-    const run = new IdentityRun({ runId: 'never-created', repository: new ProjectRepository(database), provider: new FakeIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'never-created', repository: new ProjectRepository(database), provider: new FakeIdentityProvider() });
     expect(await run.restore()).toBe(false);
   });
 
@@ -641,7 +656,7 @@ describe('identity run', () => {
       configured: true,
       transport: { callTool: async () => { await held; return { uri: 'higgsfield://asset-1', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } },
     });
-    const run = new IdentityRun({ runId: 'identity-raster', repository, provider: new FakeIdentityProvider(), raster });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-raster', repository, provider: new FakeIdentityProvider(), raster });
     await run.initialize();
     await run.start();
 
@@ -657,7 +672,7 @@ describe('identity run', () => {
     expect(settled.handoff?.assets.map((asset) => asset.provenance.license)).toEqual(['provider terms 2026']);
 
     // The settled image is on the checkpoint, so a restart does not show it generating forever.
-    const restored = new IdentityRun({ runId: 'identity-raster', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId: 'identity-raster', repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
     expect(restored.snapshot().assets.map((asset) => asset.status)).toEqual(['ready']);
   });
@@ -677,7 +692,7 @@ describe('identity run', () => {
         },
       },
     });
-    const run = new IdentityRun({ runId: 'identity-restart-generating', repository, provider: new FakeIdentityProvider(), raster });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-restart-generating', repository, provider: new FakeIdentityProvider(), raster });
     await run.initialize();
     await run.start();
     const approved = await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
@@ -685,7 +700,7 @@ describe('identity run', () => {
     await shooting;
 
     // A second process reads the checkpoint written while the image was in flight.
-    const restored = new IdentityRun({ runId: 'identity-restart-generating', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId: 'identity-restart-generating', repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
     const snapshot = restored.snapshot();
     expect(snapshot.assets.map((asset) => asset.status)).toEqual(['failed']);
@@ -711,7 +726,7 @@ describe('identity run', () => {
         return inner.propose(task, signal);
       },
     };
-    const run = new IdentityRun({ runId: 'identity-stopped', repository, provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-stopped', repository, provider });
     await run.initialize();
     const started = run.start();
     await reached;
@@ -749,7 +764,7 @@ describe('identity run', () => {
         return result;
       },
     };
-    const run = new IdentityRun({ runId: 'identity-retry', repository, provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-retry', repository, provider });
     await run.initialize();
 
     const first = await run.start();
@@ -784,7 +799,7 @@ describe('identity run', () => {
         return director && failing ? { ...result, artifact: undefined } : result;
       },
     };
-    const run = new IdentityRun({ runId: 'identity-retry-midflight', repository, provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-retry-midflight', repository, provider });
     await run.initialize();
     expect((await run.start()).status).toBe('failed');
 
@@ -793,7 +808,7 @@ describe('identity run', () => {
     const attempts = async (): Promise<number> => (await repository.listEvents('identity-retry-midflight')).filter((event) => event.type === 'identity.stage.started').length;
     while (await attempts() < 2) await new Promise((resolve) => { setTimeout(resolve, 5); });
 
-    const restored = new IdentityRun({ runId: 'identity-retry-midflight', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId: 'identity-retry-midflight', repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
     const snapshot = restored.snapshot();
     expect(snapshot.status).toBe('interrupted');
@@ -807,7 +822,7 @@ describe('identity run', () => {
 
   it('keeps a fan-out that had already finished when the stop arrived', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-late-stop', repository, provider: new FakeIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-late-stop', repository, provider: new FakeIdentityProvider() });
     await run.initialize();
     const started = await run.start();
     expect(started.directions).toHaveLength(3);
@@ -838,7 +853,7 @@ describe('identity run', () => {
         return inner.propose(task, signal);
       },
     };
-    const run = new IdentityRun({ runId: 'identity-stopped-late', repository, provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-stopped-late', repository, provider });
     await run.initialize();
     const started = run.start();
     await reached;
@@ -872,7 +887,7 @@ describe('identity run', () => {
         return inner.propose(task, signal);
       },
     };
-    const run = new IdentityRun({ runId: 'identity-stop-restart', repository, provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-stop-restart', repository, provider });
     await run.initialize();
     const started = run.start();
     await reached;
@@ -880,7 +895,7 @@ describe('identity run', () => {
     await started.catch(() => undefined);
 
     // A second process reads the ledger, not the memory of the one that stopped it.
-    const restored = new IdentityRun({ runId: 'identity-stop-restart', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId: 'identity-stop-restart', repository, provider: new FakeIdentityProvider() });
     expect(await restored.restore()).toBe(true);
     expect(restored.snapshot().status).toBe('cancelled');
     await expect(restored.start()).rejects.toThrow(/cancelled/i);
@@ -897,7 +912,7 @@ describe('identity run', () => {
         }),
       },
     });
-    const run = new IdentityRun({ runId: 'identity-raster-cancel', repository, provider: new FakeIdentityProvider(), raster });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-raster-cancel', repository, provider: new FakeIdentityProvider(), raster });
     await run.initialize();
     await run.start();
     await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
@@ -926,15 +941,51 @@ describe('identity api', () => {
 
   const post = (origin: string, path: string, payload: unknown) => fetch(`${origin}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: STUDIO_ORIGIN }, body: JSON.stringify(payload) });
 
+  // `start` answers as soon as the fan-out is under way, so a test that wants to
+  // decide the gate reads the run the way the studio does: by polling it.
+  async function settled(origin: string, runId: string): Promise<{ status: string; directions: unknown[]; divergence: { passed: boolean } }> {
+    for (let attempt = 0; attempt < 2000; attempt += 1) {
+      const response = await fetch(`${origin}/api/identity/runs/${runId}`, { headers: { origin: STUDIO_ORIGIN } });
+      const snapshot = await response.json() as { status: string; directions: unknown[]; divergence: { passed: boolean } };
+      if (snapshot.status !== 'running' && snapshot.status !== 'queued') return snapshot;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`Identity run ${runId} never settled.`);
+  }
+
+  async function startAndSettle(origin: string, runId: string): Promise<{ status: string; directions: unknown[]; divergence: { passed: boolean } }> {
+    const started = await post(origin, `/api/identity/runs/${runId}/start`, { approverRole: 'captain' });
+    expect(started.status).toBe(200);
+    return settled(origin, runId);
+  }
+
+  it('answers a start immediately with the running snapshot instead of holding the stage deadline', async () => {
+    await withServer(async (origin) => {
+      await post(origin, '/api/identity/runs', { runId: 'immediate-start' });
+      const started = await post(origin, '/api/identity/runs/immediate-start/start', { approverRole: 'captain' });
+      expect(started.status).toBe(200);
+      // The whole point: the response carries `running`, not the finished fan-out.
+      const startedBody = await started.json() as { status: string; directions: unknown[] };
+      expect(startedBody.status).toBe('running');
+      expect(startedBody.directions).toEqual([]);
+
+      // A second start while the first is still in flight is the same answer, not a second fan-out.
+      const again = await post(origin, '/api/identity/runs/immediate-start/start', { approverRole: 'captain' });
+      expect((await again.json() as { status: string }).status).not.toBe('queued');
+
+      const finished = await settled(origin, 'immediate-start');
+      expect(finished.status).toBe('needs_review');
+      expect(finished.directions).toHaveLength(3);
+    });
+  });
+
   it('drives one run from creation to an approved gate and back open', async () => {
     await withServer(async (origin) => {
       const created = await post(origin, '/api/identity/runs', { runId: 'api-run' });
       expect(created.status).toBe(201);
       expect((await created.json() as { status: string }).status).toBe('queued');
 
-      const started = await post(origin, '/api/identity/runs/api-run/start', { approverRole: 'captain' });
-      const startedBody = await started.json() as { status: string; directions: Array<{ directionId: string }>; divergence: { passed: boolean } };
-      expect(started.status).toBe(200);
+      const startedBody = await startAndSettle(origin, 'api-run');
       expect(startedBody.status).toBe('needs_review');
       expect(startedBody.directions).toHaveLength(3);
       expect(startedBody.divergence.passed).toBe(true);
@@ -974,7 +1025,7 @@ describe('identity api', () => {
   it('rejects a token change that carries anything but a value', async () => {
     await withServer(async (origin) => {
       await post(origin, '/api/identity/runs', { runId: 'bad-token' });
-      await post(origin, '/api/identity/runs/bad-token/start', { approverRole: 'captain' });
+      await startAndSettle(origin, 'bad-token');
       await post(origin, '/api/identity/runs/bad-token/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
       // The caller does not get to declare the token's type; it sends the value the approved token takes.
       const response = await post(origin, '/api/identity/runs/bad-token/token', { approverRole: 'captain', tokenPath: 'color.ink', value: { $value: '#000000', $type: 'dimension' } });
@@ -985,7 +1036,7 @@ describe('identity api', () => {
   it('answers 400 when the captain approves a blocked direction without an override', async () => {
     await withServer(async (origin) => {
       await post(origin, '/api/identity/runs', { runId: 'blocked-gate' });
-      await post(origin, '/api/identity/runs/blocked-gate/start', { approverRole: 'captain' });
+      await startAndSettle(origin, 'blocked-gate');
       await post(origin, '/api/identity/runs/blocked-gate/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
       await post(origin, '/api/identity/runs/blocked-gate/token', { approverRole: 'captain', tokenPath: 'type.display', value: 'Inter-only hero, Georgia, serif' });
       const refused = await post(origin, '/api/identity/runs/blocked-gate/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'Mesmo assim.' });
@@ -997,7 +1048,7 @@ describe('identity api', () => {
   it('refuses a value the approved token cannot take with a 400 and the reason', async () => {
     await withServer(async (origin) => {
       await post(origin, '/api/identity/runs', { runId: 'typed-token' });
-      await post(origin, '/api/identity/runs/typed-token/start', { approverRole: 'captain' });
+      await startAndSettle(origin, 'typed-token');
       await post(origin, '/api/identity/runs/typed-token/approve', { approverRole: 'captain', directionId: 'editorial-material', rationale: 'ok' });
       const response = await post(origin, '/api/identity/runs/typed-token/token', { approverRole: 'captain', tokenPath: 'space.md', value: '#ff7a00' });
       expect(response.status).toBe(400);
@@ -1011,7 +1062,7 @@ describe('identity api', () => {
     const first = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
     const firstOrigin = `http://127.0.0.1:${(first.api.address() as AddressInfo).port}`;
     await post(firstOrigin, '/api/identity/runs', { runId: 'restarted' });
-    await post(firstOrigin, '/api/identity/runs/restarted/start', { approverRole: 'captain' });
+    await startAndSettle(firstOrigin, 'restarted');
     await first.close();
 
     const second = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
@@ -1039,7 +1090,7 @@ describe('identity api', () => {
     const first = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });
     const firstOrigin = `http://127.0.0.1:${(first.api.address() as AddressInfo).port}`;
     await post(firstOrigin, '/api/identity/runs', { runId: 'contended' });
-    await post(firstOrigin, '/api/identity/runs/contended/start', { approverRole: 'captain' });
+    await startAndSettle(firstOrigin, 'contended');
     await first.close();
 
     const second = await startServer({ dbPath, releaseRoot, apiPort: 0, previewPort: 0 });

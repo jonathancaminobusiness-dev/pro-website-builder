@@ -126,7 +126,7 @@ export class IdentityRun {
   private briefing: string;
   private readonly deadlines: IdentityStageDeadlines;
 
-  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
+  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number; modelAlias: string }) {
     this.briefing = normalizeIdentityBriefing(options.briefing);
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     const ir = createFixtureIR();
@@ -147,6 +147,7 @@ export class IdentityRun {
       baseVersionId: this.root.id,
       briefing: this.briefing,
       provider: this.options.provider,
+      modelAlias: this.options.modelAlias,
       store: this.store,
       ...(this.options.scheduler ? { scheduler: this.options.scheduler } : {}),
       deadlines: this.deadlines,
@@ -246,13 +247,22 @@ export class IdentityRun {
     await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: CHECKPOINT_EVENT, payload: payload as unknown as Record<string, unknown> }));
   }
 
-  /** The one entry point that spends model turns. Nothing else in this class starts a worker. */
-  async start(): Promise<IdentityRunSnapshot> {
+  /**
+   * The one entry point that spends model turns. Nothing else in this class
+   * starts a worker.
+   *
+   * It answers as soon as the fan-out is under way, with the `running`
+   * snapshot, and never holds its caller for the stage deadline — which is
+   * counted in tens of minutes, far beyond any HTTP client's patience. What the
+   * stage becomes is read from the snapshot, through the polling the studio
+   * already does.
+   */
+  async begin(): Promise<IdentityRunSnapshot> {
     this.refuseIfTerminal('create another one to run the identity stage.');
     // A failure is not the end of the run: the captain can ask again here, on
     // the same terms a restarted process already offers.
     if (this.status === 'failed' || this.status === 'interrupted') { this.started = false; this.result = undefined; this.restoredFailures = []; this.stage = this.newStage(); }
-    if (this.started) { await this.inFlight; return this.snapshot(); }
+    if (this.started) return this.snapshot();
     this.started = true;
     this.status = 'running';
     this.abort = new AbortController();
@@ -266,7 +276,13 @@ export class IdentityRun {
       this.failure = error instanceof Error ? error.message : 'The identity stage failed.';
       this.status = 'failed';
       await ignoringDuplicate(this.options.repository.appendEvent({ id: randomUUID(), runId: this.options.runId, type: 'identity.stage.failed', payload: { reason: this.failure } }));
-    });
+    }).catch(() => undefined);
+    return this.snapshot();
+  }
+
+  /** Starts the stage and waits for it, for callers that own the process rather than an HTTP response. */
+  async start(): Promise<IdentityRunSnapshot> {
+    await this.begin();
     await this.inFlight;
     return this.snapshot();
   }

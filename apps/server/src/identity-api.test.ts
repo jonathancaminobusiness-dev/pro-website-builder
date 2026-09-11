@@ -40,6 +40,17 @@ function postIdentity(origin: string, body: Record<string, unknown>): Promise<Re
   });
 }
 
+/** `start` returns the running snapshot, so a test reads the outcome the way the studio does. */
+async function settled(origin: string, runId: string): Promise<{ status: string; gate: { state: string }; failures: Array<unknown> }> {
+  for (let attempt = 0; attempt < 2000; attempt += 1) {
+    const response = await fetch(`${origin}/api/identity/runs/${runId}`, { headers: { origin: STUDIO_ORIGIN } });
+    const snapshot = await response.json() as { status: string; gate: { state: string }; failures: Array<unknown> };
+    if (snapshot.status !== 'running' && snapshot.status !== 'queued') return snapshot;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Identity run ${runId} never settled.`);
+}
+
 describe('identity run creation', () => {
   it('opens Gate 1 through HTTP with the default critic deadline policy', async () => {
     const server = await identityServer();
@@ -51,9 +62,11 @@ describe('identity run creation', () => {
       headers: { origin: STUDIO_ORIGIN, 'content-type': 'application/json' },
       body: JSON.stringify({ approverRole: 'captain' }),
     });
-    const snapshot = await started.json() as { status: string; gate: { state: string }; failures: Array<unknown> };
-
+    // The start answers as soon as the stage is under way; the gate is read by polling.
     expect(started.status).toBe(200);
+    expect((await started.json() as { status: string }).status).toBe('running');
+    const snapshot = await settled(server.origin, 'default-deadline-api');
+
     expect(snapshot.status).toBe('needs_review');
     expect(snapshot.gate.state).toBe('open');
     expect(snapshot.failures).toEqual([]);

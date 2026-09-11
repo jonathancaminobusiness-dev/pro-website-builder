@@ -27,7 +27,7 @@ interface StageHarness { stage: IdentityStage; store: VersionStore; baseVersionI
 function harness(options: { provider?: ModelProvider; scheduler?: Scheduler; deadlines?: Partial<IdentityStageDeadlines>; raster?: ConstructorParameters<typeof HiggsfieldMcpProvider>[0]; onEvent?: (type: string, payload: Record<string, unknown>) => void } = {}): StageHarness {
   const { store, baseVersionId } = seedStore();
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  const stage = new IdentityStage({
+  const stage = new IdentityStage({ modelAlias: 'fake',
     runId: 'run-identity-test',
     baseVersionId,
     briefing: BRIEFING,

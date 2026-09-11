@@ -485,7 +485,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());
-    const stage = new FinalizationStage({
+    const stage = new FinalizationStage({ modelAlias: 'fake',
       criticProvider,
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       compilerOptions: COMPILER_OPTIONS,
@@ -564,7 +564,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());
-    const stage = new FinalizationStage({
+    const stage = new FinalizationStage({ modelAlias: 'fake',
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(failing),
       compilerOptions: COMPILER_OPTIONS,
@@ -581,7 +581,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());
-    const stage = new FinalizationStage({
+    const stage = new FinalizationStage({ modelAlias: 'fake',
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       summarizer: failing,
@@ -605,7 +605,7 @@ describe('the finalization stage end to end with the deterministic providers', (
       baseVersionId: approved.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'refino anterior', confidence: 1,
       stage: 'finalization', role: 'compiler', idempotencyKey: 'refino-anterior',
     }, { allowedPaths: ['/reviewRecord'], stage: 'finalization', role: 'compiler' }, approved.id);
-    const stage = new FinalizationStage({
+    const stage = new FinalizationStage({ modelAlias: 'fake',
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       compilerOptions: COMPILER_OPTIONS,
@@ -634,3 +634,30 @@ describe('the finalization stage end to end with the deterministic providers', (
     expect(peak).toBeGreaterThan(1);
   });
 });
+
+describe('the finalization stage model alias', () => {
+  it('names the provider that answered on the critic tasks and on the refiner task', async () => {
+    const store = new VersionStore();
+    const applier = new Applier(store, new PatchGate());
+    const version = applier.createRoot(createFixtureIR());
+    const aliases: string[] = [];
+    const criticProvider: ReleaseCriticProvider = {
+      critique: async (task, definition, signal) => { aliases.push(task.modelAlias); return new FakeReleaseCriticProvider().critique(task, definition, signal); },
+    };
+    const refiner: ReleaseRefinerProvider = {
+      refine: async (task, signal) => { aliases.push(task.modelAlias); return new FakeReleaseRefiner().refine(task, signal); },
+    };
+    const stage = new FinalizationStage({
+      criticProvider,
+      refiner: new PatchRefiner(refiner),
+      compilerOptions: COMPILER_OPTIONS,
+      modelAlias: 'codex-gpt-5.6-sol',
+    });
+    // A failing artifact is what gives the refiner something to be asked about.
+    const evidence = [artifact({ id: 'axe-home', runner: 'axe', engine: 'chromium', status: 'failed', metrics: { critical: 1, serious: 0 } })];
+    await stage.run({ runId: 'run-alias', version, evidence, applier });
+    expect(aliases.length).toBeGreaterThan(1);
+    expect([...new Set(aliases)]).toEqual(['codex-gpt-5.6-sol']);
+  });
+});
+
