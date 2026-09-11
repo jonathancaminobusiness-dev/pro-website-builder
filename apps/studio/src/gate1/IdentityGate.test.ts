@@ -141,7 +141,7 @@ describe('Gate 1 execution progress', () => {
       ...controllerFor(null),
       state: conversationReducer(
         conversationReducer(initialConversationState('identity-progress-fixture'), { type: 'begin', intent: { kind: 'resume' } }),
-        { type: 'failed', failure: { kind: 'refused', message: 'Falha ao ler a conversa.' } },
+        { type: 'failed', failure: { message: 'Falha ao ler a conversa.' } },
       ),
     };
     const markup = renderGate(snapshot('queued'), false, false, unreadable);
