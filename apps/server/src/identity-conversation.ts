@@ -67,12 +67,14 @@ export interface BriefingConversationOptions {
    * Asked before a turn is spent, and free to refuse it with a
    * `ConversationError`: an execution the captain stopped, or one whose
    * briefing is frozen because it already holds identity work, must not buy a
-   * 60-second model call whose answer it could never take. A confirmation asks
-   * it twice — once before the turn and once at the moment the briefing is
-   * written — because the execution can be stopped or started while the turn
-   * runs, and only the second ask sees that.
+   * 60-second model call whose answer it could never take. `cancelling` marks
+   * the one move that buys nothing and moves nothing, so an execution may take
+   * a stop it would refuse a turn from. A confirmation asks twice — once before
+   * the turn and once at the moment the briefing is written — because the
+   * execution can be stopped or started while the turn runs, and only the
+   * second ask sees that.
    */
-  guardTurn?: () => void;
+  guardTurn?: (turn: { cancelling: boolean }) => void;
   /**
    * The briefing the execution carries, read at the moment a turn needs it. The
    * plan creates the execution from the captain's first text, so the opening
@@ -232,16 +234,19 @@ export class BriefingConversation {
 
   private async runSend(input: { message?: string | undefined; action: BriefingMessageAction; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
-    this.options.guardTurn?.();
     if (!canSendBriefingMessage(this.data.state)) throw new ConversationError(this.closedReason(), 409);
 
     if (input.action === 'cancel') {
+      // A stop buys no turn and moves no briefing, so an execution that can no
+      // longer take a briefing still takes the captain closing the chat.
+      this.options.guardTurn?.({ cancelling: true });
       this.append({ author: 'system', text: 'Conversa cancelada pelo capitão. A execução e o briefing já confirmado continuam disponíveis.', state: 'cancelled' });
       this.data.state = 'cancelled';
       this.data.attempt = 0;
       return await this.commit(input.idempotencyKey);
     }
 
+    this.options.guardTurn?.({ cancelling: false });
     const action: 'answer' | 'correct' | 'skip' = input.action;
     const text = this.captainText(input.message, action);
     if (this.data.state === 'entry') {
@@ -271,7 +276,7 @@ export class BriefingConversation {
 
   private async runConfirm(input: { briefing: string; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
-    this.options.guardTurn?.();
+    this.options.guardTurn?.({ cancelling: false });
     if (!canConfirmBriefing(this.data.state)) throw new ConversationError(this.confirmRefusal(), 409);
     let briefing: string;
     try { briefing = normalizeIdentityBriefing(input.briefing); }
@@ -297,7 +302,7 @@ export class BriefingConversation {
     // Asked again at the moment the briefing is applied, and not redundant with
     // the ask before the turn: a stop or a stage start can land inside the
     // up-to-60-second closing turn, and this is the ask that sees it.
-    this.options.guardTurn?.();
+    this.options.guardTurn?.({ cancelling: false });
     const snapshot = await this.commit(input.idempotencyKey, briefing);
     await this.options.onConfirmed?.(briefing, revision);
     return snapshot;
@@ -347,7 +352,7 @@ export class BriefingConversation {
       return { ok: false, failure: { code: 'CONVERSATION_SCHEMA_INVALID', message: 'O modelo respondeu fora do contrato da conversa.' }, corrections: parsed.error.issues.map((issue) => `${issue.path.join('.') || 'raiz'}: ${issue.message}`) };
     }
     const turn = parsed.data;
-    const visual = findTurnVisualOutput(turn, captainWords(context));
+    const visual = findTurnVisualOutput(turn, this.captainWords());
     if (visual.length > 0) {
       return { ok: false, failure: { code: 'CONVERSATION_VISUAL_OUTPUT', message: 'O modelo tentou produzir saída visual, que pertence à etapa de identidade.' }, corrections: [`Saída visual recusada (${visual.join(', ')}). ${visualOutputReason(visual)}`] };
     }
@@ -454,6 +459,23 @@ export class BriefingConversation {
     else open.answer = text;
   }
 
+  /**
+   * Everything the captain has written in this conversation, which is what
+   * decides whether a value the model gave back is theirs or its own invention.
+   * It reads the whole transcript rather than the prompt's history window: what
+   * the captain wrote stays theirs however long the conversation gets, and
+   * HISTORY_WINDOW is a prompt-size rule, not a rule about authorship.
+   */
+  private captainWords(): string {
+    return [
+      this.data.originalText,
+      this.data.normalizedText,
+      this.data.confirmations.at(-1)?.briefing ?? '',
+      ...this.data.messages.flatMap((entry) => entry.author === 'captain' ? [entry.text] : []),
+      ...this.data.askedQuestions.flatMap((entry) => entry.answer === undefined ? [] : [entry.answer]),
+    ].join('\n');
+  }
+
   private contextFor(currentMessage: string, action: 'answer' | 'correct' | 'skip', closing: boolean): BriefingTurnContext {
     const confirmed = this.data.confirmations.at(-1)?.briefing;
     return {
@@ -543,21 +565,6 @@ const TRUNCATED = '\n[resumo cortado no limite do briefing; edite o que faltar a
 function withinBriefingLimit(summary: string): string {
   if (summary.length <= BRIEFING_SUMMARY_MAX_LENGTH) return summary;
   return `${summary.slice(0, BRIEFING_SUMMARY_MAX_LENGTH - TRUNCATED.length).trimEnd()}${TRUNCATED}`;
-}
-
-/**
- * Everything the captain has written in this conversation, which is what
- * decides whether a value the model gave back is theirs or its own invention.
- */
-function captainWords(context: BriefingTurnContext): string {
-  return [
-    context.originalText,
-    context.normalizedText,
-    context.currentMessage,
-    context.confirmedSummary ?? '',
-    ...context.history.flatMap((entry) => entry.author === 'captain' ? [entry.text] : []),
-    ...context.askedQuestions.flatMap((entry) => entry.answer === undefined ? [] : [entry.answer]),
-  ].join('\n');
 }
 
 function normalizedMessage(error: unknown): string {
