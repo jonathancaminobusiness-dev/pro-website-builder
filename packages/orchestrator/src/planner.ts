@@ -9,11 +9,27 @@ const readablePaths = ['/identity', '/pages', '/assets', '/reviewRecord'];
 const identityDirections = 3;
 const identityCuratorMs = 4 * 60_000;
 const identityDirectorMs = 7 * 60_000;
-const identityRegularCriticMs = 3 * 60_000;
-const identityAccessibilityCriticMs = 10 * 60_000;
+const identityDefaultCriticMs = 3 * 60_000;
+const identityDefaultAccessibilityCriticMs = 10 * 60_000;
 const identityRefinerMs = 8 * 60_000;
 const identityArtDirectorMs = 5 * 60_000;
+const identityHeadroomMs = 5 * 60_000;
 const identityCorrectedMs = (deadlineMs: number): number => deadlineMs * 2;
+
+function criticDeadlineVariable(criticId: string): string {
+  return `PWB_IDENTITY_CRITIC_${criticId.replaceAll('-', '_').toUpperCase()}_DEADLINE_MS`;
+}
+
+function positiveEnvironmentMs(env: NodeJS.ProcessEnv, name: string): number | undefined {
+  const value = Number(env[name]?.trim());
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function effectiveCriticDeadlineMs(env: NodeJS.ProcessEnv, criticId: string, fallback: number): number {
+  return positiveEnvironmentMs(env, criticDeadlineVariable(criticId))
+    ?? positiveEnvironmentMs(env, 'PWB_IDENTITY_CRITIC_DEADLINE_MS')
+    ?? fallback;
+}
 
 function repeated(value: number, count: number): number[] {
   return Array.from({ length: count }, () => value);
@@ -28,24 +44,35 @@ function claudeLaneDurationMs(durations: number[]): number {
   return Math.max(...laneEndTimes);
 }
 
-const identityInitialCriticMs = claudeLaneDurationMs([
-  ...repeated(identityCorrectedMs(identityRegularCriticMs), identityDirections + 1),
-  ...repeated(identityCorrectedMs(identityAccessibilityCriticMs), identityDirections),
-]);
-const identitySecondCriticMs = claudeLaneDurationMs([
-  ...repeated(identityCorrectedMs(identityRegularCriticMs), identityDirections),
-  ...repeated(identityCorrectedMs(identityAccessibilityCriticMs), identityDirections),
-]);
-const identityStageDeadlineMs = [
-  identityCorrectedMs(identityCuratorMs),
-  claudeLaneDurationMs(repeated(identityCorrectedMs(identityDirectorMs), identityDirections)),
-  identityInitialCriticMs,
-  identityDirections * identityRefinerMs,
-  identitySecondCriticMs,
-  claudeLaneDurationMs(repeated(identityCorrectedMs(identityArtDirectorMs), identityDirections)),
-].reduce((total, duration) => total + duration, 0);
+export function identityStageDeadlineMs(env: NodeJS.ProcessEnv = process.env): number {
+  const brandFitCriticMs = effectiveCriticDeadlineMs(env, 'brand-fit-critic', identityDefaultCriticMs);
+  const divergenceCriticMs = effectiveCriticDeadlineMs(env, 'divergence-critic', identityDefaultCriticMs);
+  const accessibilityCriticMs = effectiveCriticDeadlineMs(env, 'system-a11y-critic', identityDefaultAccessibilityCriticMs);
+  const initialCriticMs = claudeLaneDurationMs([
+    ...repeated(identityCorrectedMs(brandFitCriticMs), identityDirections),
+    identityCorrectedMs(divergenceCriticMs),
+    ...repeated(identityCorrectedMs(accessibilityCriticMs), identityDirections),
+  ]);
+  const secondCriticMs = claudeLaneDurationMs([
+    ...repeated(identityCorrectedMs(brandFitCriticMs), identityDirections),
+    ...repeated(identityCorrectedMs(accessibilityCriticMs), identityDirections),
+  ]);
+  return [
+    identityCorrectedMs(identityCuratorMs),
+    claudeLaneDurationMs(repeated(identityCorrectedMs(identityDirectorMs), identityDirections)),
+    initialCriticMs,
+    identityDirections * identityRefinerMs,
+    secondCriticMs,
+    claudeLaneDurationMs(repeated(identityCorrectedMs(identityArtDirectorMs), identityDirections)),
+    identityHeadroomMs,
+  ].reduce((total, duration) => total + duration, 0);
+}
 
-export const stageDeadlinesMs: Record<AgentTask['stage'], number> = { identity: identityStageDeadlineMs, prototype: 15 * 60_000, finalization: 20 * 60_000 };
+export const stageDeadlinesMs: Record<AgentTask['stage'], number> = {
+  get identity() { return identityStageDeadlineMs(); },
+  prototype: 15 * 60_000,
+  finalization: 20 * 60_000,
+};
 
 function valueAt(ir: DesignIR, path: string): unknown {
   let current: unknown = ir;
