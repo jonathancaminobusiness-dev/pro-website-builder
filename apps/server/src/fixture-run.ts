@@ -100,6 +100,7 @@ export class FixtureRun {
     const versions = await this.options.repository.listVersions(run.projectId);
     if (versions.length === 0) return false;
     this.runIdentifier = runId;
+    if (this.options.release) this.releaseRun = new ReleaseRun(runId, this.options.release);
     const byId = new Map(versions.map((version) => [version.id, version]));
     for (const version of versions) this.store.save({ id: version.id, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir });
     const approvals = await this.options.repository.listApprovals(runId);
