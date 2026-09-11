@@ -111,12 +111,20 @@ export class FixtureRun {
     this.lintErrorCount = lintDesign(head.ir).errorCount;
     this.approvals.push(...approvals);
     this.stageIndex = Math.min(approved.length, STAGES.length);
+    const events = await this.options.repository.listEvents(runId);
+    // The project holds every run's versions, so what this run left undecided is
+    // read from its own log, in order: a version it created off the head it kept
+    // is pending until a rejection rewinds it, and a rerun proposes it again.
     const kept = new Set<string>();
     for (let cursor = byId.get(head.id); cursor; cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined) kept.add(cursor.id);
-    this.discardedStage = versions.some((version) => !kept.has(version.id)) ? STAGES[this.stageIndex] : undefined;
+    const undecided = new Set<string>();
+    for (const event of events) {
+      if (event.type === 'version.created' && !kept.has(String(event.payload.versionId))) undecided.add(String(event.payload.versionId));
+      if (event.type === 'version.rewound') undecided.delete(String(event.payload.rejectedVersionId));
+    }
+    this.discardedStage = undecided.size > 0 ? STAGES[this.stageIndex] : undefined;
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
-    const events = await this.options.repository.listEvents(runId);
     this.started = events.some((event) => event.type === 'run.started');
     for (const event of events) if (event.type === 'task.queued') this.attempts.set(event.payload.stage as Stage, Number(event.payload.attempt));
     this.initialized = true;

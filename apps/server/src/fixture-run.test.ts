@@ -502,6 +502,50 @@ describe('phase 0 fixture run', () => {
     second.sqlite.close();
   });
 
+  it('does not blame a run for versions another run in the same project left behind', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-sibling-'));
+    const dbPath = join(dir, 'sibling.sqlite');
+    const first = openDatabase(dbPath);
+    const repository = new ProjectRepository(first);
+    const older = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    await older.initialize('run-older');
+    await older.runNext();
+    const fresh = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    await fresh.initialize('run-fresh');
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-fresh')).toBe(true);
+    expect(restored.snapshot().discardedStage).toBeUndefined();
+    second.sqlite.close();
+  });
+
+  it('does not report a rejected proposal as discarded, because the captain already decided it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-rejected-'));
+    const dbPath = join(dir, 'rejected.sqlite');
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    await original.initialize('run-rejected');
+    await original.runNext();
+    await original.reject('identity', 'captain');
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-rejected')).toBe(true);
+    expect(restored.snapshot().discardedStage).toBeUndefined();
+
+    // The stage runs again and the restart now finds a proposal nobody decided.
+    await restored.runNext();
+    second.sqlite.close();
+    const third = openDatabase(dbPath);
+    const again = new FixtureRun({ repository: new ProjectRepository(third), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    expect(await again.restore('run-rejected')).toBe(true);
+    expect(again.snapshot().discardedStage).toBe('identity');
+    third.sqlite.close();
+  });
+
   it('discards an ungated proposal when the process restarts before the captain decides', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-pending-'));
     const dbPath = join(dir, 'pending.sqlite');
