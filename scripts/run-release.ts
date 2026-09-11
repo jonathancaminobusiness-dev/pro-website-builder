@@ -20,9 +20,11 @@
  */
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ReleaseRun } from '../apps/server/src/release-run.js';
+import { startServedPreview, type PreviewServer } from '../apps/server/src/preview.js';
+import { ReleaseRun, type ReleaseSnapshot } from '../apps/server/src/release-run.js';
 import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { Applier, PatchGate, VersionStore } from '../packages/orchestrator/src/index.js';
+import { renderDesign } from '../packages/renderer/src/index.js';
 import { loadReleaseDocument } from '../packages/stage-finalization/src/index.js';
 
 const root = process.cwd();
@@ -39,24 +41,33 @@ async function main(): Promise<void> {
   const approved = applier.createRoot(await loadReleaseDocument(evidenceDir));
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
 
+  // Gate 3 can only speak for faces a preview served, so this run serves the
+  // document it is about to release and hands the gate what that origin
+  // delivered. Port 0 keeps the CLI off the developer ports.
+  let preview: PreviewServer | undefined;
   const release = new ReleaseRun('cli-release', {
     releaseRoot,
     evidenceDir,
     fontsDir,
     siteUrl,
     siteName,
+    previewFaces: () => preview?.servedFaces(),
     ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}),
   });
+  preview = await startServedPreview((requested) => requested === approved.id ? renderDesign(approved.ir) : undefined, approved.id, fontsDir);
   // A command line run has no durable log of its own, so its events are printed
   // beside the report instead of being dropped.
-  const prepared = await release.prepare({
-    approved,
-    current: approved,
-    applier,
-    adopt: async () => { /* a refinement is already in this run's own version store */ },
-    record: async (type, payload) => { events.push({ type, payload }); },
-    approveFinalization: async () => { /* the CLI has no run to advance; the release record is the durable trace */ },
-  });
+  let prepared: ReleaseSnapshot;
+  try {
+    prepared = await release.prepare({
+      approved,
+      current: approved,
+      applier,
+      adopt: async () => { /* a refinement is already in this run's own version store */ },
+      record: async (type, payload) => { events.push({ type, payload }); },
+      approveFinalization: async () => { /* the CLI has no run to advance; the release record is the durable trace */ },
+    });
+  } finally { await preview.close(); }
 
   const report = prepared.report;
   const publishable = !report.blocked && report.escalations.length === 0;

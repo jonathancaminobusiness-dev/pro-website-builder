@@ -3,6 +3,7 @@ import type { ReleaseGateReport } from '@pwb/domain';
 import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type FontDecision, type ReleaseManifest } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
+import { siteFromEnvironment } from './site-environment.js';
 import {
   ClaudeReleaseCriticProvider, ClaudeReleaseRefiner, ClaudeReleaseSummarizer, DeterministicReleaseSummarizer,
   FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage, PatchRefiner, readEvidence, writeReleaseDocument,
@@ -118,12 +119,13 @@ export class ReleaseRun {
 
   private async prepareClaimed(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
     const chosen = providers(this.options.modelProvider ?? 'fake');
+    const site = siteFromEnvironment();
     const fonts = await loadFontSources(this.options.fontsDir);
     const stage = new FinalizationStage({
       criticProvider: chosen.critic,
       refiner: new PatchRefiner(chosen.refiner),
       summarizer: chosen.summarizer,
-      compilerOptions: { siteUrl: this.options.siteUrl ?? 'https://site.invalid', siteName: this.options.siteName ?? 'pro-website-builder', ...(fonts.length > 0 ? { fonts } : {}) },
+      compilerOptions: { siteUrl: this.options.siteUrl ?? site.siteUrl, siteName: this.options.siteName ?? site.siteName, ...(fonts.length > 0 ? { fonts } : {}) },
     });
     // The evidence runners compile the document the gate compiles, so they can
     // stamp their artifacts with the release they actually measured.

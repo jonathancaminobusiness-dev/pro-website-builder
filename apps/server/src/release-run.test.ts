@@ -3,13 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
-import { compileRelease, readReleasePublications } from '@pwb/export';
+import { compileRelease, readReleasePublications, type FontDecision } from '@pwb/export';
 import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { writeEvidenceArtifact } from '@pwb/stage-finalization';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
+import { startServedPreview } from './preview.js';
 
 const studio = { origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' };
 const cleanups: Array<() => Promise<void>> = [];
@@ -44,7 +45,7 @@ function pageEditingProvider(text: string): ModelProvider {
   };
 }
 
-async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string } = {}) {
+async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string; previewFaces?: () => FontDecision[] | undefined } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-release-api-'));
   const evidenceDir = join(dir, 'evidence');
   const releaseRoot = join(dir, 'releases');
@@ -53,7 +54,7 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs,
-    createRun: async (id) => { const run = new FixtureRun({ repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, modelProvider: 'fake', ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, modelProvider: 'fake', ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}), ...(options.previewFaces ? { previewFaces: options.previewFaces } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -217,6 +218,33 @@ describe('Gate 3 over the local API', () => {
     expect(unhostedRow?.licenseUrl).toBeUndefined();
     const publicArtifacts = `${await readFile(join(bundle, 'licenses.json'), 'utf8')}${await readFile(join(bundle, 'manifest.json'), 'utf8')}`;
     expect(publicArtifacts).not.toContain('invoice 42');
+  });
+
+  it('compares the faces a preview really served, so a scripted run has nothing open about them', async () => {
+    const bytes = Buffer.from([119, 79, 70, 50, 5, 5, 5, 5]);
+    const fontsDir = await mkdtemp(join(tmpdir(), 'pwb-run-served-fonts-'));
+    cleanups.push(async () => { await rm(fontsDir, { recursive: true, force: true }); });
+    await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), bytes);
+    await writeFile(join(fontsDir, 'manifest.json'), JSON.stringify({
+      faces: [{ family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07' }],
+    }), 'utf8');
+
+    // Nothing served the document: the bundle self-hosts a face the gate cannot
+    // speak for, which is what every command line run used to report as parity.
+    const silent = await harness({ fontsDir });
+    const unreviewed = await fetch(`${silent.origin}/api/runs/${silent.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(unreviewed.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
+
+    // The same run behind the preview origin `run:release` and `run:fixture` now
+    // start: the faces the gate compares are faces that origin really delivered.
+    const preview = await startServedPreview((versionId) => versionId === 'v0' ? renderDesign(createFixtureIR()) : undefined, 'v0', fontsDir);
+    cleanups.push(async () => { await preview.close(); });
+    expect(preview.servedFaces()?.map((face) => face.family)).toEqual(['Fixture Sans']);
+
+    const served = await harness({ fontsDir, previewFaces: () => preview.servedFaces() });
+    const compared = await fetch(`${served.origin}/api/runs/${served.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(compared.report.parity.matched).toBe(true);
+    expect(compared.report.escalations.join(' ')).not.toMatch(/Fixture Sans/);
   });
 
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {

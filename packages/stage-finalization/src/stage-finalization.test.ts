@@ -540,7 +540,7 @@ describe('the finalization stage end to end with the deterministic providers', (
       artifact({ id: 'pw-webkit', runner: 'playwright', engine: 'webkit', ...measured }),
       artifact({ id: 'lh-mobile', runner: 'lighthouse', engine: 'chromium', metrics: { performance: 0.98 }, ...measured }),
     ];
-    // No `previewFaces`: exactly what `run:fixture` and `run:release` hand the stage.
+    // No `previewFaces`: a run where nothing ever served the document.
     const silent = await stage.run({ runId: 'run-no-preview', version, evidence, applier });
     expect(silent.report.parity.matched).toBe(true);
     expect(silent.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
