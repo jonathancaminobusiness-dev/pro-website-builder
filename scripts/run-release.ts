@@ -21,12 +21,12 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ReleaseRun } from '../apps/server/src/release-run.js';
+import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { Applier, PatchGate, VersionStore } from '../packages/orchestrator/src/index.js';
 import { loadReleaseDocument } from '../packages/stage-finalization/src/index.js';
 
 const root = process.cwd();
-const siteUrl = process.env.PWB_SITE_URL ?? 'https://site.invalid';
-const siteName = process.env.PWB_SITE_NAME ?? 'pro-website-builder';
+const { siteUrl, siteName } = siteFromEnvironment();
 const releaseRoot = process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
 const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
 const fontsDir = process.env.PWB_FONTS_DIR ?? join(root, 'fonts');

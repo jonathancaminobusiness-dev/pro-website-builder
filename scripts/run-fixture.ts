@@ -4,6 +4,7 @@ import { openDatabase, ProjectRepository } from '../apps/server/src/db/repositor
 import { FixtureRun, type FixtureSnapshot } from '../apps/server/src/fixture-run.js';
 import { createPreviewServer } from '../apps/server/src/preview.js';
 import { createModelProvider } from '../apps/server/src/provider.js';
+import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { createRenderMatrix, qaFor, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../packages/render-hub/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 
@@ -15,6 +16,9 @@ const releaseRoot = process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
 const evidenceDir = process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
 const fontsDir = process.env.PWB_FONTS_DIR ?? join(root, 'fonts');
 const renderCacheDir = process.env.PWB_RENDER_CACHE ?? join(root, '.treehouse', 'render-cache');
+// The origin enters the canonical URLs, the sitemap and robots.txt, so it is part
+// of the digest the evidence runners measure and the gate credits.
+const { siteUrl, siteName } = siteFromEnvironment();
 
 async function renderMatrix(snapshot: FixtureSnapshot): Promise<RenderMatrixSummary> {
   const versionId = snapshot.currentVersion.id;
@@ -50,7 +54,7 @@ async function main(): Promise<void> {
     const run = new FixtureRun({
       repository: new ProjectRepository(database),
       provider: createModelProvider(process.env.PWB_MODEL_PROVIDER),
-      release: { releaseRoot, evidenceDir, fontsDir, ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
+      release: { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
     });
     await run.initialize('cli-fixture');
     let snapshot = await run.runAll();
