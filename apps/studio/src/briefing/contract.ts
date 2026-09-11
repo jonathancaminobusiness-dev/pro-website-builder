@@ -1,9 +1,9 @@
 /**
  * Local mirror of the briefing conversation contract published by the server
  * slice (`fm/pwb-chat-core-k9`). Every name here — the endpoint paths, the
- * seven states and the shape of a turn — is the one that branch exposes, so
- * swapping this module for the shared package is a single import change in
- * `client.ts`. Nothing else in the Studio imports the wire shapes directly.
+ * seven states and the shape of a turn — is the one that branch exposes. Every
+ * other Studio module reads the wire shapes from here, so adopting the shared
+ * package is a change to this module's own imports and to nothing else.
  *
  * The counter and the limits are read from what the server sent. The Studio
  * never keeps a number of its own for them: a ceiling the API moved has to move
