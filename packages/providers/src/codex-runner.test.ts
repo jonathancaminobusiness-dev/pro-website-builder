@@ -1,9 +1,9 @@
-import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type AgentTask } from '@pwb/domain';
-import { CODEX_MODEL, CODEX_REASONING_EFFORT, CODEX_WORKSPACE_PREFIX, CodexJsonRunner, CodexRunner } from './index.js';
+import { CODEX_ALLOWLIST_DIRECTORY, CODEX_MODEL, CODEX_REASONING_EFFORT, CODEX_WORKSPACE_PREFIX, CodexJsonRunner, CodexRunner } from './index.js';
 
 /** The checkout this suite runs in; no Codex session may be given a directory inside it. */
 async function repositoryRoot(): Promise<string> {
@@ -83,7 +83,6 @@ describe('Codex provider', () => {
       const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false };
       let args: string[] = [];
       const runner = new CodexJsonRunner({
-        workspaceRoot: directory,
         execute: async (_executable, receivedArgs) => {
           args = receivedArgs;
           const schemaPath = receivedArgs[receivedArgs.indexOf('--output-schema') + 1]!;
@@ -100,8 +99,8 @@ describe('Codex provider', () => {
     }
   });
 
-  it('opens a direct schema when the configured workspace root is relative', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'pwb-codex-relative-root-'));
+  it('opens the schema it wrote when the Codex CLI is spawned for real', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pwb-codex-real-spawn-'));
     const script = join(directory, 'codex-fixture.mjs');
     const executable = join(directory, 'codex-fixture');
     await writeFile(script, [
@@ -114,7 +113,7 @@ describe('Codex provider', () => {
     await writeFile(executable, `#!/bin/sh\nexec ${process.execPath} ${script} "$@"\n`, 'utf8');
     await chmod(executable, 0o755);
     try {
-      const runner = new CodexJsonRunner({ executable, workspaceRoot: relative(process.cwd(), directory), timeoutMs: 1_000 });
+      const runner = new CodexJsonRunner({ executable, timeoutMs: 1_000 });
       await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1_000 })).resolves.toEqual({ answer: 'ok' });
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -326,27 +325,76 @@ describe('Codex provider', () => {
   });
 
   it('gives a session nothing but its allowlist and the schema it must answer with', async () => {
+    const repository = await repositoryRoot();
     const source = await mkdtemp(join(tmpdir(), 'pwb-codex-allowlist-'));
     await writeFile(join(source, 'brand.json'), '{"brand":"fixture"}', 'utf8');
     try {
       let entries: string[] = [];
       let copied = '';
+      let prompt = '';
       const runner = new CodexJsonRunner({
-        allowlist: [join(source, 'brand.json')],
         execute: async (_executable, args) => {
           const workspace = args[args.indexOf('-C') + 1]!;
+          prompt = args[args.length - 1]!;
           entries = (await readdir(workspace)).sort();
-          copied = await readFile(join(workspace, 'brand.json'), 'utf8');
+          copied = await readFile(join(workspace, CODEX_ALLOWLIST_DIRECTORY, '0', 'brand.json'), 'utf8');
           return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'ok' }) } })}\n`, stderr: '' };
         },
       });
 
-      await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1_000 })).resolves.toEqual({ answer: 'ok' });
-      expect(entries).toEqual(['brand.json', 'schema.json']);
+      await expect(runner.run({
+        prompt: `read ${join(source, 'brand.json')} first`, schema: { type: 'object' }, deadlineMs: 1_000,
+        allowlist: [join(source, 'brand.json')],
+      })).resolves.toEqual({ answer: 'ok' });
+      expect(entries).toEqual([CODEX_ALLOWLIST_DIRECTORY, 'schema.json']);
       expect(copied).toBe('{"brand":"fixture"}');
+      // The prompt names the copy inside the workspace, never the original outside it.
+      expect(prompt).not.toContain(join(source, 'brand.json'));
+      expect(prompt).toMatch(/read .*allowlist\/0\/brand\.json first/);
+      expect(inside(repository, prompt.slice(prompt.indexOf('read ') + 5, prompt.indexOf(' first')))).toBe(false);
     } finally {
       await rm(source, { recursive: true, force: true });
     }
+  });
+
+  it('keeps allowlisted entries from colliding with each other or with the schema', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'pwb-codex-collision-'));
+    await mkdir(join(source, 'a'), { recursive: true });
+    await mkdir(join(source, 'b'), { recursive: true });
+    await writeFile(join(source, 'a', 'brand.json'), '"a"', 'utf8');
+    await writeFile(join(source, 'b', 'brand.json'), '"b"', 'utf8');
+    await writeFile(join(source, 'schema.json'), '"not the output schema"', 'utf8');
+    const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+    const allowlist = [join(source, 'a', 'brand.json'), join(source, 'b', 'brand.json'), join(source, 'schema.json')];
+    try {
+      const seen: string[] = [];
+      let outputSchema: unknown;
+      const runner = new CodexJsonRunner({
+        execute: async (_executable, args) => {
+          const prompt = args[args.length - 1]!;
+          outputSchema = JSON.parse(await readFile(args[args.indexOf('--output-schema') + 1]!, 'utf8'));
+          for (const line of prompt.split('\n')) seen.push(await readFile(line, 'utf8'));
+          return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: 'ok' }) } })}\n`, stderr: '' };
+        },
+      });
+
+      await expect(runner.run({ prompt: allowlist.join('\n'), schema, deadlineMs: 1_000, allowlist })).resolves.toEqual({ answer: 'ok' });
+      expect(seen).toEqual(['"a"', '"b"', '"not the output schema"']);
+      expect(outputSchema).toEqual(schema);
+    } finally {
+      await rm(source, { recursive: true, force: true });
+    }
+  });
+
+  it('fails with an actionable error when an allowlisted path cannot be read', async () => {
+    let invoked = false;
+    const runner = new CodexJsonRunner({ execute: async () => { invoked = true; return { stdout: '', stderr: '' }; } });
+
+    await expect(runner.run({
+      prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1_000,
+      allowlist: [join(tmpdir(), 'pwb-codex-missing-allowlist-entry.json')],
+    })).rejects.toMatchObject({ code: 'CODEX_ALLOWLIST_UNREADABLE' });
+    expect(invoked).toBe(false);
   });
 
   it('leaves no schema directory behind inside the repository', async () => {
@@ -363,15 +411,6 @@ describe('Codex provider', () => {
     expect(inside(repository, schemaPath)).toBe(false);
     await expect(stat(schemaPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await readdir(repository)).some((entry) => entry.startsWith('.pwb-codex-'))).toBe(false);
-  });
-
-  it('refuses a workspace root inside the repository checkout', async () => {
-    const repository = await repositoryRoot();
-    let invoked = false;
-    const runner = new CodexJsonRunner({ workspaceRoot: repository, execute: async () => { invoked = true; return { stdout: '', stderr: '' }; } });
-
-    await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1_000 })).rejects.toMatchObject({ code: 'CODEX_WORKSPACE_INVALID' });
-    expect(invoked).toBe(false);
   });
 
   it('closes Codex stdin so the CLI can finish when invoked through execFile', async () => {

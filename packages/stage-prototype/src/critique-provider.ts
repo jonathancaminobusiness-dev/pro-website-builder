@@ -119,9 +119,10 @@ export class FakeCritiqueProvider implements CritiqueProvider {
 
 /**
  * Runs one critic as its own structured local-model session. The session is separate from the
- * generator's, carries no history of how the composition was made, and the default Claude session is
- * allowed to read only the screenshots it was handed. No credential is read, requested, logged or
- * stored.
+ * generator's and carries no history of how the composition was made. The only paths it may read are
+ * the captures of the revision under review: a Claude session opens them where they were written, and
+ * a sandboxed session is handed copies inside its workspace. No credential is read, requested, logged
+ * or stored.
  */
 export class ClaudeCritiqueRunner implements CritiqueProvider {
   private readonly session: StructuredSession;
@@ -139,6 +140,7 @@ export class ClaudeCritiqueRunner implements CritiqueProvider {
         schema: critiqueSchemaJson.CritiqueReport,
         parse: (value) => critiqueReportSchema.parse(value),
         deadlineMs: task.deadlineMs,
+        allowlist: task.captures.map((capture) => capture.screenshotPath),
         ...(signal ? { signal } : {}),
       });
       if (report.dimension !== task.dimension) throw new CritiqueUnavailableError(task.id, 'DIMENSION_MISMATCH', `The ${task.dimension} critic answered as ${report.dimension}.`);

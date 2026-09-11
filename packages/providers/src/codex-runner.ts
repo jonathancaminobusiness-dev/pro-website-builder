@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { ZodError } from 'zod';
 import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { JsonModelRunner, JsonRunRequest } from './json-runner.js';
@@ -12,8 +12,10 @@ const CODEX_AUTH_FAILURE = /chatgpt sign[- ]?in|unauthori[sz]ed|\bnot\s+(?:authe
 export const CODEX_MODEL = 'gpt-5.6-sol';
 export const CODEX_REASONING_EFFORT = 'high';
 export const CODEX_RUNNER_TIMEOUT_MS = 7 * 60_000;
-/** Every Codex session gets its own directory under this prefix; nothing else is reachable from it. */
+/** Every Codex session gets its own directory under this prefix, created in the OS temporary directory. */
 export const CODEX_WORKSPACE_PREFIX = 'pwb-codex-';
+/** Allowlisted paths are copied under this subdirectory, so nothing a task reads can collide with the schema. */
+export const CODEX_ALLOWLIST_DIRECTORY = 'allowlist';
 
 export interface CodexExecutorOptions {
   signal?: AbortSignal;
@@ -25,20 +27,6 @@ export type CodexExecutor = (executable: string, args: string[], options: CodexE
 
 export interface CodexJsonRunnerOptions {
   executable?: string;
-  /**
-   * Parent directory the per-session workspaces are created in. Defaults to
-   * the OS temporary directory and may never be the repository checkout: the
-   * CLI's `--sandbox read-only` stops writes, not reads, and a prompt is not
-   * an ACL, so the directory Codex is given *is* the read boundary.
-   */
-  workspaceRoot?: string;
-  /**
-   * Absolute paths a task is allowed to read. Each entry is copied into the
-   * session workspace before the prompt is passed; everything else stays
-   * outside the boundary. Empty by default, because a worker is answered from
-   * the prompt alone.
-   */
-  allowlist?: readonly string[];
   timeoutMs?: number;
   /** Injected by tests; production executes the local Codex CLI. */
   execute?: CodexExecutor;
@@ -176,47 +164,34 @@ async function executeCodex(executable: string, args: string[], options: CodexEx
 }
 
 /**
- * Walks up from `start` to the checkout that contains it, so the workspace
- * boundary can be refused before a session ever sees repository content.
- */
-async function repositoryRoot(start: string): Promise<string | undefined> {
-  let directory = resolve(start);
-  for (;;) {
-    try {
-      await stat(join(directory, '.git'));
-      return directory;
-    } catch {
-      const parent = dirname(directory);
-      if (parent === directory) return undefined;
-      directory = parent;
-    }
-  }
-}
-
-function contains(parent: string, child: string): boolean {
-  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
-}
-
-/**
  * Creates the dedicated working directory one Codex session runs in, copies
- * the task's allowlist into it, and removes it when the session ends. The
- * schema file Codex reads is written here too, so nothing untracked is ever
- * left inside the repository.
+ * the request's allowlist into it under `allowlist/<n>/`, and removes it when
+ * the session ends. Every entry gets its own numbered directory, so two paths
+ * sharing a basename cannot collide with each other and none can collide with
+ * the schema file written at the workspace root. `operation` receives a
+ * rewriter that points the prompt at the copies rather than at the originals,
+ * which stay outside the boundary.
  */
-async function withWorkspace<T>(root: string | undefined, allowlist: readonly string[], operation: (workspace: string) => Promise<T>): Promise<T> {
-  const parent = resolve(root ?? tmpdir());
-  const repository = await repositoryRoot(process.cwd());
-  if (repository !== undefined && contains(repository, parent)) {
-    throw new CodexCliError('CODEX_WORKSPACE_INVALID', `A Codex session may not run inside the repository checkout ${repository}; give it a workspace root outside it.`);
-  }
-  await mkdir(parent, { recursive: true });
-  const workspace = await mkdtemp(join(parent, CODEX_WORKSPACE_PREFIX));
+async function withWorkspace<T>(allowlist: readonly string[], operation: (workspace: string, rewrite: (prompt: string) => string) => Promise<T>): Promise<T> {
+  const workspace = await mkdtemp(join(resolve(tmpdir()), CODEX_WORKSPACE_PREFIX));
   try {
+    const copies = new Map<string, string>();
     for (const entry of allowlist) {
+      if (copies.has(entry)) continue;
       const source = resolve(entry);
-      await cp(source, join(workspace, basename(source)), { recursive: true, errorOnExist: true, force: false });
+      const destination = join(workspace, CODEX_ALLOWLIST_DIRECTORY, String(copies.size), basename(source));
+      try {
+        await mkdir(dirname(destination), { recursive: true });
+        await cp(source, destination, { recursive: true, errorOnExist: true, force: false });
+      } catch {
+        throw new CodexCliError('CODEX_ALLOWLIST_UNREADABLE', `A Codex session could not be given ${entry}; an allowlisted path must exist and be readable.`);
+      }
+      copies.set(entry, destination);
     }
-    return await operation(workspace);
+    // Longest first: one allowlisted path can be a string prefix of another.
+    const ordered = [...copies].sort(([a], [b]) => b.length - a.length);
+    const rewrite = (prompt: string): string => ordered.reduce((text, [source, destination]) => text.split(source).join(destination), prompt);
+    return await operation(workspace, rewrite);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -232,27 +207,24 @@ async function withSchemaFile<T>(workspace: string, schema: unknown, operation: 
 
 export class CodexJsonRunner implements JsonModelRunner {
   private readonly executable: string;
-  private readonly workspaceRoot: string | undefined;
-  private readonly allowlist: readonly string[];
   private readonly timeoutMs: number;
   private readonly execute: CodexExecutor;
 
   constructor(options: CodexJsonRunnerOptions = {}) {
     this.executable = options.executable ?? 'codex';
-    this.workspaceRoot = options.workspaceRoot;
-    this.allowlist = [...(options.allowlist ?? [])];
     this.timeoutMs = options.timeoutMs ?? CODEX_RUNNER_TIMEOUT_MS;
     this.execute = options.execute ?? executeCodex;
   }
 
   private async runWithDiagnostics(request: JsonRunRequest, signal?: AbortSignal): Promise<CodexRunResult> {
     try {
-      return await withWorkspace(this.workspaceRoot, this.allowlist, async (workspace) => {
+      return await withWorkspace(request.allowlist ?? [], async (workspace, rewrite) => {
+        const prompt = rewrite(request.prompt);
         const execute = (schemaPath?: string): Promise<{ stdout: string; stderr: string }> => this.execute(this.executable, [
           'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
           '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false',
           '--json', ...(schemaPath ? ['--output-schema', schemaPath] : []),
-          '--sandbox', 'read-only', '--ephemeral', '-C', workspace, request.prompt,
+          '--sandbox', 'read-only', '--ephemeral', '-C', workspace, prompt,
         ], { cwd: workspace, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
         const result = request.strictSchema === false ? await execute() : await withSchemaFile(workspace, request.schema, execute);
         if (!result.stdout.trim() && CODEX_AUTH_FAILURE.test(result.stderr)) {
