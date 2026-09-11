@@ -33,6 +33,50 @@ jobs:
       - name: Unit tests
         run: corepack pnpm test
 
+  # The Studio's end-to-end suite drives the three gates through the real UI,
+  # so it is the only check that sees the Studio at all. It runs on its own port
+  # block (PWB_E2E_PORT_BASE), as every checkout of this repo does, rather than
+  # on the developer ports: the harness then serves the Studio from Vite's dev
+  # server and never reuses a server something else started.
+  studio-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      # The API server the harness starts resolves the workspace dist output.
+      - name: Build
+        run: corepack pnpm build
+
+      - name: Install Playwright Chromium
+        run: corepack pnpm exec playwright install --with-deps chromium
+
+      - name: Studio end-to-end tests
+        env:
+          PWB_E2E_PORT_BASE: 4520
+        run: corepack pnpm test:e2e
+
+      # The report is what says which gate the Studio stopped at; a failure that
+      # left it on the runner proves nothing.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-e2e-report
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+
   # The release evidence needs the three browser engines, and Playwright's
   # Firefox build does not start on the macOS host this was developed on, so the
   # only place Firefox is actually measured is here. The artifacts are uploaded
