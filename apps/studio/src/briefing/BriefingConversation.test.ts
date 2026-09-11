@@ -183,6 +183,14 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('disabled="">Fechar briefing');
   });
 
+  it('never blames a ceiling for a close the captain made manual by cancelling', () => {
+    const markup = render(state(conversationSnapshot({ state: 'cancelled', briefing: 'Somos uma clínica de bairro.', messageCount: 6 })));
+
+    expect(markup).toContain('id="briefing-chat-summary"');
+    expect(markup).toContain('Corrija o que estiver errado antes de fechar.');
+    expect(markup).not.toContain('limite');
+  });
+
   it('sends a cancelled conversation with no persisted text to a new execution instead of an empty close', () => {
     const markup = render(state(conversationSnapshot({ state: 'cancelled', messageCount: 0 })));
 

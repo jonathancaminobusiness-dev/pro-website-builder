@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactElement } from 'react';
-import { atMessageLimit, type ConversationTurn } from './contract.js';
+import { type ConversationTurn } from './contract.js';
 import { affordances, pendingMessage, progressLabel, type ConversationUiState } from './machine.js';
 
 /**
@@ -193,7 +193,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         onChange={(event) => props.onSummaryChange(event.target.value)}
       />
       <div className="briefing-meta">
-        <small>{atMessageLimit(snapshot) ? 'A conversa chegou ao teto de mensagens; o fechamento agora é manual.' : 'Corrija o que estiver errado antes de fechar.'}</small>
+        <small>{can.atLimit ? 'A conversa chegou ao limite; o fechamento agora é manual.' : 'Corrija o que estiver errado antes de fechar.'}</small>
         <span aria-live="polite">{state.summaryDraft.length}/{snapshot.limits.briefingMaxLength} caracteres</span>
       </div>
       <div className="actions">

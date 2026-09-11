@@ -59,7 +59,7 @@ function controllerFor(snapshot: ConversationSnapshot | null): BriefingConversat
   };
 }
 
-function renderGate(next: IdentityGateSnapshot, busy = false, inFlight = false, conversation?: BriefingConversationController): string {
+function renderGate(next: IdentityGateSnapshot, busy = false, inFlight = false, conversation: BriefingConversationController = controllerFor(null)): string {
   return renderToStaticMarkup(createElement(IdentityGate, {
     snapshot: next,
     busy,
@@ -76,7 +76,7 @@ function renderGate(next: IdentityGateSnapshot, busy = false, inFlight = false, 
     onChangeToken: () => undefined,
     previewOrigin: 'http://127.0.0.1:4311',
     inFlight,
-    ...(conversation ? { conversation } : {}),
+    conversation,
   }));
 }
 

@@ -168,7 +168,7 @@ test('re-sends a corrected close as a new request instead of replaying the faile
   const confirms = api.writes.filter((write) => write.path.endsWith('/confirm'));
   expect(confirms).toHaveLength(1);
   expect(confirms[0]?.body.summary).toBe(corrected);
-  await expect(page.locator('.chat-summary textarea')).toHaveValue(corrected);
+  await expect(chat.locator('.chat-summary')).toHaveCount(0);
 });
 
 test('says a conversation it could not read was not read, and keeps the stage closed', async ({ page }) => {

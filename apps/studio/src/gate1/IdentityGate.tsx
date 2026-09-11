@@ -77,11 +77,11 @@ export interface IdentityGateProps {
   onChangeToken: (tokenPath: string, value: string) => void;
   previewOrigin: string;
   /**
-   * The briefing conversation for this execution. It is optional so a Studio
-   * built against a server without the conversation endpoints keeps the old
-   * free-text flow exactly as it was.
+   * The briefing conversation for this execution. A server without the
+   * conversation endpoints answers 404, which the controller reports as
+   * `absent`: the panel renders nothing and the old free-text flow decides.
    */
-  conversation?: BriefingConversationController;
+  conversation: BriefingConversationController;
 }
 
 export default function IdentityGate(props: IdentityGateProps): ReactElement {
@@ -101,13 +101,13 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   // A closed briefing is the text a new execution would carry, so the field the
   // replacement offer reads is the summary the captain confirmed, not the text
   // that started the conversation.
-  const closedBriefing = props.conversation?.closedBriefing ?? null;
+  const closedBriefing = props.conversation.closedBriefing;
   // Closing the briefing is what enables the identity stage. Only a server that
   // answered "no conversation for this run" says otherwise, so the old flow
   // starts the stage exactly as it did before; a conversation still being read
   // counts as open rather than as absent.
-  const conversationAvailability = props.conversation?.state.availability;
-  const briefingOpen = conversationAvailability !== undefined && conversationAvailability !== 'absent' && closedBriefing === null;
+  const conversationAvailability = props.conversation.state.availability;
+  const briefingOpen = conversationAvailability !== 'absent' && closedBriefing === null;
   const briefingLabel = conversationAvailability === 'unknown'
     ? 'Abrindo a conversa desta execução…'
     : conversationAvailability === 'unreachable'
@@ -206,7 +206,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
 
     {snapshot && <>
       <p className="gate-briefing">{snapshot.briefing}</p>
-      {props.conversation && <BriefingConversation
+      <BriefingConversation
         state={props.conversation.state}
         onDraftChange={props.conversation.setDraft}
         onSummaryChange={props.conversation.setSummary}
@@ -219,7 +219,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         onDiscard={props.conversation.discard}
         onResume={props.conversation.resume}
         onCorrect={props.conversation.correct}
-      />}
+      />
       <div className="actions gate-actions">
         {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
