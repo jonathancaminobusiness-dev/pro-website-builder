@@ -637,6 +637,8 @@ describe('a run of the identity chain', () => {
     const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     expect(await run.restore('identity-chain')).toBe(true);
     expect(run.releaseBlocker()).toMatch(/devolvida para revisão/);
+    // And the screen reads the same verdict: nothing credits Gate 2 here.
+    expect(run.snapshot().releaseGate.prototypeVersionId).toBeUndefined();
     // The gate is open again, and it is not this route's to close.
     await expect(run.runNext()).rejects.toThrow(/pertence à cadeia/);
     db.sqlite.close();
@@ -656,6 +658,12 @@ describe('a run of the identity chain', () => {
 
     const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     expect(await run.restore('identity-chain')).toBe(true);
+    // The verdict the screen reads credits the approved revision and says nothing
+    // about the sibling, so the finalization stage is offered rather than locked.
+    const gate = run.snapshot().releaseGate;
+    expect(gate.identityVersionId).toBe(identityVersionId);
+    expect(gate.prototypeVersionId).toBe(prototypeVersionId);
+    expect(gate.blocker).toMatch(/finalização ainda não produziu/);
     // The chain still stands on the revision the captain approved, so the gate it
     // hands to Gate 3 is open and the bundle descends from that revision.
     const finalized = await run.runNext();
