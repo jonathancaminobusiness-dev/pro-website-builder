@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { tokenValueSchema } from '@pwb/domain';
+import { briefingConfirmRequestSchema, briefingConversationRequestSchema, tokenValueSchema } from '@pwb/domain';
 import { StageError } from '@pwb/stage-identity';
 import { RunConflictError } from './run-conflict.js';
 import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
-import { IDENTITY_BRIEFING_MAX_LENGTH } from './identity-briefing.js';
+import { BriefingValidationError, normalizeIdentityBriefing } from './identity-briefing.js';
+import { ConversationError } from './identity-conversation.js';
 
 export interface IdentityApiOptions {
   runs: Map<string, IdentityRun>;
@@ -19,6 +20,14 @@ async function resolve(options: IdentityApiOptions, runId: string): Promise<Iden
 
 type Send = (status: number, body: unknown) => void;
 type ReadBody = (request: IncomingMessage) => Promise<Record<string, unknown>>;
+
+/** One pt-BR sentence naming the first field the body got wrong, because the captain fixes fields, not schemas. */
+function requestProblem(issues: ReadonlyArray<{ path: Array<string | number>; message: string }>): string {
+  const first = issues[0];
+  if (!first) return 'O corpo da requisição é inválido.';
+  const field = first.path.join('.');
+  return field ? `Campo ${field}: ${first.message}` : first.message;
+}
 
 function captain(input: Record<string, unknown>, send: Send, action: string): boolean {
   if (input.approverRole === 'captain') return true;
@@ -47,12 +56,12 @@ export async function handleIdentityRequest(
   if (request.method === 'POST' && pathname === '/api/identity/runs') {
     const input = await body(request);
     const runId = typeof input.runId === 'string' ? input.runId : `identity-${randomUUID()}`;
+    // A caller that omits the field keeps the fixed compatibility briefing; one
+    // that sends it goes through the server's single briefing boundary.
     let briefing: string | undefined;
     if (Object.prototype.hasOwnProperty.call(input, 'briefing')) {
-      if (typeof input.briefing !== 'string') { send(400, { error: 'O briefing deve ser um texto.' }); return true; }
-      briefing = input.briefing.trim();
-      if (briefing.length === 0) { send(400, { error: 'O briefing é obrigatório e não pode estar vazio.' }); return true; }
-      if (briefing.length > IDENTITY_BRIEFING_MAX_LENGTH) { send(400, { error: `O briefing não pode ter mais de ${IDENTITY_BRIEFING_MAX_LENGTH} caracteres.` }); return true; }
+      try { briefing = normalizeIdentityBriefing(input.briefing, true); }
+      catch (error) { if (error instanceof BriefingValidationError) { send(400, { error: error.message }); return true; } throw error; }
     }
     // A run that is only on disk exists just as much as one this process holds:
     // creating over it would hand the captain an empty run under a decided id.
@@ -64,13 +73,46 @@ export async function handleIdentityRequest(
     return true;
   }
 
-  const match = /^\/api\/identity\/runs\/([^/]+)(?:\/(start|approve|reject|cancel|token))?$/.exec(pathname);
+  const match = /^\/api\/identity\/runs\/([^/]+)(?:\/(start|approve|reject|cancel|token|conversation)(?:\/(confirm))?)?$/.exec(pathname);
   if (!match) { send(404, { error: 'Not found.' }); return true; }
   const run = await resolve(options, decodeURIComponent(match[1]!));
   if (!run) { send(404, { error: 'Identity run not found.' }); return true; }
   const action = match[2];
+  const subAction = match[3];
+  if (subAction && action !== 'conversation') { send(404, { error: 'Not found.' }); return true; }
 
   if (request.method === 'GET' && !action) { send(200, run.snapshot()); return true; }
+
+  // The briefing conversation: send a message, resume the history, close the
+  // briefing. It is a preparation layer, not a gate, so it carries no approver
+  // role; what it does carry is an idempotency key, because a retry after a
+  // timed-out model turn must never buy a second turn.
+  if (action === 'conversation') {
+    if (request.method === 'GET') {
+      if (subAction) { send(404, { error: 'Not found.' }); return true; }
+      send(200, run.conversation.snapshot());
+      return true;
+    }
+    if (request.method !== 'POST') { send(405, { error: 'Method not allowed.' }); return true; }
+    const payload = await body(request);
+    try {
+      if (subAction === 'confirm') {
+        const confirmation = briefingConfirmRequestSchema.safeParse(payload);
+        if (!confirmation.success) { send(400, { error: requestProblem(confirmation.error.issues) }); return true; }
+        send(200, await run.conversation.confirm(confirmation.data));
+        return true;
+      }
+      const message = briefingConversationRequestSchema.safeParse(payload);
+      if (!message.success) { send(400, { error: requestProblem(message.error.issues) }); return true; }
+      send(200, await run.conversation.send(message.data));
+      return true;
+    } catch (error) {
+      if (!(error instanceof ConversationError)) throw error;
+      send(error.status, { error: error.message });
+      return true;
+    }
+  }
+
   if (request.method !== 'POST') { send(405, { error: 'Method not allowed.' }); return true; }
 
   const input = await body(request);

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, hashJson } from '@pwb/domain';
-import { openDatabase, ProjectRepository, scanSecrets } from './repository.js';
+import { openDatabase, ProjectRepository, scanSecrets, SCHEMA_VERSION } from './repository.js';
 
 describe('sqlite persistence', () => {
   it('uses WAL, stores immutable versions, and appends events in order', async () => {
@@ -40,7 +40,7 @@ describe('sqlite persistence', () => {
     await repo.saveTask(task, 'run-new');
     const tasks = (JSON.parse(repo.dump()) as { tasks: Array<{ id: string; run_id: string; attempt: number }> }).tasks;
     expect(tasks.map((row) => [row.id, row.run_id, row.attempt])).toEqual([['task-identity', 'run-new', 2]]);
-    expect((db.sqlite.pragma('user_version') as Array<{ user_version: number }>)[0]?.user_version).toBe(4);
+    expect((db.sqlite.pragma('user_version') as Array<{ user_version: number }>)[0]?.user_version).toBe(SCHEMA_VERSION);
     expect(Object.keys(JSON.parse(repo.dump()) as Record<string, unknown>)).not.toContain('assets');
     db.sqlite.close();
   });
