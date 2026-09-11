@@ -412,13 +412,15 @@ export class PrototypeRunRegistry {
       stage: 'prototype', approverRole: 'captain', versionId: version.id, versionHash: version.hash,
       decision: input.decision, rationale: input.rationale, createdAt: new Date().toISOString(),
     };
-    record.approval = approval;
     // Gate 2 closes in the same ledger the other two gates read. Without the row
     // the approvals table holds, approving here would unblock nothing: Gate 3
     // asks that table whether the prototype was approved, and on which version.
+    // The run counts as decided only once that row exists, so a write that fails
+    // leaves a review the captain can decide again rather than a dead one.
     const { identityRunId: chainRunId, projectId } = record.chain;
     if (input.decision === 'approved') await this.persistLineage(record, version.id, projectId);
     await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: chainRunId, projectId }));
+    record.approval = approval;
     await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'gate2.decided', payload: { decision: approval.decision, versionId: approval.versionId, rationale: approval.rationale, chainRunId } });
     await this.persist(record);
     return this.snapshot(record);

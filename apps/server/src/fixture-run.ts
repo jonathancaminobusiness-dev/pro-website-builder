@@ -120,11 +120,12 @@ export class FixtureRun {
     this.rendered = renderDesign(head.ir);
     this.lintErrorCount = lintDesign(head.ir).errorCount;
     this.approvals.push(...approvals);
-    // How far the chain got is how many leading stages are closed *now*, not how
-    // many rows the ledger holds: a gate decided twice is still one gate, and
-    // what it stands at is its newest decision, so a revision returned for review
-    // after it was approved reopens that gate.
-    this.stageIndex = STAGES.findIndex((stage) => this.decidedAt(stage)?.decision !== 'approved');
+    // How far the chain got is how many leading gates are closed *for the
+    // document this run holds*: a gate decided twice is still one gate, what it
+    // stands at is its newest decision on this document's own history, and a
+    // decision on a revision this document does not descend from is not its.
+    const decided = this.ancestry(this.currentVersion);
+    this.stageIndex = STAGES.findIndex((stage) => this.decidedOn(stage, decided)?.decision !== 'approved');
     if (this.stageIndex < 0) this.stageIndex = STAGES.length;
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
@@ -318,20 +319,24 @@ export class FixtureRun {
    */
   releaseBlocker(): string | undefined {
     this.requireInitialized();
-    for (const stage of ['identity', 'prototype'] as const) {
-      const decided = this.decidedAt(stage);
-      if (decided?.decision === 'approved') continue;
-      const name = stage === 'identity' ? 'identidade' : 'protótipo';
-      return decided
-        ? `A etapa de ${name} desta execução foi devolvida para revisão depois de aprovada; o gate de release exige a decisão mais recente aprovada.`
-        : `O gate de release exige a aprovação do capitão na etapa de ${name} desta execução.`;
-    }
-    // An approval on a version the bundle does not descend from closes nothing:
-    // the gate has to have been decided on this document's own history.
+    // A gate is asked about the document being compiled, never about the stage in
+    // the abstract: a decision on a revision this bundle does not descend from
+    // says nothing about this bundle, and neither closes nor reopens its gate.
     const lineage = this.ancestry(this.currentVersion);
     for (const stage of ['identity', 'prototype'] as const) {
-      const approval = this.decidedAt(stage)!;
-      if (!lineage.has(approval.versionId)) return `O bundle não descende da versão ${approval.versionId}, aprovada no gate de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
+      const decided = this.decidedOn(stage, lineage);
+      if (decided?.decision === 'approved') continue;
+      const name = stage === 'identity' ? 'identidade' : 'protótipo';
+      if (decided) {
+        const approvedBefore = this.approvals.some((entry) => entry.stage === stage && entry.decision === 'approved' && entry.versionId === decided.versionId);
+        return approvedBefore
+          ? `A versão ${decided.versionId} foi devolvida para revisão depois de aprovada no gate de ${name}; o gate de release exige que a decisão mais recente sobre ela seja uma aprovação.`
+          : `A versão ${decided.versionId} foi devolvida para revisão no gate de ${name} desta execução; o gate de release exige uma aprovação.`;
+      }
+      const elsewhere = [...this.approvals].reverse().find((entry) => entry.stage === stage && entry.decision === 'approved');
+      return elsewhere
+        ? `O bundle não descende da versão ${elsewhere.versionId}, aprovada no gate de ${name} desta execução.`
+        : `O gate de release exige a aprovação do capitão na etapa de ${name} desta execução.`;
     }
     if (!this.finalizationVersion) return 'A etapa de finalização ainda não produziu a versão que o gate de release compila.';
     if (this.status !== 'needs_review' || this.currentStage !== 'finalization') return 'O gate de finalização não está aberto: o release só é preparado e publicado enquanto a etapa aguarda a decisão do capitão.';
@@ -394,12 +399,14 @@ export class FixtureRun {
   }
 
   /**
-   * Where a gate stands: its newest decision, approval or rejection alike. Gates
-   * 1 and 2 are decided in their own runs and write into this ledger, so a
-   * decision that came after an approval is what the gate says now.
+   * Where a gate stands for one document: the newest decision, approval or
+   * rejection alike, recorded on a version that document descends from. Gates 1
+   * and 2 are decided in their own runs and write into this ledger, so a
+   * decision that came after an approval is what the gate says now — and a
+   * decision on a sibling revision is a fact about that revision, not this one.
    */
-  private decidedAt(stage: Stage): Approval | undefined {
-    return [...this.approvals].reverse().find((entry) => entry.stage === stage);
+  private decidedOn(stage: Stage, lineage: Set<string>): Approval | undefined {
+    return [...this.approvals].reverse().find((entry) => entry.stage === stage && lineage.has(entry.versionId));
   }
 
   private launch(stage: Stage): Promise<void> {

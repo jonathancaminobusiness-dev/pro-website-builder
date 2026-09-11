@@ -279,7 +279,10 @@ export default function App() {
       (cause: unknown) => { if (live) { setChainRun(null); setChainError(failureMessage(cause)); } },
     );
     return () => { live = false; };
-  }, [chainRunId, identity?.handoff?.versionId]);
+    // The hash is in here because Gate 2 is a route of this same screen: coming
+    // back from a decision there has to read the chain again, or the line and
+    // its button would still describe the run as it was before the decision.
+  }, [chainRunId, identity?.handoff?.versionId, hash]);
   // Where Gate 2 stands is its newest decision, the way the release gate reads it.
   const chainPrototype = [...(chainRun?.approvals ?? [])].reverse().find((entry) => entry.stage === 'prototype');
   const prototypeApproved = chainPrototype?.decision === 'approved';

@@ -10,7 +10,7 @@ import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
-import { IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
+import { Gate1AlreadyDecidedError, IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
 import { STUDIO_ORIGIN } from './security.js';
 
 let directory: string;
@@ -863,6 +863,22 @@ describe('identity run', () => {
     await run.initialize();
     await run.start();
     await expect(run.reject({ directionId: 'editorial-material', approverRole: 'designer', rationale: 'não' })).rejects.toThrow(/Only the captain/);
+  });
+
+  it('refuses to return a direction once the gate is decided', async () => {
+    const run = newRun('identity-decided-once');
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Esta é a identidade.' });
+
+    // A second screen still holding the pre-decision snapshot presses "Devolver":
+    // the row it would write is newer than the approval the chain hangs on.
+    await expect(run.reject({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Devolvida.' })).rejects.toBeInstanceOf(Gate1AlreadyDecidedError);
+    await expect(run.reject({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Devolvida.' })).rejects.toThrow(/já foi decidido/);
+
+    const decisions = await new ProjectRepository(database).listApprovals('identity-decided-once');
+    expect(decisions.map((entry) => entry.decision)).toEqual(['approved']);
+    expect(run.snapshot().gate.state).toBe('closed');
   });
 });
 

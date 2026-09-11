@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tokenValueSchema } from '@pwb/domain';
 import { StageError } from '@pwb/stage-identity';
 import { RunConflictError } from './run-conflict.js';
-import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
+import { Gate1AlreadyDecidedError, type IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
 import { IDENTITY_BRIEFING_MAX_LENGTH } from './identity-briefing.js';
 
 export interface IdentityApiOptions {
@@ -119,6 +119,7 @@ export async function handleIdentityRequest(
         return true;
     }
   } catch (error) {
+    if (error instanceof Gate1AlreadyDecidedError) { send(409, { error: error.message }); return true; }
     if (!(error instanceof StageError)) throw error;
     send(400, { error: error.message });
     return true;
