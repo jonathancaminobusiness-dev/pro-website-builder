@@ -3,6 +3,7 @@ export * from './axes.js';
 export * from './branches.js';
 export * from './contracts.js';
 export * from './critics.js';
+export * from './fake-conversation.js';
 export * from './fake-identity-provider.js';
 export * from './gate.js';
 export * from './prompts.js';
