@@ -1,6 +1,8 @@
 import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
 import { renderBriefingCreateButton, renderBriefingEditor, renderBriefingReplacementConfirmation, renderBriefingReplacementOffer, type BriefingEditorElementFactory } from '@pwb/renderer/briefing-editor';
 import { createElement, useCallback, useEffect, useState, type ReactElement } from 'react';
+import BriefingConversation from '../briefing/BriefingConversation.js';
+import type { BriefingConversationController } from '../briefing/useBriefingConversation.js';
 
 export interface IdentityDirectionView {
   directionId: string;
@@ -74,6 +76,12 @@ export interface IdentityGateProps {
   onReject: (directionId: string, rationale: string) => void;
   onChangeToken: (tokenPath: string, value: string) => void;
   previewOrigin: string;
+  /**
+   * The briefing conversation for this execution. A server without the
+   * conversation endpoints answers 404, which the controller reports as
+   * `absent`: the panel renders nothing and the old free-text flow decides.
+   */
+  conversation: BriefingConversationController;
 }
 
 export default function IdentityGate(props: IdentityGateProps): ReactElement {
@@ -89,6 +97,25 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   useEffect(() => {
     if (snapshot) setBriefing(snapshot.briefing);
   }, [snapshot?.runId, snapshot?.briefing]);
+
+  // A closed briefing is the text a new execution would carry, so the field the
+  // replacement offer reads is the summary the captain confirmed, not the text
+  // that started the conversation.
+  const closedBriefing = props.conversation.closedBriefing;
+  // Closing the briefing is what enables the identity stage. Only a server that
+  // answered "no conversation for this run" says otherwise, so the old flow
+  // starts the stage exactly as it did before; a conversation still being read
+  // counts as open rather than as absent.
+  const conversationAvailability = props.conversation.state.availability;
+  const briefingOpen = conversationAvailability !== 'absent' && closedBriefing === null;
+  const briefingLabel = conversationAvailability === 'unknown'
+    ? 'Abrindo a conversa desta execução…'
+    : conversationAvailability === 'unreachable'
+      ? 'Não foi possível abrir a conversa desta execução'
+      : 'Feche o briefing para executar';
+  useEffect(() => {
+    if (closedBriefing) setBriefing(closedBriefing);
+  }, [closedBriefing]);
 
   const openRunForm = (label: string): ReactElement => <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
     <label htmlFor="gate1-open-run">{label}</label>
@@ -179,12 +206,26 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
 
     {snapshot && <>
       <p className="gate-briefing">{snapshot.briefing}</p>
+      <BriefingConversation
+        state={props.conversation.state}
+        onDraftChange={props.conversation.setDraft}
+        onSummaryChange={props.conversation.setSummary}
+        onSendEntry={props.conversation.sendEntry}
+        onAnswer={props.conversation.answer}
+        onSkip={props.conversation.skip}
+        onCancel={props.conversation.cancel}
+        onConfirm={props.conversation.confirm}
+        onRetry={props.conversation.retry}
+        onDiscard={props.conversation.discard}
+        onResume={props.conversation.resume}
+        onCorrect={props.conversation.correct}
+      />
       <div className="actions gate-actions">
         {!actionsBlocked && openRunForm('Abrir outra execução')}
         {createConfirm(snapshot.runId, 'Nova execução')}
         {executionInFlight && <button className="secondary" onClick={props.onCancel}>Cancelar execução</button>}
-        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || snapshot.directions.length > 0}>
-          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
+        <button className="primary" onClick={props.onStart} disabled={props.busy || props.inFlight || props.startRecoveryPending || running || stopped || briefingOpen || snapshot.directions.length > 0}>
+          {stopped ? 'Execução cancelada' : snapshot.directions.length > 0 ? 'Etapa executada' : running ? 'Etapa em execução' : props.startRecoveryPending ? 'Verificando execução…' : briefingOpen ? briefingLabel : failed ? 'Tentar novamente' : props.inFlight ? 'Iniciando…' : props.busy ? 'Executando…' : 'Executar etapa de identidade'}
         </button>
       </div>
 
