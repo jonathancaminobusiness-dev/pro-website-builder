@@ -33,7 +33,16 @@ test('the pipeline renames the new-run button and follows a stop made through th
   await page.evaluate(() => { document.dispatchEvent(new Event('visibilitychange')); });
   await expect(page.locator('.stage-panel .status')).toContainText('cancelled');
 
+  // A cancelled run has one next step, so the stage action the server would
+  // refuse is not offered at all.
+  await expect(page.getByRole('button', { name: 'Executar próxima etapa' })).toHaveCount(0);
+
   // A stopped run is resumed from the screen instead of with a second curl.
   await page.getByRole('button', { name: 'Retomar execução' }).click();
   await expect(page.locator('.stage-panel .status')).toContainText('queued');
+  await expect(page.getByRole('button', { name: 'Retomar execução' })).toHaveCount(0);
+
+  // The resumed run runs its next stage from the screen, which the cancelled one could not.
+  await page.getByRole('button', { name: 'Executar próxima etapa' }).click();
+  await expect(page.locator('.stage-panel .status')).toContainText('aguarda gate', { timeout: 60_000 });
 });
