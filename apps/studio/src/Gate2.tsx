@@ -240,8 +240,9 @@ export default function Gate2(): ReactElement {
         const payload = await request<{ runs: Progress[] }>('/api/prototype/runs');
         if (!live) return;
         failures = 0;
-        setError((current) => (current === reported ? '' : current));
+        const mine = reported;
         reported = '';
+        setError((current) => (current === mine ? '' : current));
         setRecent(payload.runs);
         if (payload.runs.some((entry) => isActive(entry.status))) timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
       } catch (cause) {

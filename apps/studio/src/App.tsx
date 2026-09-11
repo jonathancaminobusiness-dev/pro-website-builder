@@ -87,7 +87,10 @@ export default function App() {
   const recoveryAttempts = useRef({ runId: '', count: 0 });
   const pendingStart = useRef<{ runId: string; epoch: number } | null>(null);
   const latestIdentity = useRef<IdentityGateSnapshot | null>(null);
+  const currentSnapshot = useRef<Snapshot | null>(null);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
+
+  useEffect(() => { currentSnapshot.current = snapshot; }, [snapshot]);
 
   useEffect(() => {
     const track = (): void => setHash(window.location.hash);
@@ -118,6 +121,7 @@ export default function App() {
       (next) => { setSnapshot((current) => current ?? next); },
       (cause: unknown) => {
         if (isMissing(cause)) { forgetRun(PIPELINE_RUN_KEY); return; }
+        if (currentSnapshot.current) return;
         setError(failureMessage(cause));
       },
     );
