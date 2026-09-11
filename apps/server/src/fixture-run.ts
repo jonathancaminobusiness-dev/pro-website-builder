@@ -186,15 +186,6 @@ export class FixtureRun {
   async publishRelease(digest: string, rationale?: string, approverRole: ReleaseApprover = 'captain'): Promise<ReleaseManifest> {
     this.requireInitialized();
     if (!this.releaseRun) throw new Error('A finalização não está habilitada nesta execução.');
-    // A publish whose bytes and acceptance both landed, and whose record did
-    // not, is finished except for that record: publishing again writes it
-    // instead of refusing a gate this run already closed.
-    const pending = this.releaseRun.snapshot()?.published;
-    if (pending?.recordPending && this.exportManifest) {
-      if (digest !== pending.digest) throw new ReleasePublishRefusedError(`O capitão aprovou o bundle ${digest}, e o release publicado é ${pending.digest}.`);
-      await this.releaseRun.recordPublication();
-      return this.exportManifest;
-    }
     if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new ReleasePublishRefusedError('Stage finalization is not awaiting approval.');
     const unclean = this.lintRefusal('finalization', this.currentVersion);
     if (unclean) throw new ReleasePublishRefusedError(unclean);
@@ -291,10 +282,6 @@ export class FixtureRun {
    */
   releaseBlocker(): string | undefined {
     this.requireInitialized();
-    // A release whose bytes and acceptance both landed but whose publication
-    // record did not is published already; publishing it again writes only that
-    // record, so the closed gate does not stand in the way of it.
-    if (this.releaseRun?.snapshot()?.published?.recordPending) return undefined;
     for (const stage of ['identity', 'prototype'] as const) {
       if (!this.approvedAt(stage)) return `O gate de release exige a aprovação do capitão na etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
     }
@@ -318,21 +305,23 @@ export class FixtureRun {
       current: this.currentVersion,
       applier: new Applier(this.store, this.releaseGate),
       record: (type, payload) => this.record(type, payload),
-      approveFinalization: async (approverRole, rationale, manifest) => {
+      approveFinalization: async (approverRole, rationale, manifest, publication) => {
         const version = this.currentVersion;
         const approval: Approval = { id: `${this.runId()}-finalization-approval`, stage: 'finalization', approverRole, versionId: version.id, versionHash: version.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
-        // Acceptance is one step: the approval and the two events that describe
-        // it commit together, and only then does the run become a succeeded one
-        // holding this manifest. A publish that dies anywhere before that commit
-        // leaves nothing durable behind, so the bytes it wrote can still be
-        // rolled back and a restarted server reads the run exactly as this one
-        // does; once the commit lands nothing is removed.
+        // Acceptance is one step: the publication record, the approval and the
+        // three events that describe them commit together, and only then does
+        // the run become a succeeded one holding this manifest. A publish that
+        // dies anywhere before that commit leaves nothing durable behind, so
+        // the bytes and the record it wrote are taken back and a restarted
+        // server reads the run exactly as this one does — still at the gate.
         await this.options.repository.createApprovalWithEvents(
           { ...approval, runId: this.runId(), projectId: this.projectId() },
           [
             { id: randomUUID(), runId: this.runId(), type: 'approval.recorded', payload: { stage: 'finalization', decision: 'approved', versionId: approval.versionId } },
             { id: randomUUID(), runId: this.runId(), type: 'run.finished', payload: { status: 'succeeded', digest: manifest.digest } },
+            { id: randomUUID(), runId: this.runId(), type: publication.event.type, payload: publication.event.payload },
           ],
+          publication.write,
         );
         this.approvals.push(approval);
         this.stageIndex += 1;

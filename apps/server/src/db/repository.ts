@@ -96,18 +96,30 @@ export class ProjectRepository {
   async saveVersion(input: VersionInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.versions).values({ id: input.id, projectId: input.projectId, parentId: input.parentId ?? null, hash: input.hash, ir: JSON.stringify(designIRSchema.parse(input.ir)), createdAt: new Date().toISOString() }).run(); }); }
   async createApproval(input: ApprovalInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.approvals).values({ ...input, createdAt: new Date().toISOString() }).run(); }); }
   /**
-   * An approval and the events that describe it, committed as one step.
+   * An approval, the events that describe it and whatever the caller has to
+   * write outside the database, committed as one step.
    *
    * A Gate 3 publish keeps the bytes it wrote only once this commits, so an
-   * acceptance that landed halfway — the approval row without its events — would
-   * leave a run a restarted server reads as finished with no bundle behind it.
-   * Re-running the same approval is the retry of that publish, not a conflict.
+   * acceptance that landed halfway — the approval row without its events, or
+   * without the publication record beside the bundle — would leave a run a
+   * restarted server reads as finished with no release behind it. `beforeCommit`
+   * runs inside the open transaction: what it wrote is the caller's to take
+   * back when nothing commits. Re-running the same approval is the retry of
+   * that publish, not a conflict.
    */
-  async createApprovalWithEvents(approval: ApprovalInput, events: EventInput[]): Promise<void> {
-    await this.write(() => this.db.sqlite.transaction(() => {
-      this.db.orm.insert(schema.approvals).values({ ...approval, createdAt: new Date().toISOString() }).onConflictDoNothing().run();
-      for (const event of events) this.db.orm.insert(schema.events).values({ id: event.id, runId: event.runId, type: event.type, payload: JSON.stringify(event.payload), createdAt: new Date().toISOString() }).run();
-    })());
+  async createApprovalWithEvents(approval: ApprovalInput, events: EventInput[], beforeCommit?: () => Promise<void>): Promise<void> {
+    await this.write(async () => {
+      this.db.sqlite.exec('BEGIN IMMEDIATE');
+      try {
+        await beforeCommit?.();
+        this.db.orm.insert(schema.approvals).values({ ...approval, createdAt: new Date().toISOString() }).onConflictDoNothing().run();
+        for (const event of events) this.db.orm.insert(schema.events).values({ id: event.id, runId: event.runId, type: event.type, payload: JSON.stringify(event.payload), createdAt: new Date().toISOString() }).run();
+        this.db.sqlite.exec('COMMIT');
+      } catch (error) {
+        if (this.db.sqlite.inTransaction) this.db.sqlite.exec('ROLLBACK');
+        throw error;
+      }
+    });
   }
   async appendEvent(input: EventInput): Promise<void> { await this.write(() => { this.db.orm.insert(schema.events).values({ id: input.id, runId: input.runId, type: input.type, payload: JSON.stringify(input.payload), createdAt: new Date().toISOString() }).run(); }); }
   async savePrototypeRun(input: PrototypeRunRow): Promise<void> {
