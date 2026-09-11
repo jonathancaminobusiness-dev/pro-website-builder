@@ -323,8 +323,9 @@ export class FixtureRun {
 
   /** The gate's own verdict on this document, so no reader has to re-derive it. */
   private releaseGateState(): ReleaseGateState {
-    const decided = this.decidedOn('prototype', this.ancestry(this.currentVersion));
-    const blocker = this.releaseBlocker();
+    const lineage = this.ancestry(this.currentVersion);
+    const decided = this.decidedOn('prototype', lineage);
+    const blocker = this.releaseBlocker(lineage);
     return {
       ...(decided?.decision === 'approved' ? { prototypeVersionId: decided.versionId } : {}),
       ...(blocker ? { blocker } : {}),
@@ -340,12 +341,12 @@ export class FixtureRun {
    * closes this gate, and a closed gate does not reopen: preparing again would
    * move the document of a run that already finished.
    */
-  releaseBlocker(): string | undefined {
+  releaseBlocker(walked?: Set<string>): string | undefined {
     this.requireInitialized();
     // A gate is asked about the document being compiled, never about the stage in
     // the abstract: a decision on a revision this bundle does not descend from
     // says nothing about this bundle, and neither closes nor reopens its gate.
-    const lineage = this.ancestry(this.currentVersion);
+    const lineage = walked ?? this.ancestry(this.currentVersion);
     for (const stage of ['identity', 'prototype'] as const) {
       const decided = this.decidedOn(stage, lineage);
       if (decided?.decision === 'approved') continue;

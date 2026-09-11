@@ -32,6 +32,13 @@ const imageryCopy: Record<string, string> = {
   failed: 'não foi gerada',
 };
 
+/**
+ * The images live in o ledger da revisão, não nas seções: esta etapa ainda não
+ * posiciona imagem em página, então elas contam para procedência e licença sem
+ * aparecer no preview.
+ */
+const IMAGERY_NOTE = 'As imagens do Gate 1 ficam no registro e na licença desta revisão; esta etapa ainda não as posiciona nas seções.';
+
 interface Progress {
   runId: string; status: 'queued' | 'running' | 'settled' | 'failed' | 'interrupted'; step: string; detail: string;
   startedAt: string; updatedAt: string; chain?: Chain; error?: string;
@@ -323,7 +330,7 @@ export default function Gate2(): ReactElement {
         <div className="gate2-badges">
           {snapshot.chain && <span className={`qa-chip${result.identityHash === snapshot.chain.identityHash ? '' : ' identity-mismatch'}`} title={`Gate 1 · ${snapshot.chain.identityRunId}`}>{result.identityHash === snapshot.chain.identityHash ? 'identidade do Gate 1 medida nesta revisão' : 'a identidade desta revisão não é a do Gate 1'}</span>}
           {snapshot.chain?.seededImagery?.map((asset) => (
-            <span key={asset.id} className={`qa-chip${asset.status === 'ready' ? '' : ' identity-mismatch'}`} {...(asset.note ? { title: asset.note } : {})}>{asset.id}: {imageryCopy[asset.status] ?? asset.status}</span>
+            <span key={asset.id} className={`qa-chip${asset.status === 'ready' ? '' : ' identity-mismatch'}`} title={asset.note ? `${asset.note}\n${IMAGERY_NOTE}` : IMAGERY_NOTE}>{asset.id}: {imageryCopy[asset.status] ?? asset.status}</span>
           ))}
           <span className={`status status-${result.gate}`}>{result.gate === 'vetoed' ? 'vetado pelo QA' : 'aguarda decisão'}</span>
           <span className="qa-chip" title={result.stopDetail}>parou por: {stopReasonCopy[result.stopReason] ?? result.stopReason}</span>

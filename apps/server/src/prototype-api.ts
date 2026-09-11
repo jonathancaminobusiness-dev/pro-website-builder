@@ -44,8 +44,8 @@ export interface IdentitySeed {
   ir: DesignIR;
   /**
    * The imagery generated for the approved direction. It travels beside the
-   * document because the identity stage may not write `/assets`, and the
-   * prototype composes over the ledger this places it in.
+   * document because the identity stage may not write `/assets`, and lands in
+   * the seeded revision's asset ledger with its provenance and licence.
    */
   assets: DesignIR['assets']['items'];
 }
@@ -58,9 +58,11 @@ export interface PrototypeChain {
   projectId: string;
   /**
    * The imagery Gate 1 approved, as it stood when this run was seeded. Gate 2
-   * never waits on the raster lane: what the lane delivered is in the document
-   * with its bytes, and what it did not is in the document as the placeholder it
-   * is, so the review shows what this revision actually has.
+   * never waits on the raster lane, so each image carries the status it had:
+   * what the lane delivered with its bytes, what it did not as the placeholder
+   * it is. They are in the revision's asset ledger and not in its pages — this
+   * build has no way to point a node at one — so the review says so rather than
+   * implying the captain will see them in the preview.
    */
   seededImagery?: Array<{ id: string; status: DesignIR['assets']['items'][number]['status']; note?: string }>;
 }
@@ -162,10 +164,11 @@ interface PersistedRun {
 }
 
 /**
- * The approved document with Gate 1's own imagery on it: an asset the gate
- * generated replaces the placeholder of the same id and any other is added, so
- * the prototype composes over what the captain approved rather than over the
- * fixture's stand-ins.
+ * The approved document with Gate 1's own imagery in its `/assets` ledger, one
+ * entry per id. It travels for provenance and licensing: nothing in this build
+ * places an image in a section — the prototype's typed contracts carry no
+ * `assetId` — so an approved image is recorded and licensed here, and is not
+ * rendered into the pages until a stage can point a node at it.
  */
 function withApprovedImagery(seed: IdentitySeed): DesignIR {
   if (seed.assets.length === 0) return seed.ir;
@@ -237,6 +240,8 @@ export interface PrototypeRegistryOptions {
  */
 export class PrototypeRunRegistry {
   private readonly runs = new Map<string, PrototypeRunRecord>();
+  /** Ids taken by a request that is still reading its seed; no second run starts under one of them. */
+  private readonly claimed = new Set<string>();
   private readonly rendered = new Map<string, RenderedDocument>();
   /** One browser matrix at a time: the next run waits on the one before it. */
   private lane: Promise<void> = Promise.resolve();
@@ -244,7 +249,8 @@ export class PrototypeRunRegistry {
 
   constructor(private readonly options: PrototypeRegistryOptions) {}
 
-  has(runId: string): boolean { return this.runs.has(runId); }
+  /** Whether this id is taken, by a run it holds or by a request still reading its seed. */
+  has(runId: string): boolean { return this.runs.has(runId) || this.claimed.has(runId); }
 
   /**
    * Accepts a run and answers at once with its id and progress. Measuring the capture matrix takes
@@ -252,7 +258,15 @@ export class PrototypeRunRegistry {
    * and neither does a restart.
    */
   async create(runId: string, request: PrototypeRunRequest = {}): Promise<Gate2Snapshot> {
-    if (this.runs.has(runId)) throw new Error(`Run ${runId} already exists.`);
+    if (this.runs.has(runId) || this.claimed.has(runId)) throw new Error(`Run ${runId} already exists.`);
+    // The id is taken before the seed is read, because reading it yields: a
+    // retry that arrives meanwhile would otherwise build a second execution
+    // under one id, and the lane would keep measuring the one nobody holds.
+    this.claimed.add(runId);
+    try { return await this.start(runId, request); } finally { this.claimed.delete(runId); }
+  }
+
+  private async start(runId: string, request: PrototypeRunRequest): Promise<Gate2Snapshot> {
     const seed = await this.resolveSeed(request);
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());

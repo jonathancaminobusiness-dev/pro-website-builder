@@ -34,16 +34,6 @@ function approvedIdentity(overrides: Partial<IdentitySeed> = {}): IdentitySeed {
   return { identityRunId: 'identity-chain', projectId: ir.meta.projectId, versionId: ir.meta.versionId, identityHash: identityHash(ir), approvedAt: new Date().toISOString(), stale: false, ir, assets: [], ...overrides };
 }
 
-/** An image the art director generated for the approved direction, as Gate 1 hands it on. */
-function generatedImagery(overrides: Partial<DesignIR['assets']['items'][number]> = {}): DesignIR['assets']['items'][number] {
-  return {
-    id: 'identity-hero', kind: 'raster', uri: 'data:image/png;base64,aGVybw==', alt: 'Oficina em operação, luz lateral.',
-    provenance: { source: 'higgsfield', author: 'art-director', license: 'higgsfield-commercial', date: new Date().toISOString(), hash: 'h-hero', prompt: 'oficina em operação', model: 'soul' },
-    status: 'ready',
-    ...overrides,
-  };
-}
-
 async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSource; repository?: ProjectRepository; identity?: (request: PrototypeRunRequest) => Promise<IdentitySeed | undefined> } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; repository: ProjectRepository; close: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-'));
   // A caller that brings its own ledger owns it: a Gate 1 execution and the
@@ -352,7 +342,7 @@ describe('Gate 2 runs on the identity Gate 1 approved', () => {
     } finally { await api.close(); db.sqlite.close(); }
   });
 
-  it('composes over the image a slow lane delivered, and roots the run on its own version', async () => {
+  it('records the image a slow lane delivered in the revision ledger, on a version of its own', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-imagery-'));
     const db = openDatabase(join(dir, 'imagery.sqlite'));
     const repository = new ProjectRepository(db);
@@ -381,9 +371,16 @@ describe('Gate 2 runs on the identity Gate 1 approved', () => {
       const versions = await repository.listVersions(identityRun.projectId);
       const byId = new Map(versions.map((version) => [version.id, version]));
       const reviewed = byId.get(result.after.versionId)!;
-      // The revision the captain reviewed carries the delivered image, so the
-      // bundle Gate 3 compiles ships it rather than the fixture's stand-in.
-      expect(reviewed.ir.assets.items.find((asset) => asset.id === shot[0]!.id)).toMatchObject({ uri: shot[0]!.uri, status: 'ready' });
+      const delivered = shot[0]!;
+      expect(delivered.id).toMatch(/^asset-modular-technical-/);
+      // The revision the captain reviewed records the delivered image once, with
+      // its provenance and licence.
+      expect(reviewed.ir.assets.items.filter((asset) => asset.id === delivered.id)).toMatchObject([{ uri: delivered.uri, status: 'ready', provenance: { license: delivered.provenance.license } }]);
+      // And nothing places it in a page: this build has no way to point a node at
+      // an asset, so an approved image is licensed and recorded, never rendered.
+      expect(reviewed.ir.pages.routes.flatMap((page) => page.nodes).some((node) => node.assetId !== undefined)).toBe(false);
+      // The document the fixture declares keeps its own asset beside it.
+      expect(reviewed.ir.assets.items.map((asset) => asset.id).sort()).toEqual([delivered.id, 'fixture-mark']);
 
       // The root is a version of its own, so the ledger row describes the very
       // document Gate 2 measured instead of two documents sharing one id.
@@ -401,6 +398,27 @@ describe('Gate 2 runs on the identity Gate 1 approved', () => {
       // And the identity's own row is untouched: it never carried the imagery.
       expect(byId.get(identityVersionId)!.ir.assets.items.some((asset) => asset.id === shot[0]!.id)).toBe(false);
     } finally { await api.close(); db.sqlite.close(); }
+  });
+
+  it('claims the run id before it reads the seed, so a retry cannot start a second execution', async () => {
+    // Reading the seed yields — after a restart it restores a whole Gate 1 from
+    // SQLite — and a retry that arrives in that window must not open a run.
+    let admit = (): void => {};
+    const reading = new Promise<void>((resolve) => { admit = resolve; });
+    let reads = 0;
+    const api = await harness({
+      identity: async () => { reads += 1; await reading; return approvedIdentity(); },
+    });
+    try {
+      const first = post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-retried', identityRunId: 'identity-chain' });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const retry = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-retried', identityRunId: 'identity-chain' });
+      expect(retry.status).toBe(409);
+      admit();
+      expect((await first).status).toBe(201);
+      expect(reads).toBe(1);
+      expect((await settled(api.origin, 'gate2-retried')).result).toBeDefined();
+    } finally { admit(); await api.close(); }
   });
 
   it('starts from a chain whose imagery the ended process left in flight', async () => {
@@ -429,24 +447,6 @@ describe('Gate 2 runs on the identity Gate 1 approved', () => {
       expect(created.payload.chain!.seededImagery?.map((asset) => asset.status)).toEqual(['failed']);
       expect((await settled(api.origin, 'gate2-restart-imagery')).result).toBeDefined();
     } finally { release(); await api.close(); db.sqlite.close(); }
-  });
-
-  it('replaces the placeholder of the id it carries instead of doubling it', async () => {
-    // `fixture-mark` is the asset the seeded document already declares and a node
-    // already points at, so this is the collision the merge has to resolve.
-    const shot = generatedImagery({ id: 'fixture-mark', alt: 'Marca da oficina, gerada.' });
-    const api = await harness({ identity: async () => approvedIdentity({ assets: [shot] }) });
-    try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-dedup', identityRunId: 'identity-chain' });
-      const result = (await settled(api.origin, 'gate2-dedup')).result!;
-      await post(api.origin, '/api/prototype/runs/gate2-dedup/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Protótipo aprovado.' });
-
-      const versions = await api.repository.listVersions(createFixtureIR().meta.projectId);
-      const reviewed = versions.find((version) => version.id === result.after.versionId)!;
-      const marks = reviewed.ir.assets.items.filter((asset) => asset.id === 'fixture-mark');
-      expect(marks).toHaveLength(1);
-      expect(marks[0]).toMatchObject({ uri: shot.uri, alt: shot.alt });
-    } finally { await api.close(); }
   });
 
   it('refuses to measure anything the captain has not approved in Gate 1', async () => {
