@@ -44,11 +44,11 @@ describe('preview origin', () => {
     await preview.start();
     try {
       // Nothing served yet: the origin answers for no face at all.
-      expect(preview.servedFaces()).toBeUndefined();
+      expect(preview.servedFaces('v0')).toBeUndefined();
       // No manifest yet: the preview is exactly the bytes the renderer produced.
       expect(await (await fetch(`${preview.origin}/preview/v0/`)).text()).toBe(rendered.routes.find((route) => route.route === '/')!.html);
       // That document declared no face, which is what it reports.
-      expect(preview.servedFaces()).toEqual([]);
+      expect(preview.servedFaces('v0')).toEqual([]);
 
       // A face the owner adds while the studio runs reaches the iframe.
       await writeFile(join(fontsDir, 'manifest.json'), MANIFEST, 'utf8');
@@ -75,14 +75,16 @@ describe('preview origin', () => {
       const replaced = await fetch(`${preview.origin}${next!}`);
       expect(replaced.status).toBe(200);
       expect(Buffer.from(await replaced.arrayBuffer())).toEqual(REPLACED_BYTES);
-      expect(preview.servedFaces()?.map((decision) => decision.path)).toEqual([next!.replace(/^\//, '')]);
+      expect(preview.servedFaces('v0')?.map((decision) => decision.path)).toEqual([next!.replace(/^\//, '')]);
 
       // Neither a route this origin does not have nor a font file is a document
-      // that left it, so neither answers for a face.
+      // that left it, so neither answers for a face, and a version this origin
+      // never served answers for none of its own.
       expect((await fetch(`${preview.origin}/preview/absent/`)).status).toBe(404);
+      expect(preview.servedFaces('absent')).toBeUndefined();
       expect((await fetch(`${preview.origin}/preview/v0/absent`)).status).toBe(404);
       expect((await fetch(`${preview.origin}${next!}`)).status).toBe(200);
-      expect(preview.servedFaces()?.map((decision) => decision.path)).toEqual([next!.replace(/^\//, '')]);
+      expect(preview.servedFaces('v0')?.map((decision) => decision.path)).toEqual([next!.replace(/^\//, '')]);
 
       // The face URL is content-addressed, so the document the captain is
       // already looking at keeps answering with the bytes it declared.

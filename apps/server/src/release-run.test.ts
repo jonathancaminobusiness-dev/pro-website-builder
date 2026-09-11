@@ -45,7 +45,7 @@ function pageEditingProvider(text: string): ModelProvider {
   };
 }
 
-async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string; previewFaces?: () => ServedFace[] | undefined } = {}) {
+async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string; previewFaces?: (version: { id: string }) => ServedFace[] | undefined } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-release-api-'));
   const evidenceDir = join(dir, 'evidence');
   const releaseRoot = join(dir, 'releases');
@@ -248,17 +248,31 @@ describe('Gate 3 over the local API', () => {
     cleanups.push(async () => { await preview.close(); });
     // A route the origin does not have serves nothing, so it answers for no face.
     expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(404);
-    expect(preview.servedFaces()).toBeUndefined();
+    expect(preview.servedFaces('v0')).toBeUndefined();
 
     const declared = await preview.serve('v0', renderDesign(createFixtureIR()));
     expect(declared.map((face) => face.family)).toEqual(['Fixture Sans']);
-    expect(preview.servedFaces()).toEqual(declared);
+    expect(preview.servedFaces('v0')).toEqual(declared);
 
     const served = await harness({ fontsDir, previewFaces: () => declared });
     const compared = await fetch(`${served.origin}/api/runs/${served.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(compared.report.parity.matched).toBe(true);
     expect(compared.report.parity.routes.flatMap((route) => route.differences)).toEqual([]);
     expect(compared.report.escalations.join(' ')).not.toMatch(/Fixture Sans|Foundry Grotesk/);
+
+    // One studio origin serves many runs: the faces are recorded per version, so
+    // a run whose preview the captain never opened has nothing to compare and
+    // the gate says so instead of borrowing another run's document.
+    const unopened = await harness({ fontsDir, previewFaces: (version) => preview.servedFaces(version.id) });
+    const borrowed = await fetch(`${unopened.origin}/api/runs/${unopened.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(borrowed.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
+
+    // The same run once its own document really left the origin.
+    const opened = await harness({ fontsDir, previewFaces: (version) => preview.servedFaces(version.id) });
+    await preview.serve(opened.stageVersionId, renderDesign(opened.run.releaseContext().current.ir));
+    const reviewed = await fetch(`${opened.origin}/api/runs/${opened.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(reviewed.report.parity.matched).toBe(true);
+    expect(reviewed.report.escalations.join(' ')).not.toMatch(/Fixture Sans/);
 
     // The same served document against a release that ships no face at all: the
     // comparison has two independent sides, so it says the face moved.
