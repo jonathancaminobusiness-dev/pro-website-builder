@@ -57,13 +57,18 @@ async function main(): Promise<void> {
     // the studio uses; the faces come from the fonts directory, so a refinement
     // does not change them. Port 0 keeps the CLI off the developer ports.
     const preview = await startServedPreview(fontsDir);
-    const run = new FixtureRun({
-      repository: new ProjectRepository(database),
-      provider: createModelProvider(process.env.PWB_MODEL_PROVIDER),
-      release: { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)), ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
-    });
-    let snapshot: FixtureSnapshot;
-    try { await run.initialize('cli-fixture'); snapshot = await run.runAll(); } finally { await preview.close(); }
+    let staged: { run: FixtureRun; snapshot: FixtureSnapshot };
+    try {
+      const started = new FixtureRun({
+        repository: new ProjectRepository(database),
+        provider: createModelProvider(process.env.PWB_MODEL_PROVIDER),
+        release: { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)), ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}) },
+      });
+      await started.initialize('cli-fixture');
+      staged = { run: started, snapshot: await started.runAll() };
+    } finally { await preview.close(); }
+    const { run } = staged;
+    let { snapshot } = staged;
     const report = run.releaseSnapshot()?.report;
     // A script never signs for the captain. It prints what Gate 3 found and
     // publishes only a release that left nothing for a human to accept.

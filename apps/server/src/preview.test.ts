@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
 import { renderDesign } from '@pwb/renderer';
-import { createPreviewServer } from './preview.js';
+import { createPreviewServer, startServedPreview } from './preview.js';
 
 async function rawRequestStatus(port: number, requestLine: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
@@ -170,5 +170,15 @@ describe('preview origin', () => {
       // The exported site owns the root, so the same document links there without the review prefix.
       expect(renderDesign(ir).routes[0]!.html).toContain('href="/proof"');
     } finally { await preview.close(); }
+  });
+  it('closes promptly after serving its own document, instead of waiting out the keep-alive pool', async () => {
+    const preview = await startServedPreview();
+    await preview.serve('v-served', renderDesign(createFixtureIR()));
+    const started = Date.now();
+    await preview.close();
+    // The fetch above leaves an idle pooled socket, and every CLI release run
+    // waits on this close, so it has to release the socket instead of the
+    // keep-alive timeout.
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
