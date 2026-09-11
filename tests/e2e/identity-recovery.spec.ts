@@ -196,7 +196,10 @@ test('a new run needs a second yes, and the run on screen stays reachable', asyn
   await expect(page.locator('.direction-card')).toHaveCount(3);
 
   // Creating one takes the second yes, and the first run is still openable by id.
+  // The replacement run is written from scratch, so the second yes is only
+  // available once this browser says what the new identity is about.
   await page.getByRole('button', { name: 'Nova execução' }).click();
+  await page.getByLabel('Briefing do projeto').fill('Nicho de vitrais autorais para reformas residenciais.');
   await page.getByRole('button', { name: 'Criar mesmo assim' }).click();
   await expect(page.locator('.run-id code')).not.toHaveText(runId);
   await expect(page.locator('.direction-card')).toHaveCount(0);
