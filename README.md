@@ -72,6 +72,9 @@ corepack pnpm build
 corepack pnpm test:e2e
 ```
 
+Chromium is what the Fase 0 suite measures; the release evidence needs Firefox
+and WebKit too, and the finalization section below names the command.
+
 Playwright ships no browser of its own and `pnpm install` does not fetch one. Every measured path opens its browser through `RenderHub`, which refuses without that binary and names the command that installs it — the server, the fixture CLI and the e2e harnesses all get the same sentence.
 
 Run the deterministic fixture without starting the UI:
@@ -188,10 +191,28 @@ corepack pnpm test:e2e:release     # only the browser evidence
 corepack pnpm run:lighthouse       # only the Lighthouse artifacts
 ```
 
+`run:evidence` and `test:e2e:release` measure the release on all three engines,
+and the quickstart installs only Chromium, so install the other two before the
+first evidence run:
+
+```bash
+corepack pnpm exec playwright install chromium firefox webkit
+```
+
+All three always run. An engine that cannot launch on the host leaves no
+artifact at all, and Gate 3 reports the gap as missing evidence the captain
+accepts in writing — never as a pass — so a checkout with one browser never
+reaches a clean report.
+
 Everything binds an ephemeral port the operating system chooses, so an evidence
 run never contends with the studio on `5173`, the preview on `4311`, or another
-worktree. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site name the
-canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT`,
+worktree; `PWB_RELEASE_PORT` pins the release harness to a fixed port instead —
+leave it unset unless something outside the run has to reach that origin, since
+several checkouts share one machine — and the harness publishes whichever origin
+it bound through `PWB_RELEASE_ORIGIN`. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site
+name the canonical URLs, the sitemap and Open Graph use — every compile site
+reads them, so the gate credits the digest the runners measured;
+`PWB_RELEASE_ROOT`,
 `PWB_EVIDENCE_DIR` and `PWB_FONTS_DIR` move the bundle, the artifacts and the
 fonts. Preparing a release writes
 the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and every
