@@ -34,8 +34,7 @@ export class ChainGateError extends Error {
  * by the version graph, and the snapshot carries one version, not the graph.
  */
 export interface ReleaseGateState {
-  /** The version whose approval closes each chain gate for this document, when one does. */
-  identityVersionId?: string;
+  /** The version whose approval closes Gate 2 for this document, when one does. */
   prototypeVersionId?: string;
   /** Why Gate 3 may not run yet, or absent when it may. */
   blocker?: string;
@@ -324,17 +323,10 @@ export class FixtureRun {
 
   /** The gate's own verdict on this document, so no reader has to re-derive it. */
   private releaseGateState(): ReleaseGateState {
-    const lineage = this.ancestry(this.currentVersion);
-    const closed = (stage: Stage): string | undefined => {
-      const decided = this.decidedOn(stage, lineage);
-      return decided?.decision === 'approved' ? decided.versionId : undefined;
-    };
-    const identityVersionId = closed('identity');
-    const prototypeVersionId = closed('prototype');
+    const decided = this.decidedOn('prototype', this.ancestry(this.currentVersion));
     const blocker = this.releaseBlocker();
     return {
-      ...(identityVersionId ? { identityVersionId } : {}),
-      ...(prototypeVersionId ? { prototypeVersionId } : {}),
+      ...(decided?.decision === 'approved' ? { prototypeVersionId: decided.versionId } : {}),
       ...(blocker ? { blocker } : {}),
     };
   }
