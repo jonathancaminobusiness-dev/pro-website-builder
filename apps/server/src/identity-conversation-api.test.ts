@@ -224,6 +224,22 @@ describe('briefing conversation restart', () => {
     expect(after.summary).toBe(before.summary);
   });
 
+  it('opens from the execution text when the restart happened before the first turn', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pwb-conversation-restart-entry-'));
+    cleanups.push(async () => { await rm(directory, { recursive: true, force: true }); });
+    const first = await conversationServer(directory);
+    await createRun(first.origin, 'conversa-sem-turno', FIRST_TEXT);
+    await first.close();
+
+    const second = await conversationServer(directory);
+    const response = await post(second.origin, briefingConversationPath('conversa-sem-turno'), { idempotencyKey: 'turn-1' });
+    const opened = await snapshotOf(response);
+
+    expect(response.status).toBe(200);
+    expect(opened.normalizedText).toBe(FIRST_TEXT);
+    expect(opened.state).toBe('recommendation');
+  });
+
   it('does not buy a second turn for a key that was already applied before the restart', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'pwb-conversation-restart-key-'));
     cleanups.push(async () => { await rm(directory, { recursive: true, force: true }); });

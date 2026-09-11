@@ -43,7 +43,7 @@ function succeeded(artifact: Record<string, unknown>): AgentResult {
   return { taskId: 'identity-briefing-conversation-1', status: 'succeeded', summary: 'ok', artifact };
 }
 
-function harness(answers: Answer[], options: { maxQuestions?: number } = {}): Harness {
+function harness(answers: Answer[], options: { maxQuestions?: number; initialText?: () => string | undefined; persist?: (snapshot: BriefingConversationSnapshot) => Promise<void> } = {}): Harness {
   const tasks: AgentTask[] = [];
   const persisted: BriefingConversationSnapshot[] = [];
   const provider: ModelProvider = {
@@ -57,10 +57,11 @@ function harness(answers: Answer[], options: { maxQuestions?: number } = {}): Ha
   const conversation = new BriefingConversation({
     runId: 'run-conversa',
     provider,
-    persist: async (snapshot) => { persisted.push(snapshot); },
+    persist: async (snapshot) => { await options.persist?.(snapshot); persisted.push(snapshot); },
     now: () => new Date('2026-09-11T12:00:00.000Z'),
     newId: (() => { let n = 0; return () => `msg-${(n += 1)}`; })(),
     ...(options.maxQuestions === undefined ? {} : { maxQuestions: options.maxQuestions }),
+    ...(options.initialText === undefined ? {} : { initialText: options.initialText }),
   });
   return { conversation, tasks, persisted };
 }
@@ -255,6 +256,31 @@ describe('briefing conversation safe answers', () => {
     expect(snapshot.fallback).toBe(true);
     expect(snapshot.messages.every((message) => !message.text.includes('<section'))).toBe(true);
   });
+
+  it('accepts a summary that repeats a hex value and a link the captain wrote', async () => {
+    const echoed = turn({ ...FINAL, summary: 'Queremos manter o verde #2E7D32 da marca atual; nosso site hoje é https://clinicax.com.br.' } as Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>);
+    const { conversation, tasks } = harness([succeeded(CONFIRMATION), succeeded(echoed)]);
+    await conversation.send({ message: 'Queremos manter o verde #2E7D32 da marca atual.', action: 'answer', idempotencyKey: nextKey() });
+
+    const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva que mantém o verde da marca atual.', idempotencyKey: nextKey() });
+
+    expect(closed.state).toBe('final');
+    expect(closed.directions).toHaveLength(3);
+    expect(closed.summary).toContain('#2E7D32');
+    expect(tasks).toHaveLength(2);
+  });
+
+  it('still refuses a hex value the model wrote into a conceptual direction it authored', async () => {
+    const painted = turn({ ...FINAL, directions: [{ ...direction('dir-um', 'Um'), palette: 'Base areia com verde #2E7D32 nos destaques.' }, direction('dir-dois', 'Dois'), direction('dir-tres', 'Três')] } as Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>);
+    const { conversation } = harness([succeeded(CONFIRMATION), succeeded(painted), succeeded(painted)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: nextKey() });
+
+    expect(closed.directions).toEqual([]);
+    expect(closed.briefing).toBe('Clínica de bairro preventiva.');
+    expect(closed.error?.code).toBe('CONVERSATION_SCHEMA_INVALID');
+  });
 });
 
 describe('briefing conversation idempotency', () => {
@@ -408,6 +434,55 @@ describe('briefing conversation persistence', () => {
   });
 });
 
+describe('briefing conversation durability', () => {
+  it('leaves the conversation where the execution says it is when the write fails, so a retry does not duplicate the turn', async () => {
+    let failWrite = true;
+    const { conversation, tasks, persisted } = harness([succeeded(RECOMMENDATION), succeeded(RECOMMENDATION)], {
+      persist: async () => { if (failWrite) { failWrite = false; throw new Error('SQLITE_BUSY'); } },
+    });
+    const retried = 'same-key';
+
+    await expect(conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: retried })).rejects.toThrow(/SQLITE_BUSY/);
+    expect(conversation.state).toBe('entry');
+    expect(conversation.snapshot().messages).toEqual([]);
+
+    const recovered = await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: retried });
+
+    expect(recovered.messages.filter((message) => message.author === 'captain')).toHaveLength(1);
+    expect(recovered.messages).toHaveLength(2);
+    expect(persisted).toHaveLength(1);
+    expect(tasks).toHaveLength(2);
+  });
+
+  it('offers a safe-mode summary the captain can confirm, even from an entry text that fills the briefing limit', async () => {
+    const long = `Somos uma clínica veterinária de bairro. ${'Detalhe do atendimento diário. '.repeat(260)}`.slice(0, IDENTITY_BRIEFING_MAX_LENGTH);
+    const failure: AgentResult = { taskId: 'identity-briefing-conversation-1', status: 'failed', summary: 'O modelo caiu.', errorCode: 'CONVERSATION_PROVIDER_FAILED' };
+    const { conversation } = harness([failure, succeeded(FINAL)]);
+
+    const safe = await conversation.send({ message: long, action: 'answer', idempotencyKey: nextKey() });
+
+    expect(long.length).toBeGreaterThan(7_500);
+    expect(safe.state).toBe('confirmation');
+    expect(safe.summary!.length).toBeLessThanOrEqual(IDENTITY_BRIEFING_MAX_LENGTH);
+
+    const closed = await conversation.confirm({ briefing: safe.summary!, idempotencyKey: nextKey() });
+
+    expect(closed.state).toBe('final');
+    expect(closed.confirmations).toHaveLength(1);
+  });
+
+  it('opens on the execution briefing the moment the turn needs it, not on the one captured at construction', async () => {
+    let briefing: string | undefined;
+    const { conversation } = harness([succeeded(RECOMMENDATION)], { initialText: () => briefing });
+    briefing = 'Clínica veterinária de bairro restaurada da execução.';
+
+    const opened = await conversation.send({ action: 'answer', idempotencyKey: nextKey() });
+
+    expect(opened.normalizedText).toBe('Clínica veterinária de bairro restaurada da execução.');
+    expect(opened.state).toBe('recommendation');
+  });
+});
+
 describe('briefing conversation contract', () => {
   it('agrees with itself about which states accept a message, a confirmation and a transition', () => {
     for (const state of ['entry', 'recommendation', 'question', 'confirmation'] as const) expect(canSendBriefingMessage(state)).toBe(true);
@@ -437,6 +512,10 @@ describe('briefing conversation contract', () => {
     expect(findVisualOutput('color.brand.primary')).toContain('token-path');
     expect(findVisualOutput('veja https://exemplo.com')).toContain('link');
     expect(findVisualOutput('anexo logo.png')).toContain('image-file');
+    expect(findVisualOutput('use #0a7d5c', 'restated')).toEqual([]);
+    expect(findVisualOutput('veja https://exemplo.com', 'restated')).toEqual([]);
+    expect(findVisualOutput('<div>home</div>', 'restated')).toContain('markup');
+    expect(findVisualOutput('color.brand.primary', 'restated')).toContain('token-path');
   });
 
   it('builds the safe summary out of the captain words alone', () => {

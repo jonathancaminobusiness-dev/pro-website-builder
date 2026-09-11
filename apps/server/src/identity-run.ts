@@ -146,7 +146,7 @@ export class IdentityRun {
         this.stage = this.newStage();
         await options.repository.updateRunBriefing(options.runId, briefing);
       },
-      ...(options.briefing === undefined ? {} : { initialText: options.briefing }),
+      initialText: () => this.briefing,
       ...(options.conversationTimeoutMs === undefined ? {} : { timeoutMs: options.conversationTimeoutMs }),
     });
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);

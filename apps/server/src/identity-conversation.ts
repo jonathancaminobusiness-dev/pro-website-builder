@@ -4,6 +4,7 @@ import {
   BRIEFING_CONVERSATION_MAX_QUESTIONS,
   BRIEFING_CONVERSATION_TURN_TIMEOUT_MS,
   BRIEFING_MESSAGE_MAX_LENGTH,
+  BRIEFING_SUMMARY_MAX_LENGTH,
   briefingConversationSnapshotSchema,
   briefingConversationTurnSchema,
   canBriefingConversationTransition,
@@ -52,12 +53,13 @@ export interface BriefingConversationOptions {
   /** Called with the briefing a confirmation produced, so the execution carries it into the identity stage. */
   onConfirmed?: (briefing: string, revision: number) => Promise<void> | void;
   /**
-   * The free briefing the execution was created with, when the caller supplied
-   * one. The plan creates the execution from the captain's first text, so the
-   * opening turn may carry no message at all and start from that text instead
-   * of asking the captain to type it twice.
+   * The briefing the execution carries, read at the moment a turn needs it. The
+   * plan creates the execution from the captain's first text, so the opening
+   * turn may carry no message at all and start from that text instead of asking
+   * the captain to type it twice — and because it is read rather than captured,
+   * a restarted process resolves it from the execution like everything else.
    */
-  initialText?: string;
+  initialText?: () => string | undefined;
   timeoutMs?: number;
   maxQuestions?: number;
   now?: () => Date;
@@ -101,12 +103,12 @@ function emptyState(): ConversationState {
  */
 export class BriefingConversation {
   private data = emptyState();
-  private readonly inFlight = new Map<string, Promise<BriefingConversationSnapshot>>();
   /**
-   * One conversation runs one turn at a time. The idempotency key only makes a
-   * retry of the *same* turn safe; two different turns — a cancel sent while a
-   * 60-second model call is still in flight — would otherwise read a state that
-   * the other one is about to move.
+   * One conversation runs one turn at a time, and a turn is all-or-nothing. The
+   * queue is what makes a retry safe — the retry waits for the turn it is
+   * retrying and then reads its recorded key — and it is what keeps a cancel
+   * sent during a 60-second model call from being overwritten when that call
+   * lands.
    */
   private queue: Promise<unknown> = Promise.resolve();
   private readonly timeoutMs: number;
@@ -186,21 +188,23 @@ export class BriefingConversation {
    * (the caller joins it) or already finished (the caller reads its result).
    */
   async send(input: { message?: string | undefined; action: BriefingMessageAction; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
-    const running = this.inFlight.get(input.idempotencyKey);
-    if (running) return await running;
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
-    const turn = this.enqueue(() => this.runSend(input)).finally(() => this.inFlight.delete(input.idempotencyKey));
-    this.inFlight.set(input.idempotencyKey, turn);
-    return await turn;
+    return await this.enqueue(() => this.runSend(input));
   }
 
   private enqueue<T>(run: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(run, run);
+    const atomic = async (): Promise<T> => {
+      const before = structuredClone(this.data);
+      try { return await run(); }
+      catch (error) { this.data = before; throw error; }
+    };
+    const next = this.queue.then(atomic, atomic);
     this.queue = next.then(() => undefined, () => undefined);
     return next;
   }
 
   private async runSend(input: { message?: string | undefined; action: BriefingMessageAction; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
+    if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
     if (!canSendBriefingMessage(this.data.state)) throw new ConversationError(this.closedReason(), 409);
 
     if (input.action === 'cancel') {
@@ -213,7 +217,7 @@ export class BriefingConversation {
     const action: 'answer' | 'correct' | 'skip' = input.action;
     const text = this.captainText(input.message, action);
     if (this.data.state === 'entry') {
-      this.data.originalText = input.message ?? this.options.initialText ?? '';
+      this.data.originalText = input.message ?? this.options.initialText?.() ?? '';
       this.data.normalizedText = text;
     }
     this.append({ author: 'captain', text, state: this.data.state });
@@ -233,15 +237,12 @@ export class BriefingConversation {
    * a model that fails here costs the directions, never the confirmation.
    */
   async confirm(input: { briefing: string; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
-    const running = this.inFlight.get(input.idempotencyKey);
-    if (running) return await running;
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
-    const turn = this.enqueue(() => this.runConfirm(input)).finally(() => this.inFlight.delete(input.idempotencyKey));
-    this.inFlight.set(input.idempotencyKey, turn);
-    return await turn;
+    return await this.enqueue(() => this.runConfirm(input));
   }
 
   private async runConfirm(input: { briefing: string; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
+    if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
     if (!canConfirmBriefing(this.data.state)) throw new ConversationError(this.confirmRefusal(), 409);
     let briefing: string;
     try { briefing = normalizeIdentityBriefing(input.briefing, true); }
@@ -396,7 +397,8 @@ export class BriefingConversation {
       if (this.data.state !== 'question') throw new ConversationError('Não há pergunta aberta para pular.', 409);
       return message?.trim() || 'Prefiro não responder essa pergunta agora.';
     }
-    if (message === undefined && this.data.state === 'entry' && this.options.initialText !== undefined) return this.options.initialText.trim();
+    const entry = this.data.state === 'entry' ? this.options.initialText?.() : undefined;
+    if (message === undefined && entry !== undefined) return entry.trim();
     if (typeof message !== 'string') throw new ConversationError('A mensagem deve ser um texto.', 400);
     const text = message.trim();
     if (text.length === 0) throw new ConversationError('A mensagem é obrigatória e não pode estar vazia.', 400);
@@ -477,7 +479,7 @@ const DECLARED_GAPS_HEADING = 'Lacunas declaradas em aberto:';
 export function deterministicSummary(data: { normalizedText: string; askedQuestions: readonly BriefingAnsweredQuestion[]; openGaps: readonly BriefingGap[]; messages: readonly BriefingConversationMessage[] }): string {
   const answers = data.askedQuestions.filter((entry) => entry.answer !== undefined || entry.skipped);
   const extra = data.messages.filter((entry) => entry.author === 'captain').slice(1).map((entry) => entry.text);
-  return [
+  return withinBriefingLimit([
     'Resumo montado pelo Studio a partir do que você escreveu, sem interpretação do modelo.',
     '',
     'Texto inicial:',
@@ -485,7 +487,19 @@ export function deterministicSummary(data: { normalizedText: string; askedQuesti
     ...(answers.length > 0 ? ['', 'Respostas registradas:', ...answers.map((entry) => `- ${entry.question} → ${entry.skipped ? 'pulada' : entry.answer ?? ''}`)] : []),
     ...(extra.length > 0 ? ['', 'Outras mensagens suas:', ...extra.map((text) => `- ${text}`)] : []),
     ...(data.openGaps.length > 0 ? ['', DECLARED_GAPS_HEADING, ...data.openGaps.map((gap) => `- ${gap.gap} (impacto: ${gap.impact})`)] : []),
-  ].join('\n');
+  ].join('\n'));
+}
+
+const TRUNCATED = '\n[resumo cortado no limite do briefing; edite o que faltar antes de confirmar]';
+
+/**
+ * Safe mode offers a summary the captain is meant to confirm, so it has to fit
+ * the briefing the confirmation will validate. The entry text comes first, so
+ * what a cut loses is the transcript the captain can still read above it.
+ */
+function withinBriefingLimit(summary: string): string {
+  if (summary.length <= BRIEFING_SUMMARY_MAX_LENGTH) return summary;
+  return `${summary.slice(0, BRIEFING_SUMMARY_MAX_LENGTH - TRUNCATED.length).trimEnd()}${TRUNCATED}`;
 }
 
 function normalizedMessage(error: unknown): string {
