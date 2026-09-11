@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { ZodError } from 'zod';
 import { CLAUDE_RUNNER_TIMEOUT_MS, execFileExecutor } from './claude-runner.js';
 import type { ClaudeRunnerOptions } from './model.js';
 
@@ -38,6 +39,28 @@ function isSchemaFailure(error: unknown): boolean {
   return code === 'SCHEMA_INVALID';
 }
 
+/** How many violations a correction prompt carries; a model that broke fifty rules is not helped by all fifty. */
+const CORRECTION_ISSUE_LIMIT = 12;
+
+/**
+ * The one correction a structured worker gets, carrying the violations that
+ * actually happened. Most of what fails here are `superRefine` rules the JSON
+ * Schema cannot express - a window that must hold exactly these node ids, a prop
+ * that must be a token reference - so a model told only "your answer did not
+ * match the schema" is corrected for the wrong reason and then fails fatally.
+ * An answer that was not JSON at all has no issues to name and says so instead
+ * of inventing one.
+ */
+export function correctionPrompt(prompt: string, error: unknown): string {
+  const issues = error instanceof ZodError
+    ? error.issues.slice(0, CORRECTION_ISSUE_LIMIT).map((issue) => `- ${issue.path.length > 0 ? issue.path.join('.') : '(root)'}: ${issue.message}`)
+    : [];
+  const violation = issues.length > 0
+    ? `These are the violations your previous answer carried; every one of them has to be gone from the next one:\n${issues.join('\n')}${error instanceof ZodError && error.issues.length > issues.length ? `\n- (and ${error.issues.length - issues.length} more of the same kind)` : ''}`
+    : `Your previous answer could not be read as the requested JSON: ${error instanceof Error ? error.message : String(error)}`;
+  return `${prompt}\n\nYour previous answer did not match the supplied schema. ${violation}\n\nReturn only JSON matching the schema.`;
+}
+
 export async function runValidatedJson<T>(runner: JsonModelRunner, request: JsonRunRequest, parse: (raw: unknown) => T, signal?: AbortSignal): Promise<T> {
   let prompt = request.prompt;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -46,7 +69,7 @@ export async function runValidatedJson<T>(runner: JsonModelRunner, request: Json
       return parse(await runner.run({ ...request, prompt }, signal));
     } catch (error) {
       if (!isSchemaFailure(error) || attempt > 0) throw error;
-      prompt = `${request.prompt}\nCorrect the previous schema violation and return only JSON matching the supplied schema.`;
+      prompt = correctionPrompt(request.prompt, error);
       continue;
     }
   }

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
+import { correctionPrompt } from '@pwb/providers';
 
 const execFileAsync = promisify(execFile);
 
@@ -67,8 +68,8 @@ export class ClaudeSession implements StructuredSession {
   }
 
   async ask<T>(input: ClaudeAsk<T>): Promise<T> {
+    let prompt = input.prompt;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const prompt = attempt === 0 ? input.prompt : `${input.prompt}\n\nYour previous answer did not match the supplied schema. Return only JSON matching it.`;
       try {
         const stdout = await this.execute(this.executable, [
           '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(input.schema),
@@ -82,7 +83,7 @@ export class ClaudeSession implements StructuredSession {
         const details = error as { name?: unknown; code?: unknown };
         if (details.name === 'AbortError' || details.code === 'ABORT_ERR') throw error;
         const schemaProblem = error instanceof SyntaxError || error instanceof ZodError;
-        if (schemaProblem && attempt === 0) continue;
+        if (schemaProblem && attempt === 0) { prompt = correctionPrompt(input.prompt, error); continue; }
         throw new ClaudeSessionError(schemaProblem ? 'SCHEMA_INVALID' : String(details.code ?? 'PROCESS_FAILED'), schemaProblem ? 'Claude returned an answer that does not match the supplied schema.' : `The Claude Code process failed with ${String(details.code ?? 'an unknown error')}.`);
       }
     }
