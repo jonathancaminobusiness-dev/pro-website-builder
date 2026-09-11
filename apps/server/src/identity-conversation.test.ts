@@ -49,7 +49,7 @@ function succeeded(artifact: Record<string, unknown>): Answer {
   return (task) => ({ taskId: task.id, status: 'succeeded', summary: 'ok', artifact });
 }
 
-function harness(answers: Answer[], options: { maxQuestions?: number; initialText?: () => string | undefined; persist?: (snapshot: BriefingConversationSnapshot) => Promise<void>; onConfirmed?: (briefing: string, revision: number) => void } = {}): Harness {
+function harness(answers: Answer[], options: { maxQuestions?: number; initialText?: () => string | undefined; persist?: (snapshot: BriefingConversationSnapshot) => Promise<void>; onConfirmed?: (briefing: string) => void } = {}): Harness {
   const tasks: AgentTask[] = [];
   const persisted: BriefingConversationSnapshot[] = [];
   const writes: Array<{ snapshot: BriefingConversationSnapshot; confirmedBriefing?: string }> = [];
@@ -334,9 +334,10 @@ describe('briefing conversation state machine', () => {
     named.restore(onDisk);
     const afterNamed = await named.reopen({ idempotencyKey: nextKey() });
 
-    // The archive keeps what that record claimed to be, while the round this
-    // execution is on is the one round it can account for, plus the new one.
-    expect(afterNamed.previousRevisions[0]?.revision).toBe(3);
+    // Position is the only numbering rule: the damaged round takes the next
+    // one, and what its own record claimed travels with the bytes instead.
+    expect(afterNamed.previousRevisions[0]?.revision).toBe(1);
+    expect(afterNamed.previousRevisions[0]?.unreadable?.claimedRevision).toBe(3);
     expect(afterNamed.revision).toBe(2);
 
     const anonymous = harness([succeeded(RECOMMENDATION)]).conversation;
@@ -344,7 +345,8 @@ describe('briefing conversation state machine', () => {
     const afterAnonymous = await anonymous.reopen({ idempotencyKey: nextKey() });
 
     // Nothing in the record says which round it was, so nothing claims to.
-    expect(afterAnonymous.previousRevisions[0]?.revision).toBeUndefined();
+    expect(afterAnonymous.previousRevisions[0]?.revision).toBe(1);
+    expect(afterAnonymous.previousRevisions[0]?.unreadable?.claimedRevision).toBeUndefined();
     expect(afterAnonymous.revision).toBe(2);
     expect(afterAnonymous.messages[0]?.text).toContain('Esta é a conversa 2');
 
@@ -353,9 +355,38 @@ describe('briefing conversation state machine', () => {
     await anonymous.send({ message: 'Recomeçando pela prevenção.', action: 'answer', idempotencyKey: nextKey() });
     await anonymous.send({ action: 'cancel', idempotencyKey: nextKey() });
     const afterThird = await anonymous.reopen({ idempotencyKey: nextKey() });
-    expect(afterThird.previousRevisions.map((entry) => entry.revision)).toEqual([undefined, 2]);
+    expect(afterThird.previousRevisions.map((entry) => entry.revision)).toEqual([1, 2]);
     expect(afterThird.revision).toBe(3);
     expect(afterThird.messages[0]?.text).toContain('Esta é a conversa 3');
+  });
+
+  it('numbers every archived round by its position, monotonically, even after an unreadable one', async () => {
+    const { conversation } = harness([succeeded(RECOMMENDATION), succeeded(RECOMMENDATION), succeeded(RECOMMENDATION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    await conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    await conversation.reopen({ idempotencyKey: nextKey() });
+    await conversation.send({ message: 'Prevenção é o centro.', action: 'answer', idempotencyKey: nextKey() });
+    await conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    const twice = await conversation.reopen({ idempotencyKey: nextKey() });
+    expect(twice.previousRevisions.map((entry) => entry.revision)).toEqual([1, 2]);
+    expect(twice.revision).toBe(3);
+    // The row this execution would be restored from, refused by this build.
+    const onDisk = JSON.stringify({ ...JSON.parse(conversation.serialize()) as Record<string, unknown>, messages: [{ escrito: 'por outra versão' }] });
+
+    const damaged = harness([succeeded(RECOMMENDATION)]).conversation;
+    damaged.restore(onDisk);
+    await damaged.reopen({ idempotencyKey: nextKey() });
+    await damaged.send({ message: 'Recomeçando pela prevenção.', action: 'answer', idempotencyKey: nextKey() });
+    await damaged.send({ action: 'cancel', idempotencyKey: nextKey() });
+    const after = await damaged.reopen({ idempotencyKey: nextKey() });
+
+    // Every archived round numbers itself 1..n in the order it was archived,
+    // the current one is n+1, and no number is used twice.
+    const numbers = after.previousRevisions.map((entry) => entry.revision);
+    expect(numbers).toEqual([1, 2]);
+    expect(after.revision).toBe(3);
+    expect(new Set(numbers).size).toBe(numbers.length);
+    expect(after.previousRevisions[0]?.unreadable?.claimedRevision).toBe(3);
   });
 
   it('stays damaged when the reopen write fails, instead of falling back to an execution that never had a chat', async () => {
@@ -865,11 +896,11 @@ describe('briefing conversation durability', () => {
   });
 
   it('signs nothing and applies nothing when the confirmation write fails, and closes on the same key once it succeeds', async () => {
-    const confirmed: Array<{ briefing: string; revision: number }> = [];
+    const confirmed: string[] = [];
     let writes = 0;
     const { conversation } = harness([succeeded(CONFIRMATION), succeeded(FINAL), succeeded(FINAL)], {
       persist: async (snapshot) => { if (snapshot.confirmations.length > 0 && (writes += 1) === 1) throw new Error('SQLITE_BUSY'); },
-      onConfirmed: (briefing, revision) => { confirmed.push({ briefing, revision }); },
+      onConfirmed: (briefing) => { confirmed.push(briefing); },
     });
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
     const retried = nextKey();
@@ -885,7 +916,7 @@ describe('briefing conversation durability', () => {
 
     expect(closed.state).toBe('final');
     expect(closed.confirmations.map((entry) => entry.revision)).toEqual([1]);
-    expect(confirmed).toEqual([{ briefing: 'Clínica de bairro preventiva.', revision: 1 }]);
+    expect(confirmed).toEqual(['Clínica de bairro preventiva.']);
   });
 
   it('signs the briefing in the same write as the confirmation, and hands it to the execution only after that write', async () => {

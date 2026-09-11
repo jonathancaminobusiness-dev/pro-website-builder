@@ -88,9 +88,11 @@ export async function handleIdentityRequest(
   // The briefing conversation: send a message, resume the history, close the
   // briefing, or open the next round after a cancelled or failed one. Every
   // route here carries an idempotency key, because a retry after a timed-out
-  // model turn must never buy a second turn; `confirm` also carries the
-  // approver role, because signing the briefing the fan-out will run on is a
-  // captain's act exactly as starting the stage on it is.
+  // model turn must never buy a second turn, and every one that writes carries
+  // the approver role: spending a turn, archiving a round and signing the
+  // briefing the fan-out will run on are the captain's acts exactly as starting
+  // the stage on it is. Resuming the transcript writes nothing and asks for
+  // neither.
   if (action === 'conversation') {
     if (request.method === 'GET') {
       if (subAction) { send(404, { error: 'Not found.' }); return true; }
@@ -108,11 +110,13 @@ export async function handleIdentityRequest(
         return true;
       }
       if (subAction === 'reopen') {
+        if (!captain(payload, send, 'open another briefing conversation for')) return true;
         const reopen = briefingReopenRequestSchema.safeParse(payload);
         if (!reopen.success) { send(400, { error: requestProblem(reopen.error.issues) }); return true; }
         send(200, await run.conversation.reopen(reopen.data));
         return true;
       }
+      if (!captain(payload, send, 'talk to the briefing conversation of')) return true;
       const message = briefingConversationRequestSchema.safeParse(payload);
       if (!message.success) { send(400, { error: requestProblem(message.error.issues) }); return true; }
       send(200, await run.conversation.send(message.data));

@@ -53,7 +53,7 @@ async function driveToConfirmation(origin: string, runId: string, prefix = 'turn
   const messages = [undefined, 'A prevenção é o centro.', 'Segurança clínica com carinho.', 'Acompanhamento é a promessa.'];
   let snapshot!: BriefingConversationSnapshot;
   for (const [index, message] of messages.entries()) {
-    snapshot = await snapshotOf(await post(origin, briefingConversationPath(runId), { ...(message === undefined ? {} : { message }), idempotencyKey: `${prefix}-${index}` }));
+    snapshot = await snapshotOf(await post(origin, briefingConversationPath(runId), { approverRole: 'captain', ...(message === undefined ? {} : { message }), idempotencyKey: `${prefix}-${index}` }));
   }
   expect(snapshot.state).toBe('confirmation');
   return snapshot;
@@ -66,7 +66,7 @@ describe('briefing conversation API', () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-entrada', FIRST_TEXT);
 
-    const opened = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-entrada'), { idempotencyKey: 'turn-1' }));
+    const opened = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-entrada'), { approverRole: 'captain', idempotencyKey: 'turn-1' }));
 
     expect(opened.runId).toBe('conversa-entrada');
     expect(opened.state).toBe('recommendation');
@@ -79,7 +79,7 @@ describe('briefing conversation API', () => {
   it('resumes the history on GET without spending a turn', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-retomada', FIRST_TEXT);
-    await post(server.origin, briefingConversationPath('conversa-retomada'), { idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-retomada'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
 
     const resumed = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-retomada')}`, { headers: { origin: STUDIO_ORIGIN } }));
 
@@ -90,16 +90,16 @@ describe('briefing conversation API', () => {
   it('walks the whole conversation and closes the briefing with three conceptual directions', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-completa', FIRST_TEXT);
-    await post(server.origin, briefingConversationPath('conversa-completa'), { idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-completa'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
 
-    const asked = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-completa'), { message: 'A prevenção é o centro do que fazemos.', idempotencyKey: 'turn-2' }));
+    const asked = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-completa'), { approverRole: 'captain', message: 'A prevenção é o centro do que fazemos.', idempotencyKey: 'turn-2' }));
     expect(asked.state).toBe('question');
     expect(asked.messages.at(-1)?.turn?.question?.why).toBeTruthy();
 
-    const answered = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-completa'), { message: 'Segurança clínica sem perder o carinho.', idempotencyKey: 'turn-3' }));
+    const answered = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-completa'), { approverRole: 'captain', message: 'Segurança clínica sem perder o carinho.', idempotencyKey: 'turn-3' }));
     expect(answered.state).toBe('recommendation');
 
-    const offered = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-completa'), { message: 'Queremos ser lembrados pelo acompanhamento.', idempotencyKey: 'turn-4' }));
+    const offered = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-completa'), { approverRole: 'captain', message: 'Queremos ser lembrados pelo acompanhamento.', idempotencyKey: 'turn-4' }));
     expect(offered.state).toBe('confirmation');
     expect(offered.summary).toBeTruthy();
 
@@ -117,10 +117,10 @@ describe('briefing conversation API', () => {
   it('carries the confirmed briefing onto the execution, which is what enables the identity stage', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-briefing', FIRST_TEXT);
-    await post(server.origin, briefingConversationPath('conversa-briefing'), { idempotencyKey: 'turn-1' });
-    await post(server.origin, briefingConversationPath('conversa-briefing'), { message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
-    await post(server.origin, briefingConversationPath('conversa-briefing'), { message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
-    await post(server.origin, briefingConversationPath('conversa-briefing'), { message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
+    await post(server.origin, briefingConversationPath('conversa-briefing'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-briefing'), { approverRole: 'captain', message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
+    await post(server.origin, briefingConversationPath('conversa-briefing'), { approverRole: 'captain', message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
+    await post(server.origin, briefingConversationPath('conversa-briefing'), { approverRole: 'captain', message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
 
     await post(server.origin, briefingConversationConfirmPath('conversa-briefing'), { approverRole: 'captain', briefing: 'Clínica de bairro preventiva, com autoridade clínica e proximidade cotidiana.', idempotencyKey: 'confirm-1' });
     const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-briefing`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string };
@@ -136,10 +136,10 @@ describe('briefing conversation API', () => {
   it('freezes the briefing once the identity stage has started, instead of recording a revision nobody applies', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-congelada', FIRST_TEXT);
-    await post(server.origin, briefingConversationPath('conversa-congelada'), { idempotencyKey: 'turn-1' });
-    await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
-    await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
-    await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
+    await post(server.origin, briefingConversationPath('conversa-congelada'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-congelada'), { approverRole: 'captain', message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
+    await post(server.origin, briefingConversationPath('conversa-congelada'), { approverRole: 'captain', message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
+    await post(server.origin, briefingConversationPath('conversa-congelada'), { approverRole: 'captain', message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
     await post(server.origin, briefingConversationConfirmPath('conversa-congelada'), { approverRole: 'captain', briefing: 'Clínica de bairro preventiva, com acompanhamento contínuo.', idempotencyKey: 'confirm-1' });
     const started = await post(server.origin, '/api/identity/runs/conversa-congelada/start', { approverRole: 'captain' });
     expect(started.status).toBe(200);
@@ -148,7 +148,7 @@ describe('briefing conversation API', () => {
     // The same rule holds at the boundary every turn passes through, so the two
     // routes send the captain to the same place instead of to a revision the
     // confirmation would refuse.
-    const turn = await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'Pensando melhor, mudamos de ideia.', idempotencyKey: 'turn-5' });
+    const turn = await post(server.origin, briefingConversationPath('conversa-congelada'), { approverRole: 'captain', message: 'Pensando melhor, mudamos de ideia.', idempotencyKey: 'turn-5' });
 
     expect(turn.status).toBe(409);
     expect(late.status).toBe(409);
@@ -164,7 +164,7 @@ describe('briefing conversation API', () => {
   it('refuses to start the identity stage while the conversation is still open', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-em-curso', FIRST_TEXT);
-    const opened = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-em-curso'), { idempotencyKey: 'turn-1' }));
+    const opened = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-em-curso'), { approverRole: 'captain', idempotencyKey: 'turn-1' }));
     expect(opened.state).toBe('recommendation');
 
     const refused = await post(server.origin, '/api/identity/runs/conversa-em-curso/start', { approverRole: 'captain' });
@@ -185,14 +185,14 @@ describe('briefing conversation API', () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-reaberta', FIRST_TEXT);
     await driveToConfirmation(server.origin, 'conversa-reaberta');
-    const cancelled = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-reaberta'), { action: 'cancel', idempotencyKey: 'cancel-1' }));
+    const cancelled = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-reaberta'), { approverRole: 'captain', action: 'cancel', idempotencyKey: 'cancel-1' }));
     expect(cancelled.state).toBe('cancelled');
     // A cancelled conversation signed nothing, so the stage has nothing to run.
     const refused = await post(server.origin, '/api/identity/runs/conversa-reaberta/start', { approverRole: 'captain' });
     expect(refused.status).toBe(400);
     expect((await refused.json() as { error: string }).error).toMatch(/foi cancelada/);
 
-    const reopened = await post(server.origin, briefingConversationReopenPath('conversa-reaberta'), { idempotencyKey: 'reopen-1' });
+    const reopened = await post(server.origin, briefingConversationReopenPath('conversa-reaberta'), { approverRole: 'captain', idempotencyKey: 'reopen-1' });
 
     expect(reopened.status).toBe(200);
     const next = await snapshotOf(reopened);
@@ -213,10 +213,10 @@ describe('briefing conversation API', () => {
   it('refuses a reopen of a conversation that is still open, and one without an idempotency key', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-aberta-demais', FIRST_TEXT);
-    await post(server.origin, briefingConversationPath('conversa-aberta-demais'), { idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-aberta-demais'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
 
-    const open = await post(server.origin, briefingConversationReopenPath('conversa-aberta-demais'), { idempotencyKey: 'reopen-1' });
-    const keyless = await post(server.origin, briefingConversationReopenPath('conversa-aberta-demais'), {});
+    const open = await post(server.origin, briefingConversationReopenPath('conversa-aberta-demais'), { approverRole: 'captain', idempotencyKey: 'reopen-1' });
+    const keyless = await post(server.origin, briefingConversationReopenPath('conversa-aberta-demais'), { approverRole: 'captain' });
 
     expect(open.status).toBe(409);
     expect((await open.json() as { error: string }).error).toMatch(/ainda está aberta/);
@@ -244,12 +244,39 @@ describe('briefing conversation API', () => {
     expect(signed.confirmations).toHaveLength(1);
   });
 
+  it('refuses a turn and a reopen that do not carry the captain, and spends nothing on them', async () => {
+    const server = await conversationServer();
+    await createRun(server.origin, 'conversa-sem-papel', FIRST_TEXT);
+
+    const anonymousTurn = await post(server.origin, briefingConversationPath('conversa-sem-papel'), { message: 'Olá.', idempotencyKey: 'turn-1' });
+    const designerTurn = await post(server.origin, briefingConversationPath('conversa-sem-papel'), { approverRole: 'designer', message: 'Olá.', idempotencyKey: 'turn-1' });
+
+    expect(anonymousTurn.status).toBe(403);
+    expect(designerTurn.status).toBe(403);
+    // No turn was bought and no key was spent: the chat is untouched, and the
+    // captain still opens it with the same key.
+    const untouched = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-sem-papel')}`, { headers: { origin: STUDIO_ORIGIN } }));
+    expect(untouched.state).toBe('entry');
+    expect(untouched.messages).toEqual([]);
+    await post(server.origin, briefingConversationPath('conversa-sem-papel'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
+    const cancelled = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-sem-papel'), { approverRole: 'captain', action: 'cancel', idempotencyKey: 'cancel-1' }));
+    expect(cancelled.state).toBe('cancelled');
+
+    const anonymousReopen = await post(server.origin, briefingConversationReopenPath('conversa-sem-papel'), { idempotencyKey: 'reopen-1' });
+
+    expect(anonymousReopen.status).toBe(403);
+    const stillClosed = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-sem-papel')}`, { headers: { origin: STUDIO_ORIGIN } }));
+    expect(stillClosed.state).toBe('cancelled');
+    expect(stillClosed.previousRevisions).toEqual([]);
+    expect((await post(server.origin, briefingConversationReopenPath('conversa-sem-papel'), { approverRole: 'captain', idempotencyKey: 'reopen-1' })).status).toBe(200);
+  });
+
   it('never duplicates a turn when the same idempotency key is retried', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-idempotente', FIRST_TEXT);
 
-    const first = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-idempotente'), { idempotencyKey: 'retry' }));
-    const second = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-idempotente'), { idempotencyKey: 'retry' }));
+    const first = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-idempotente'), { approverRole: 'captain', idempotencyKey: 'retry' }));
+    const second = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-idempotente'), { approverRole: 'captain', idempotencyKey: 'retry' }));
 
     expect(second.messages).toHaveLength(first.messages.length);
     expect(second.messages).toEqual(first.messages);
@@ -259,31 +286,31 @@ describe('briefing conversation API', () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-invalida', FIRST_TEXT);
 
-    const missingKey = await post(server.origin, briefingConversationPath('conversa-invalida'), { message: 'Olá.' });
+    const missingKey = await post(server.origin, briefingConversationPath('conversa-invalida'), { approverRole: 'captain', message: 'Olá.' });
     expect(missingKey.status).toBe(400);
     expect((await missingKey.json() as { error: string }).error).toContain('idempotencyKey');
 
-    const tooLong = await post(server.origin, briefingConversationPath('conversa-invalida'), { message: 'x'.repeat(IDENTITY_BRIEFING_MAX_LENGTH + 1), idempotencyKey: 'k' });
+    const tooLong = await post(server.origin, briefingConversationPath('conversa-invalida'), { approverRole: 'captain', message: 'x'.repeat(IDENTITY_BRIEFING_MAX_LENGTH + 1), idempotencyKey: 'k' });
     expect(tooLong.status).toBe(400);
 
-    await post(server.origin, briefingConversationPath('conversa-invalida'), { idempotencyKey: 'turn-1' });
-    const empty = await post(server.origin, briefingConversationPath('conversa-invalida'), { message: '   ', idempotencyKey: 'k2' });
+    await post(server.origin, briefingConversationPath('conversa-invalida'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
+    const empty = await post(server.origin, briefingConversationPath('conversa-invalida'), { approverRole: 'captain', message: '   ', idempotencyKey: 'k2' });
     expect(empty.status).toBe(400);
     expect((await empty.json() as { error: string }).error).toContain('não pode estar vazia');
 
-    const unknownField = await post(server.origin, briefingConversationPath('conversa-invalida'), { message: 'Olá.', idempotencyKey: 'k3', preview: true });
+    const unknownField = await post(server.origin, briefingConversationPath('conversa-invalida'), { approverRole: 'captain', message: 'Olá.', idempotencyKey: 'k3', preview: true });
     expect(unknownField.status).toBe(400);
   });
 
   it('stops the conversation on cancel and keeps the execution reopenable', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-cancelada', FIRST_TEXT);
-    await post(server.origin, briefingConversationPath('conversa-cancelada'), { idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-cancelada'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
 
-    const cancelled = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-cancelada'), { action: 'cancel', idempotencyKey: 'cancel-1' }));
+    const cancelled = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-cancelada'), { approverRole: 'captain', action: 'cancel', idempotencyKey: 'cancel-1' }));
     expect(cancelled.state).toBe('cancelled');
 
-    const refused = await post(server.origin, briefingConversationPath('conversa-cancelada'), { message: 'Mais uma coisa.', idempotencyKey: 'turn-2' });
+    const refused = await post(server.origin, briefingConversationPath('conversa-cancelada'), { approverRole: 'captain', message: 'Mais uma coisa.', idempotencyKey: 'turn-2' });
     expect(refused.status).toBe(409);
 
     const run = await fetch(`${server.origin}/api/identity/runs/conversa-cancelada`, { headers: { origin: STUDIO_ORIGIN } });
@@ -293,11 +320,11 @@ describe('briefing conversation API', () => {
   it('spends no turn on an execution the captain stopped', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-parada', FIRST_TEXT);
-    await post(server.origin, briefingConversationPath('conversa-parada'), { idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-parada'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
     const stopped = await post(server.origin, '/api/identity/runs/conversa-parada/cancel', { approverRole: 'captain' });
     expect(stopped.status).toBe(200);
 
-    const refused = await post(server.origin, briefingConversationPath('conversa-parada'), { message: 'Mais uma coisa.', idempotencyKey: 'turn-2' });
+    const refused = await post(server.origin, briefingConversationPath('conversa-parada'), { approverRole: 'captain', message: 'Mais uma coisa.', idempotencyKey: 'turn-2' });
 
     expect(refused.status).toBe(409);
     const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-parada')}`, { headers: { origin: STUDIO_ORIGIN } }));
@@ -327,10 +354,10 @@ describe('briefing conversation API', () => {
   it('generates no preview and no version while the conversation runs', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-sem-preview', FIRST_TEXT);
-    await post(server.origin, briefingConversationPath('conversa-sem-preview'), { idempotencyKey: 'turn-1' });
-    await post(server.origin, briefingConversationPath('conversa-sem-preview'), { message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
-    await post(server.origin, briefingConversationPath('conversa-sem-preview'), { message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
-    await post(server.origin, briefingConversationPath('conversa-sem-preview'), { message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
+    await post(server.origin, briefingConversationPath('conversa-sem-preview'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-sem-preview'), { approverRole: 'captain', message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
+    await post(server.origin, briefingConversationPath('conversa-sem-preview'), { approverRole: 'captain', message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
+    await post(server.origin, briefingConversationPath('conversa-sem-preview'), { approverRole: 'captain', message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
     await post(server.origin, briefingConversationConfirmPath('conversa-sem-preview'), { approverRole: 'captain', briefing: 'Clínica de bairro preventiva.', idempotencyKey: 'confirm-1' });
 
     const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-sem-preview`, { headers: { origin: STUDIO_ORIGIN } })).json() as { status: string; directions: unknown[]; previewVersionId?: string; gate: { state: string } };
@@ -350,8 +377,8 @@ describe('briefing conversation restart', () => {
     cleanups.push(async () => { await rm(directory, { recursive: true, force: true }); });
     const first = await conversationServer(directory);
     await createRun(first.origin, 'conversa-reinicio', FIRST_TEXT);
-    await post(first.origin, briefingConversationPath('conversa-reinicio'), { idempotencyKey: 'turn-1' });
-    const before = await snapshotOf(await post(first.origin, briefingConversationPath('conversa-reinicio'), { message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' }));
+    await post(first.origin, briefingConversationPath('conversa-reinicio'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
+    const before = await snapshotOf(await post(first.origin, briefingConversationPath('conversa-reinicio'), { approverRole: 'captain', message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' }));
     await first.close();
 
     const second = await conversationServer(directory);
@@ -372,7 +399,7 @@ describe('briefing conversation restart', () => {
     await first.close();
 
     const second = await conversationServer(directory);
-    const response = await post(second.origin, briefingConversationPath('conversa-sem-turno'), { idempotencyKey: 'turn-1' });
+    const response = await post(second.origin, briefingConversationPath('conversa-sem-turno'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
     const opened = await snapshotOf(response);
 
     expect(response.status).toBe(200);
@@ -385,11 +412,11 @@ describe('briefing conversation restart', () => {
     cleanups.push(async () => { await rm(directory, { recursive: true, force: true }); });
     const first = await conversationServer(directory);
     await createRun(first.origin, 'conversa-chave', FIRST_TEXT);
-    const before = await snapshotOf(await post(first.origin, briefingConversationPath('conversa-chave'), { idempotencyKey: 'survives-restart' }));
+    const before = await snapshotOf(await post(first.origin, briefingConversationPath('conversa-chave'), { approverRole: 'captain', idempotencyKey: 'survives-restart' }));
     await first.close();
 
     const second = await conversationServer(directory);
-    const retried = await snapshotOf(await post(second.origin, briefingConversationPath('conversa-chave'), { idempotencyKey: 'survives-restart' }));
+    const retried = await snapshotOf(await post(second.origin, briefingConversationPath('conversa-chave'), { approverRole: 'captain', idempotencyKey: 'survives-restart' }));
 
     expect(retried.messages).toEqual(before.messages);
   });
@@ -399,10 +426,10 @@ describe('briefing conversation restart', () => {
     cleanups.push(async () => { await rm(directory, { recursive: true, force: true }); });
     const first = await conversationServer(directory);
     await createRun(first.origin, 'conversa-confirmada', FIRST_TEXT);
-    await post(first.origin, briefingConversationPath('conversa-confirmada'), { idempotencyKey: 'turn-1' });
-    await post(first.origin, briefingConversationPath('conversa-confirmada'), { message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
-    await post(first.origin, briefingConversationPath('conversa-confirmada'), { message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
-    await post(first.origin, briefingConversationPath('conversa-confirmada'), { message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
+    await post(first.origin, briefingConversationPath('conversa-confirmada'), { approverRole: 'captain', idempotencyKey: 'turn-1' });
+    await post(first.origin, briefingConversationPath('conversa-confirmada'), { approverRole: 'captain', message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
+    await post(first.origin, briefingConversationPath('conversa-confirmada'), { approverRole: 'captain', message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
+    await post(first.origin, briefingConversationPath('conversa-confirmada'), { approverRole: 'captain', message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
     await post(first.origin, briefingConversationConfirmPath('conversa-confirmada'), { approverRole: 'captain', briefing: 'Primeira versão confirmada.', idempotencyKey: 'confirm-1' });
     await first.close();
 

@@ -393,12 +393,12 @@ export type BriefingConversationError = z.infer<typeof briefingConversationError
  */
 export const briefingConversationRevisionSchema = z.object({
   /**
-   * Which round of this execution it was. On a round archived as `unreadable`
-   * it is what that record itself claimed to be, and it is absent when the
-   * record claimed nothing: a number nobody can read is left unstated rather
-   * than invented.
+   * Which round of this execution it was: its position in this list, counted
+   * from 1 in the order the rounds were archived. There is one numbering rule
+   * and this is it, so the numbers are monotonic and never invented — what a
+   * damaged record claimed about itself is informational, below.
    */
-  revision: z.number().int().positive().optional(),
+  revision: z.number().int().positive(),
   /**
    * How this round ended: the two states a captain closes one in, plus
    * `unreadable` for a round whose persisted record no build could read back.
@@ -417,7 +417,12 @@ export const briefingConversationRevisionSchema = z.object({
    * still the only copy of what was said, so opening the next round archives it
    * rather than writing over it.
    */
-  unreadable: z.object({ reason: z.string(), raw: z.string() }).optional(),
+  unreadable: z.object({
+    reason: z.string(),
+    raw: z.string(),
+    /** The round that record said it was, when it said anything readable. It never decides a position. */
+    claimedRevision: z.number().int().positive().optional(),
+  }).optional(),
 }).strict();
 export type BriefingConversationRevision = z.infer<typeof briefingConversationRevisionSchema>;
 
@@ -505,6 +510,7 @@ export type BriefingMessageAction = z.infer<typeof briefingMessageActionSchema>;
 export const briefingConversationRequestSchema = z.object({
   message: z.string().max(BRIEFING_MESSAGE_MAX_LENGTH).optional(),
   action: briefingMessageActionSchema.default('answer'),
+  approverRole: z.literal('captain'),
   idempotencyKey: z.string().trim().min(1).max(BRIEFING_IDEMPOTENCY_KEY_MAX_LENGTH),
 }).strict();
 export type BriefingConversationRequest = z.infer<typeof briefingConversationRequestSchema>;
@@ -512,17 +518,19 @@ export type BriefingConversationRequest = z.infer<typeof briefingConversationReq
 /**
  * Reopening carries no text: the next round starts at `entry` exactly as the
  * first one did, so the captain's opening message goes through the one message
- * route rather than through a second normalization path of its own.
+ * route rather than through a second normalization path of its own. It carries
+ * the approver role like every other state-changing route on the execution.
  */
 export const briefingReopenRequestSchema = z.object({
+  approverRole: z.literal('captain'),
   idempotencyKey: z.string().trim().min(1).max(BRIEFING_IDEMPOTENCY_KEY_MAX_LENGTH),
 }).strict();
 export type BriefingReopenRequest = z.infer<typeof briefingReopenRequestSchema>;
 
 /**
- * The one request of this module that carries an approver role. Confirming is
- * the captain's signature — it decides the briefing the paid fan-out runs on —
- * so it is asked for on the same terms every other Gate 1 mutation asks for it.
+ * Confirming is the captain's signature — it decides the briefing the paid
+ * fan-out runs on — so it is asked for on the same terms every other Gate 1
+ * mutation asks for it.
  */
 export const briefingConfirmRequestSchema = z.object({
   /** The edited summary the captain is signing; it becomes the execution's briefing. */

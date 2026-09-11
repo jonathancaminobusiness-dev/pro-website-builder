@@ -87,7 +87,7 @@ export interface BriefingConversationOptions {
    * briefing up in memory. It runs after the write, never before: nothing the
    * execution holds may name a briefing no persisted row does.
    */
-  onConfirmed?: (briefing: string, revision: number) => Promise<void> | void;
+  onConfirmed?: (briefing: string) => Promise<void> | void;
   /**
    * Asked before a turn is spent, and free to refuse it with a
    * `ConversationError`: an execution the captain stopped, or one whose
@@ -401,7 +401,7 @@ export class BriefingConversation {
     return await this.confirmSection(async () => {
       this.options.guardTurn?.();
       const snapshot = await this.commit(input.idempotencyKey, briefing);
-      await this.options.onConfirmed?.(briefing, revision);
+      await this.options.onConfirmed?.(briefing);
       return snapshot;
     });
   }
@@ -435,21 +435,22 @@ export class BriefingConversation {
     if (this.damaged !== undefined) {
       const damaged = this.damaged;
       const archived: BriefingConversationRevision = {
-        ...(damaged.revision === undefined ? {} : { revision: damaged.revision }),
+        revision: this.revision,
         closedAs: 'unreadable',
         closedAt: this.now().toISOString(),
         messages: [],
         openGaps: [],
         askedQuestions: [],
         questionCount: 0,
-        unreadable: { reason: damaged.reason, raw: damaged.raw },
+        unreadable: { reason: damaged.reason, raw: damaged.raw, ...(damaged.revision === undefined ? {} : { claimedRevision: damaged.revision }) },
       };
+      const carried = this.data.previousRevisions;
       this.data = emptyState();
-      this.data.previousRevisions.push(archived);
+      this.data.previousRevisions = [...carried, archived];
       this.damaged = undefined;
-      // The damaged round is not named: what its own record claimed to be is
-      // kept in the archive, and the round this execution is on now is counted,
-      // never guessed from a record nobody could read.
+      // The damaged round takes the next position like any other, and what its
+      // own record claimed to be travels with the bytes rather than deciding
+      // where it sits.
       this.append({ author: 'system', text: `A conversa anterior desta execução não pôde ser lida (${damaged.reason}); o registro dela fica arquivado exatamente como estava. Esta é a conversa ${this.revision} desta execução.`, state: 'entry' });
       return await this.commit(input.idempotencyKey);
     }
