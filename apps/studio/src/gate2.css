@@ -102,3 +102,6 @@
 .status-failed { color: #8c3a2c; border-color: #c98d7c; background: #f8dfd3; }
 .gate2-checks { scrollbar-width: thin; }
 .gate2-checks li:last-child { padding-bottom: 2px; }
+
+/* A review that is missing a section says so in the header, beside the reason the loop stopped. */
+.gate2-badges .qa-chip-warning { color: #8a5a12; border-color: #d8b878; }
