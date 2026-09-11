@@ -31,7 +31,7 @@ export interface CspBundle {
 }
 
 /** A `data:` URI a document or a stylesheet really loads, rather than merely mentions. */
-const DATA_URI = /(?:\bsrc\s*=\s*["']|\bsrcset\s*=\s*["']|\burl\(\s*["']?)data:/i;
+const DATA_URI = /(?:\bsrc\s*=\s*["']|\burl\(\s*["']?)data:/i;
 
 export function planCsp(compiled: CspBundle): CspPlan {
   const directives: Array<[string, string]> = [

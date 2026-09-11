@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { siteFromEnvironment } from '../../apps/server/src/site-environment.js';
 import { compileRelease, loadFontSources } from '../../packages/export/src/index.js';
 import { renderDesign } from '../../packages/renderer/src/index.js';
 import { createReleaseHarness, loadReleaseDocument } from '../../packages/stage-finalization/src/index.js';
@@ -18,11 +19,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const ir = await loadReleaseDocument(evidenceDir);
   const rendered = renderDesign(ir);
   const fonts = await loadFontSources(process.env.PWB_FONTS_DIR ?? join(process.cwd(), 'fonts'));
-  const compiled = compileRelease(rendered, ir, {
-    siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid',
-    siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder',
-    ...(fonts.length > 0 ? { fonts } : {}),
-  });
+  const compiled = compileRelease(rendered, ir, { ...siteFromEnvironment(), ...(fonts.length > 0 ? { fonts } : {}) });
   const harness = createReleaseHarness(compiled, rendered, Number(process.env.PWB_RELEASE_PORT ?? 0));
   const origin = await harness.start();
   process.env.PWB_RELEASE_ORIGIN = origin;
