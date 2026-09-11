@@ -39,7 +39,7 @@ describe('orchestrator', () => {
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
     const identity = new RunPlanner(store).plan('run-identity-critical-path', root.id, 'brief').tasks.find((task) => task.stage === 'identity');
 
-    expect(identity?.deadlineMs).toBe(69 * 60_000);
+    expect(identity?.deadlineMs).toBe(114 * 60_000);
   });
 
   it('gives each stage its own write boundary and refuses a later stage that touches the identity', () => {

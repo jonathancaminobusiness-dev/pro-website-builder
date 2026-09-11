@@ -7,10 +7,13 @@ export interface RunPlan { runId: string; tasks: AgentTask[]; edges: [string, st
 const readablePaths = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
 const identityDirections = 3;
+const identityCuratorMs = 4 * 60_000;
+const identityDirectorMs = 7 * 60_000;
 const identityRegularCriticMs = 3 * 60_000;
 const identityAccessibilityCriticMs = 10 * 60_000;
 const identityRefinerMs = 8 * 60_000;
 const identityArtDirectorMs = 5 * 60_000;
+const identityCorrectedMs = (deadlineMs: number): number => deadlineMs * 2;
 
 function repeated(value: number, count: number): number[] {
   return Array.from({ length: count }, () => value);
@@ -26,20 +29,20 @@ function claudeLaneDurationMs(durations: number[]): number {
 }
 
 const identityInitialCriticMs = claudeLaneDurationMs([
-  ...repeated(identityRegularCriticMs, identityDirections + 1),
-  ...repeated(identityAccessibilityCriticMs, identityDirections),
+  ...repeated(identityCorrectedMs(identityRegularCriticMs), identityDirections + 1),
+  ...repeated(identityCorrectedMs(identityAccessibilityCriticMs), identityDirections),
 ]);
 const identitySecondCriticMs = claudeLaneDurationMs([
-  ...repeated(identityRegularCriticMs, identityDirections),
-  ...repeated(identityAccessibilityCriticMs, identityDirections),
+  ...repeated(identityCorrectedMs(identityRegularCriticMs), identityDirections),
+  ...repeated(identityCorrectedMs(identityAccessibilityCriticMs), identityDirections),
 ]);
 const identityStageDeadlineMs = [
-  4 * 60_000,
-  7 * 60_000,
+  identityCorrectedMs(identityCuratorMs),
+  claudeLaneDurationMs(repeated(identityCorrectedMs(identityDirectorMs), identityDirections)),
   identityInitialCriticMs,
   identityDirections * identityRefinerMs,
   identitySecondCriticMs,
-  claudeLaneDurationMs(repeated(identityArtDirectorMs, identityDirections)),
+  claudeLaneDurationMs(repeated(identityCorrectedMs(identityArtDirectorMs), identityDirections)),
 ].reduce((total, duration) => total + duration, 0);
 
 export const stageDeadlinesMs: Record<AgentTask['stage'], number> = { identity: identityStageDeadlineMs, prototype: 15 * 60_000, finalization: 20 * 60_000 };
