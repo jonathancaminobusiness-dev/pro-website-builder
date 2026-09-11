@@ -502,6 +502,33 @@ describe('phase 0 fixture run', () => {
     second.sqlite.close();
   });
 
+  it('carries a run restored after a restart through Gate 3 instead of losing its release', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-gate3-'));
+    const dbPath = join(dir, 'gate3.sqlite');
+    const releaseRoot = join(dir, 'releases');
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await original.initialize('run-gate3-restart');
+    await original.runNext();
+    await original.approve('identity', 'captain');
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-gate3-restart')).toBe(true);
+    expect(restored.releaseEnabled()).toBe(true);
+
+    await restored.runNext();
+    await restored.approve('prototype', 'captain');
+    await restored.runNext();
+    await completeEvidence(restored, join(releaseRoot, '..', 'evidence'));
+    const prepared = await restored.prepareRelease();
+    expect(prepared.report.blocked).toBe(false);
+    await restored.publishRelease(prepared.digest, 'Publicado depois de um reinício.', 'fixture');
+    expect(restored.snapshot().status).toBe('succeeded');
+    second.sqlite.close();
+  });
+
   it('does not blame a run for versions another run in the same project left behind', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-sibling-'));
     const dbPath = join(dir, 'sibling.sqlite');
