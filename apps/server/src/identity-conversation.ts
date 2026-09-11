@@ -405,7 +405,10 @@ export class BriefingConversation {
     delete this.data.error;
     this.data.fallback = false;
     this.data.openGaps = structuredClone(turn.unknowns);
-    if (turn.summary !== undefined) this.data.summary = turn.summary;
+    // The closing turn reads a briefing the captain already signed, so its
+    // summary is an echo: the signed text stands and only the directions are the
+    // model's to add.
+    if (!closing && turn.summary !== undefined) this.data.summary = turn.summary;
     if (turn.question) {
       this.data.questionCount += 1;
       this.data.askedQuestions.push({ index: this.data.askedQuestions.length, question: turn.question.text, why: turn.question.why, skipped: false });

@@ -321,8 +321,29 @@ describe('briefing conversation safe answers', () => {
 
     expect(closed.state).toBe('final');
     expect(closed.directions).toHaveLength(3);
-    expect(closed.summary).toContain('#2E7D32');
+    expect(closed.messages.at(-1)?.turn?.summary).toContain('#2E7D32');
+    expect(closed.summary).toBe('Clínica de bairro preventiva que mantém o verde da marca atual.');
     expect(tasks).toHaveLength(2);
+  });
+
+  it('keeps the signed briefing as the editable summary when the closing turn paraphrases it', async () => {
+    const paraphrase = turn({ ...FINAL, summary: 'Uma clínica de bairro que fala de prevenção com proximidade.' } as Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>);
+    const { conversation } = harness([succeeded(CONFIRMATION), succeeded(paraphrase), succeeded(FINAL)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: nextKey() });
+
+    expect(closed.directions).toHaveLength(3);
+    expect(closed.summary).toBe('Clínica de bairro preventiva.');
+
+    // The next revision is edited from the captain's own text, never from the
+    // model's rewording of it.
+    const revised = await conversation.confirm({ briefing: `${closed.summary!} Com acompanhamento contínuo.`, idempotencyKey: nextKey() });
+
+    expect(revised.confirmations.map((entry) => entry.briefing)).toEqual([
+      'Clínica de bairro preventiva.',
+      'Clínica de bairro preventiva. Com acompanhamento contínuo.',
+    ]);
   });
 
   it('accepts a reply and a declared gap that give back the site and the colour the captain typed, even ending a sentence', async () => {
