@@ -81,6 +81,10 @@ export class PrototypeStageError extends Error {
  * The prototype stage: a serial information architect, a parallel fan-out of section composers over
  * disjoint windows, a deterministic gate that vetoes before any critic runs, four parallel critics in
  * their own sessions, and one refinement cycle per pass of a loop that always stops for a stated reason.
+ *
+ * It writes `/pages` and `/stateFixtures`. Its boundary is wider - `stageWritablePaths.prototype` also
+ * carries `/assets` and `/reviewRecord` - but nothing here writes either: the review this stage produces
+ * is the `PrototypeStageOutcome` the Gate 2 screen reads, not a document subtree.
  */
 export class PrototypeStage {
   private get modelAlias(): string { return this.options.modelAlias; }
@@ -291,9 +295,10 @@ export class PrototypeStage {
   }
 
   /**
-   * The deterministic gate over the full capture matrix. Only Tier 0 rules can veto, so this still
-   * stops the stage before a single model call; the Tier 1 observations ride along because they come
-   * from the same evidence and the human gate needs to see them.
+   * The deterministic gate over the full capture matrix. There is no document to measure until the
+   * architect and the composers have run, so this is not before every model call - it is before every
+   * critic: only Tier 0 rules can veto, and a vetoed revision is never handed to one. The Tier 1
+   * observations ride along because they come from the same evidence and the human gate needs to see them.
    */
   private async gateReport(version: VersionRecord, measured: Set<number>, signal?: AbortSignal): Promise<QaReport> {
     const bundle = await this.options.evidence.collect({ ir: version.ir, versionId: version.id, ...(signal ? { signal } : {}) });
