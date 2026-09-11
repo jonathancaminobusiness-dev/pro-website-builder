@@ -144,3 +144,41 @@ export function planFonts(identity: IdentitySpec, fonts: FontSource[], hashOf: (
 
   return { decisions, files, css, missingFallbacks };
 }
+
+/**
+ * One `@font-face` a view really declared, read back out of the bytes it served.
+ *
+ * The faces a preview served are the ones its document named, never the ones a
+ * fonts directory would have produced: reading the plan back would compare the
+ * directory against itself. `path` is the file the rule points at, addressed the
+ * way the bundle addresses it, so a re-exported face reads as a different file.
+ */
+export interface ServedFace {
+  family: string;
+  weight: string;
+  style: string;
+  path: string;
+}
+
+const FONT_FACE_RULE = /@font-face\s*\{([^}]*)\}/gi;
+
+function declaration(body: string, property: string): string | undefined {
+  return new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, 'i').exec(body)?.[1]?.trim();
+}
+
+/**
+ * The faces a stylesheet declares, parsed by a reader that shares no code with
+ * `fontFaceCss`, so the two sides of a parity comparison cannot agree by
+ * construction. A rule without a family or a file is not a face a view served.
+ */
+export function parseFontFaceCss(css: string, href: (url: string) => string = (url) => url): ServedFace[] {
+  const faces: ServedFace[] = [];
+  for (const rule of css.matchAll(FONT_FACE_RULE)) {
+    const body = rule[1]!;
+    const family = declaration(body, 'font-family')?.replaceAll(/^["']|["']$/g, '');
+    const url = /url\(\s*["']?([^"')]+)["']?\s*\)/i.exec(declaration(body, 'src') ?? '')?.[1];
+    if (family === undefined || family === '' || url === undefined) continue;
+    faces.push({ family, weight: declaration(body, 'font-weight') ?? '400', style: declaration(body, 'font-style') ?? 'normal', path: href(url) });
+  }
+  return faces;
+}

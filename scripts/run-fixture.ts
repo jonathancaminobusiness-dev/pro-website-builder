@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { openDatabase, ProjectRepository } from '../apps/server/src/db/repository.js';
 import { FixtureRun, type FixtureSnapshot } from '../apps/server/src/fixture-run.js';
-import { createPreviewServer, startServedPreview, type PreviewServer } from '../apps/server/src/preview.js';
+import { createPreviewServer, startServedPreview } from '../apps/server/src/preview.js';
 import { createModelProvider, modelProviderName } from '../apps/server/src/provider.js';
 import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { createRenderMatrix, qaFor, RENDER_VIEWPORTS, REPRESENTATIVE_VIEWPORTS, RenderHub, type RenderCase } from '../packages/render-hub/src/index.js';
@@ -52,21 +52,19 @@ async function main(): Promise<void> {
   const database = openDatabase(databasePath);
   try {
     const providerName = modelProviderName(process.env.PWB_MODEL_PROVIDER);
-    // Gate 3 can only speak for faces a preview served, so this run serves its
-    // own document from the same origin the studio uses and hands the gate what
-    // that origin delivered. Port 0 keeps the CLI off the developer ports.
-    let preview: PreviewServer | undefined;
+    // Gate 3 can only speak for faces a preview served, so this run serves the
+    // very version the gate compiles — the finalization version, asked for by
+    // `previewFaces` while the release is prepared — from the same origin the
+    // studio uses. Port 0 keeps the CLI off the developer ports.
+    const preview = await startServedPreview(fontsDir);
     const run = new FixtureRun({
       repository: new ProjectRepository(database),
       provider: createModelProvider(providerName),
       modelProvider: providerName,
-      release: { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, previewFaces: () => preview?.servedFaces() },
+      release: { releaseRoot, evidenceDir, fontsDir, siteUrl, siteName, previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)) },
     });
-    await run.initialize('cli-fixture');
-    const rootVersionId = run.snapshot().currentVersion.id;
-    preview = await startServedPreview((requested) => requested === rootVersionId ? run.snapshot().rendered : undefined, rootVersionId, fontsDir);
     let snapshot: FixtureSnapshot;
-    try { snapshot = await run.runAll(); } finally { await preview.close(); }
+    try { await run.initialize('cli-fixture'); snapshot = await run.runAll(); } finally { await preview.close(); }
     const report = run.releaseSnapshot()?.report;
     // A script never signs for the captain. It prints what Gate 3 found and
     // publishes only a release that left nothing for a human to accept.
