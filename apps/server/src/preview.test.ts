@@ -111,6 +111,27 @@ describe('preview origin', () => {
     } finally { await preview.close(); }
   });
 
+  it('reports no served face once the manifest stops being readable, rather than the plan it last served', async () => {
+    const rendered = renderDesign(createFixtureIR());
+    const fontsDir = await fontsDirectory();
+    await writeFile(join(fontsDir, 'manifest.json'), MANIFEST, 'utf8');
+    const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0, fontsDir);
+    await preview.start();
+    try {
+      expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(200);
+      expect(preview.servedFaces('v0')).toHaveLength(1);
+      // The manifest is damaged: every request answers 500 from here on, so this
+      // origin serves no face at all and may not answer for the one it last did.
+      await writeFile(join(fontsDir, 'manifest.json'), '{ not json', 'utf8');
+      expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(500);
+      expect(preview.servedFaces('v0')).toBeUndefined();
+      // Repairing it makes the origin answer for what it serves again.
+      await writeFile(join(fontsDir, 'manifest.json'), MANIFEST, 'utf8');
+      expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(200);
+      expect(preview.servedFaces('v0')).toHaveLength(1);
+    } finally { await preview.close(); }
+  });
+
   it('serves the exact route bytes the deterministic renderer produced', async () => {
     const rendered = renderDesign(createFixtureIR());
     const preview = createPreviewServer((versionId) => versionId === 'v0' ? rendered : undefined, 0);
