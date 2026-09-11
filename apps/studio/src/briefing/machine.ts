@@ -103,7 +103,7 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
     case 'discard':
       return { ...state, pending: null, failure: null };
     case 'settled': {
-      const clearsDraft = state.pending?.kind === 'send' && (state.pending.request.intent === 'entry' || state.pending.request.intent === 'answer');
+      const clearsDraft = state.pending?.kind === 'send' && state.pending.request.intent !== 'cancel';
       // A summary the captain edited is theirs: only a summary they never
       // touched is replaced by the one the server just sent.
       const edited = state.snapshot !== null && state.summaryDraft !== summarySeed(state.snapshot);
