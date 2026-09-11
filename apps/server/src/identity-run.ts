@@ -6,7 +6,7 @@ import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { approvalOf, identityHash, identityLint, identityStageDeadlineMs as calculateIdentityStageDeadlineMs, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, resolveIdentityStageDeadlines, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
 import { BriefingValidationError, IDENTITY_BRIEFING, INVALID_IDENTITY_BRIEFING, LEGACY_INVALID_BRIEFING_MESSAGE, normalizeIdentityBriefing } from './identity-briefing.js';
-import { BriefingConversation } from './identity-conversation.js';
+import { BriefingConversation, ConversationError } from './identity-conversation.js';
 
 export { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -45,6 +45,8 @@ function mergeFailures(...groups: Array<Array<{ taskId: string; reason: string }
 }
 
 const INTERRUPTED = 'The server restarted while the identity stage was running, so that fan-out was lost. Start the stage again.';
+
+const FROZEN_BRIEFING = 'A etapa de identidade desta execução já começou, então o briefing dela está congelado. Crie uma nova execução para trabalhar com um briefing diferente.';
 
 function identityStageDeadlineMs(deadlines: Partial<IdentityStageDeadlines> | undefined, maxActiveClaude: number): number {
   const override = Number(process.env.PWB_STAGE_DEADLINE_MS);
@@ -134,12 +136,17 @@ export class IdentityRun {
       runId: options.runId,
       provider: options.provider,
       persist: async (snapshot) => { await options.repository.saveConversation(options.runId, JSON.stringify(snapshot)); },
-      // The conversation produces the execution's briefing, so a confirmation
-      // moves the run onto it. Once the stage has started the briefing is
-      // frozen and the confirmation is refused, so every confirmation that gets
-      // here is one the execution applies.
-      briefingFrozen: () => this.started,
+      // No turn is bought on an execution that could never take its answer, and
+      // the same rule is asked again when the briefing is actually applied: a
+      // turn takes up to a minute, and the captain can start the stage inside
+      // it. The second ask is not redundant with the first — it is the one that
+      // protects a running fan-out from being replaced under it.
+      guardTurn: () => {
+        this.refuseIfCancelled('create another one to work on a briefing.');
+        if (this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
+      },
       onConfirmed: async (briefing) => {
+        if (this.briefingIsFrozen()) throw new ConversationError(FROZEN_BRIEFING, 409);
         this.briefing = briefing;
         this.stage = this.newStage();
         await options.repository.updateRunBriefing(options.runId, briefing);
@@ -326,6 +333,20 @@ export class IdentityRun {
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  /**
+   * The briefing is frozen exactly while the execution holds identity work made
+   * from it: a fan-out in flight, or one whose checkpoint the run carries. Both
+   * facts survive a restart — `restore` rebuilds the checkpoint and a lost
+   * fan-out comes back as `interrupted` — so the same execution answers a
+   * confirmation the same way before and after the process bounced. A stage
+   * that failed or was interrupted froze nothing: the captain may confirm a new
+   * briefing and start again on it.
+   */
+  private briefingIsFrozen(): boolean {
+    if (this.status === 'failed' || this.status === 'interrupted') return false;
+    return this.status === 'running' || this.result !== undefined;
   }
 
   /**

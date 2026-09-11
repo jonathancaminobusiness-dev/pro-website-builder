@@ -349,6 +349,40 @@ describe('briefing conversation safe answers', () => {
     expect(snapshot.messages.every((message) => !message.text.includes('mockup-exemplo'))).toBe(true);
   });
 
+  it('accepts a question that names the colour the captain asked to keep', async () => {
+    const asking = succeeded(turn({
+      intent: 'question',
+      nextState: 'question',
+      message: 'Falta uma decisão antes de seguir.',
+      question: { text: 'O verde #2E7D32 precisa continuar sendo a cor principal, ou a identidade pode partir do zero?', why: 'A resposta muda paleta, tom e composição.', options: ['Manter o #2E7D32', 'Partir do zero'] },
+    }));
+    const { conversation, tasks } = harness([succeeded(RECOMMENDATION), asking]);
+    await conversation.send({ message: 'Queremos manter o verde #2E7D32 da marca atual.', action: 'answer', idempotencyKey: nextKey() });
+
+    const asked = await conversation.send({ message: 'A prevenção é o centro.', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(asked.state).toBe('question');
+    expect(asked.fallback).toBe(false);
+    expect(tasks).toHaveLength(2);
+  });
+
+  it('still refuses a question built around a colour the model invented', async () => {
+    const asking = succeeded(turn({
+      intent: 'question',
+      nextState: 'question',
+      message: 'Falta uma decisão antes de seguir.',
+      question: { text: 'A base pode ser o verde #2E7D32 que sugeri?', why: 'A resposta muda paleta, tom e composição.', options: [] },
+    }));
+    const { conversation, tasks } = harness([succeeded(RECOMMENDATION), asking, asking]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    const refused = await conversation.send({ message: 'A prevenção é o centro.', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(tasks[2]?.brief).toContain('Saída visual recusada (hex-color)');
+    expect(refused.fallback).toBe(true);
+    expect(refused.messages.every((message) => !message.text.includes('#2E7D32'))).toBe(true);
+  });
+
   it('still refuses a hex value the model wrote into a conceptual direction it authored', async () => {
     const painted = turn({ ...FINAL, directions: [{ ...direction('dir-um', 'Um'), palette: 'Base areia com verde #2E7D32 nos destaques.' }, direction('dir-dois', 'Dois'), direction('dir-tres', 'Três')] } as Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>);
     const { conversation } = harness([succeeded(CONFIRMATION), succeeded(painted), succeeded(painted)]);
