@@ -559,13 +559,21 @@ describe('immutable content-addressed bundle', () => {
     const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
     try {
       await writeReleaseBundle(compiled, root);
-      const entry = { digest: compiled.digest, approvedVersionId: 'v-approved', releasedVersionId: 'v-refined', irHash: compiled.irHash, approverRole: 'captain', rationale: 'Firefox não sobe aqui.', acceptedEscalations: ['Nenhuma execução Playwright em firefox.'] };
+      const entry = { digest: compiled.digest, acceptanceId: 'run-um-finalization', approvedVersionId: 'v-approved', releasedVersionId: 'v-refined', irHash: compiled.irHash, approverRole: 'captain', rationale: 'Firefox não sobe aqui.', acceptedEscalations: ['Nenhuma execução Playwright em firefox.'] };
       await appendReleasePublication(root, entry);
-      await appendReleasePublication(root, { ...entry, releasedVersionId: 'v-refined-again', rationale: 'Republicado com outra proveniência.' });
+      await appendReleasePublication(root, { ...entry, acceptanceId: 'run-dois-finalization', releasedVersionId: 'v-refined-again', rationale: 'Republicado com outra proveniência.' });
       const record = await readReleasePublications(root, compiled.digest);
       expect(record).toHaveLength(2);
       expect(record[0]).toEqual(entry);
       expect(record[1]?.releasedVersionId).toBe('v-refined-again');
+
+      // The record is a projection of the acceptance, so asking for one that is
+      // already there records it once however often the write is retried.
+      await appendReleasePublication(root, entry);
+      await appendReleasePublication(root, { ...entry, rationale: 'Reescrito por engano.' });
+      const retried = await readReleasePublications(root, compiled.digest);
+      expect(retried).toHaveLength(2);
+      expect(retried[0]).toEqual(entry);
       // The record lives beside the bundle, never inside the immutable directory.
       expect(await readdir(join(root, compiled.digest))).not.toContain(`${compiled.digest}.publications.json`);
 

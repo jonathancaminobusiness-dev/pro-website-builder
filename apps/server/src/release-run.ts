@@ -1,7 +1,7 @@
 import { rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
-import { appendReleasePublication, loadFontSources, ReleaseVetoError, removeReleasePublication, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ReleasePublication, type ServedFace } from '@pwb/export';
+import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ReleasePublication, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
 import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
@@ -44,18 +44,11 @@ export interface ReleaseContext {
   record(type: string, payload: Record<string, unknown>): Promise<void>;
   /**
    * Publishing the bundle is what closes the finalization gate; there is no
-   * second approval. The publication belongs to that acceptance: the record is
-   * written and its event logged inside it, before it commits, so an acceptance
-   * that does not commit leaves no publication and a publication that cannot be
-   * written leaves no acceptance.
+   * second approval. The acceptance carries the publication it is about, so the
+   * log this writes is what the release record beside the bundle is rebuilt
+   * from when the entry itself never landed.
    */
-  approveFinalization(approverRole: ReleaseApprover, rationale: string, manifest: ReleaseManifest, publication: PublicationCommit): Promise<void>;
-}
-
-/** The publication an acceptance carries: the record to write, and the event that says so. */
-export interface PublicationCommit {
-  write(): Promise<void>;
-  event: { type: string; payload: Record<string, unknown> };
+  approveFinalization(approverRole: ReleaseApprover, rationale: string, manifest: ReleaseManifest, publication: ReleasePublication): Promise<void>;
 }
 
 /**
@@ -206,19 +199,22 @@ export class ReleaseRun {
       throw new ReleasePublishRefusedError(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
     // A bundle on disk is a published release, so it never outlives the
-    // acceptance of it. The bytes are written first, and then one acceptance
-    // carries everything else: the approval and its events, the publication
-    // record and the event that says the release published, all landing
-    // together or not at all. Whatever a failed publish wrote — the record
-    // entry, the bundle — is taken back with it, so the retry starts from the
-    // state the captain last saw and can never record the same publication
-    // twice. A bundle that was already there — the same bytes published before
-    // — is never touched: its own record is what stands for it.
+    // acceptance of it: the bytes are written first, the acceptance commits
+    // next — the approval and the events that describe it, the publication
+    // among them — and only then is the entry written into the release record
+    // beside the bundle. A publish that does not reach that commit takes its
+    // bytes back and records nothing. Past it the release is accepted, and the
+    // record is a projection of the ledger that accepted it: an entry that
+    // never landed is written by the next restore of this run, and asking for
+    // the same acceptance twice records it once. A bundle that was already
+    // there — the same bytes published before — is never touched: its own
+    // record is what stands for it.
     const directory = join(this.options.releaseRoot, current.digest);
     const preexisting = await stat(directory).then(() => true, () => false);
     const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot);
     const entry: ReleasePublication = {
       digest: manifest.digest,
+      acceptanceId: `${this.runId}-finalization`,
       approvedVersionId: current.report.approvedVersionId,
       releasedVersionId: current.versionId,
       irHash: current.report.irHash,
@@ -226,17 +222,14 @@ export class ReleaseRun {
       rationale: reason,
       acceptedEscalations: escalations,
     };
-    let recorded = false;
     try {
-      await this.context.approveFinalization(approverRole, reason, manifest, {
-        write: async () => { await appendReleasePublication(this.options.releaseRoot, entry); recorded = true; },
-        event: { type: 'release.published', payload: { digest: manifest.digest, versionId: current.versionId, approverRole, rationale: reason, escalations } },
-      });
+      await this.context.approveFinalization(approverRole, reason, manifest, entry);
     } catch (error) {
-      if (recorded) await removeReleasePublication(this.options.releaseRoot, entry).catch(() => undefined);
       if (!preexisting) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
+    await appendReleasePublication(this.options.releaseRoot, entry);
+    await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole, rationale: reason, escalations });
     this.snapshotValue = { ...current, published: { directory, digest: manifest.digest } };
     return manifest;
   }

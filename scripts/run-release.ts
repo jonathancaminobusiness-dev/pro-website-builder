@@ -67,7 +67,7 @@ async function main(): Promise<void> {
       applier,
       adopt: async () => { /* a refinement is already in this run's own version store */ },
       record: async (type, payload) => { events.push({ type, payload }); },
-      approveFinalization: async (_approverRole, _rationale, _manifest, publication) => { await publication.write(); events.push(publication.event); },
+      approveFinalization: async () => { /* the CLI has no run to advance; the release record is the durable trace */ },
     });
   } finally { await preview.close(); }
 

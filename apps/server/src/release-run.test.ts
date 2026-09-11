@@ -84,7 +84,8 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
     }
   }
   const events = (id: string) => repository.listEvents(id);
-  return { origin, runId: created.runId, run, releaseRoot, evidenceDir, stageVersionId, events, repository, db };
+  const releaseOptions = { releaseRoot, evidenceDir, ...SITE };
+  return { origin, runId: created.runId, run, releaseRoot, evidenceDir, stageVersionId, events, repository, db, releaseOptions };
 }
 
 describe('Gate 3 over the local API', () => {
@@ -127,6 +128,7 @@ describe('Gate 3 over the local API', () => {
     expect(recorded[0]!.payload.escalations).toEqual(prepared.report.escalations);
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toEqual([{
       digest: prepared.digest,
+      acceptanceId: `${runId}-finalization`,
       approvedVersionId: prepared.report.approvedVersionId,
       releasedVersionId: prepared.versionId,
       irHash: prepared.report.irHash,
@@ -473,72 +475,68 @@ describe('Gate 3 over the local API', () => {
     await expect(readdir(releaseRoot)).rejects.toThrow();
   });
 
-  it('leaves no bundle and no acceptance when the publication cannot be recorded', async () => {
-    const { origin, runId, releaseRoot, run, repository } = await harness();
+  it('leaves no bundle and no publication when the acceptance does not commit', async () => {
+    const { origin, runId, releaseRoot, run, repository, db } = await harness();
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
-    // The release record beside the bundle is damaged, so this publication
-    // cannot be written into it. The record is part of the acceptance, so
-    // nothing is accepted: the bytes go away again and the damaged file is left
-    // exactly as it was rather than being replaced by a publish that failed.
-    await mkdir(releaseRoot, { recursive: true });
-    const recordPath = join(releaseRoot, `${prepared.digest}.publications.json`);
-    await writeFile(recordPath, '[{"digest":', 'utf8');
+    // The acceptance commits the approval and the events that describe it
+    // together, and the release record is only written after it. Here the event
+    // log refuses the event that says the run finished, so nothing is accepted:
+    // the bytes go away again and no publication was ever recorded.
+    db.sqlite.exec("CREATE TRIGGER refuse_finish BEFORE INSERT ON events WHEN NEW.type = 'run.finished' BEGIN SELECT RAISE(ABORT, 'the event log is unavailable'); END;");
     const refused = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
     expect(refused.status).toBe(500);
-    expect((await refused.json() as { error: string }).error).toMatch(/unreadable/);
-    expect(await readdir(releaseRoot)).toEqual([`${prepared.digest}.publications.json`]);
-    expect(await readFile(recordPath, 'utf8')).toBe('[{"digest":');
+    expect((await refused.json() as { error: string }).error).toMatch(/event log is unavailable/);
+    expect(await readdir(releaseRoot)).toEqual([]);
+    expect(await readReleasePublications(releaseRoot, prepared.digest)).toEqual([]);
     expect(run.snapshot().status).toBe('needs_review');
     expect(run.snapshot().exportManifest).toBeUndefined();
     expect(await repository.listApprovals(runId)).toHaveLength(2);
     expect(run.releaseSnapshot()?.published).toBeUndefined();
 
-    // Repairing the record publishes the same bundle, bytes, acceptance and
-    // record together, and the retry records one publication.
-    await rm(recordPath, { force: true });
-    const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
-    expect(published.status).toBe(200);
-    expect(await readdir(join(releaseRoot, prepared.digest))).toContain('manifest.json');
-    expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
-  });
-
-  it('takes the publication back out of the record when the acceptance does not commit', async () => {
-    const { origin, runId, releaseRoot, run, repository, db } = await harness();
-    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
-    // The publication is written inside the acceptance, before it commits. Here
-    // the event log refuses the event that says the run finished, so the
-    // transaction rolls back and the entry the publish had already appended is
-    // taken back with the bundle.
-    db.sqlite.exec("CREATE TRIGGER refuse_finish BEFORE INSERT ON events WHEN NEW.type = 'run.finished' BEGIN SELECT RAISE(ABORT, 'the event log is unavailable'); END;");
-    const refused = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
-    expect(refused.status).toBe(500);
-    expect((await refused.json() as { error: string }).error).toMatch(/event log is unavailable/);
-    // The entry was written and taken back: the record exists and holds no
-    // publication, where a publish that never reached it leaves no record at all.
-    expect(await readdir(releaseRoot)).toEqual([`${prepared.digest}.publications.json`]);
-    expect(await readReleasePublications(releaseRoot, prepared.digest)).toEqual([]);
-    expect(run.snapshot().status).toBe('needs_review');
-    expect(run.snapshot().exportManifest).toBeUndefined();
-    expect(await repository.listApprovals(runId)).toHaveLength(2);
-
     // A server restarted here reads the same run the live one reports: still at
     // Gate 3, with no release behind it.
-    const restored = new FixtureRun({ repository, provider: new FakeModelProvider() });
+    const restored = new FixtureRun({ modelProvider: 'fake', repository, provider: new FakeModelProvider() });
     expect(await restored.restore(runId)).toBe(true);
     expect(restored.snapshot().status).not.toBe('succeeded');
     expect(restored.snapshot().exportManifest).toBeUndefined();
 
-    // With the log writable again the same bundle publishes, and the record
-    // holds that one publication rather than the retry's second copy.
+    // With the log writable again the same bundle publishes, bytes, acceptance
+    // and record together.
     db.sqlite.exec('DROP TRIGGER refuse_finish');
     const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
     expect(published.status).toBe(200);
     expect(run.snapshot().status).toBe('succeeded');
     expect(await readdir(join(releaseRoot, prepared.digest))).toContain('manifest.json');
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
-    const afterPublish = new FixtureRun({ repository, provider: new FakeModelProvider() });
-    expect(await afterPublish.restore(runId)).toBe(true);
-    expect(afterPublish.snapshot().status).toBe('succeeded');
+  });
+
+  it('records the publication of an accepted release whose entry never landed, once', async () => {
+    const { origin, runId, releaseRoot, run, repository, releaseOptions } = await harness();
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    // The record beside the bundle cannot be written — the path is taken by a
+    // directory — so the publish stops after the acceptance committed. That is
+    // the window a killed process leaves behind: a release the ledger knows
+    // about and the record does not.
+    const recordPath = join(releaseRoot, `${prepared.digest}.publications.json`);
+    await mkdir(recordPath, { recursive: true });
+    const owed = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(owed.status).toBe(500);
+    expect(run.snapshot().status).toBe('succeeded');
+    expect(await readdir(join(releaseRoot, prepared.digest))).toContain('manifest.json');
+    expect(await readdir(recordPath)).toEqual([]);
+
+    // Restarting the server writes what the ledger says was accepted, and says
+    // it once however many times the run is restored.
+    await rm(recordPath, { recursive: true, force: true });
+    const restored = new FixtureRun({ modelProvider: 'fake', repository, provider: new FakeModelProvider(), release: releaseOptions });
+    expect(await restored.restore(runId)).toBe(true);
+    expect(restored.snapshot().status).toBe('succeeded');
+    const recorded = await readReleasePublications(releaseRoot, prepared.digest);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ digest: prepared.digest, approverRole: 'captain', rationale: 'Aceito os pontos em aberto.', releasedVersionId: prepared.versionId });
+    const again = new FixtureRun({ modelProvider: 'fake', repository, provider: new FakeModelProvider(), release: releaseOptions });
+    expect(await again.restore(runId)).toBe(true);
+    expect(await readReleasePublications(releaseRoot, prepared.digest)).toEqual(recorded);
   });
 
   it('refuses a publish whose document the linter rejects, and says so as a conflict', async () => {
