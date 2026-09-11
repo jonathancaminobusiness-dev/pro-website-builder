@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { INVALID_IDENTITY_BRIEFING } from '@pwb/domain/briefing';
-import type { ConversationSnapshot } from '../briefing/contract.js';
+import { briefingClosed, type ConversationSnapshot } from '../briefing/contract.js';
 import { CONSOLIDATED_SUMMARY, conversationSnapshot } from '../briefing/conversation-fixture.js';
 import { conversationReducer, initialConversationState } from '../briefing/machine.js';
 import type { BriefingConversationController } from '../briefing/useBriefingConversation.js';
@@ -56,7 +56,7 @@ function controllerFor(snapshot: ConversationSnapshot | null): BriefingConversat
   const noop = (): undefined => undefined;
   return {
     state,
-    closedBriefing: snapshot && snapshot.state === 'final' && snapshot.closedAt !== undefined ? snapshot.summary : null,
+    closedBriefing: snapshot && briefingClosed(snapshot) ? snapshot.summary : null,
     resume: noop, retry: noop, discard: noop, sendEntry: noop, answer: noop, skip: noop, cancel: noop, confirm: noop,
     setDraft: noop, setSummary: noop, correct: noop,
   };

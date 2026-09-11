@@ -201,11 +201,12 @@ export default function BriefingConversation(props: BriefingConversationProps): 
       </div>
     </div>}
 
-    {/* The way out of the conversation, reported by the contract rather than by
-        whichever control block happens to be on screen: a state that shows no
-        composer — the first reading, a summary the server has not decided yet,
-        a failed conversation — still has an exit. */}
-    {!can.closed && <div className="actions chat-exit">
+    {/* The way out of a conversation that can still be left, reported by the
+        contract rather than by whichever control block happens to be on screen:
+        a state that shows no composer — the first reading, a summary the server
+        has not decided yet — still has an exit. A conversation that already
+        stopped has none to offer, so it offers none. */}
+    {!can.closed && !halted && <div className="actions chat-exit">
       <button className="secondary" onClick={props.onCancel} disabled={!can.canCancel}>Cancelar conversa</button>
       {!draftVisible && !showSummary && !halted && !can.atLimit && state.failure === null && <button className="secondary" onClick={props.onResume} disabled={can.locked}>Reabrir do ponto salvo</button>}
     </div>}

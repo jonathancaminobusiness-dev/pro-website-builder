@@ -139,13 +139,13 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('disabled="">Cancelar conversa');
   });
 
-  it('keeps the exit available while the conversation is failed, with nothing left to cancel', () => {
+  it('offers a failed conversation the close it can still do, and no cancel it cannot', () => {
     const markup = render(state(conversationSnapshot({ state: 'failed', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], error: 'o modelo não respondeu', messageCount: 1 })));
 
     expect(markup).toContain('A conversa parou');
     expect(markup).toContain('não continua nesta execução');
     expect(markup).not.toContain('Reabrir do ponto salvo');
-    expect(markup).toContain('disabled="">Cancelar conversa');
+    expect(markup).not.toContain('Cancelar conversa');
     expect(markup).toContain('Fechar briefing');
     expect(markup).not.toContain('disabled="">Fechar briefing');
   });
@@ -181,9 +181,20 @@ describe('briefing conversation panel', () => {
     expect(markup).toContain('Nada foi enviado ao curador');
     expect(markup).toContain('não volta a abrir nesta execução');
     expect(markup).not.toContain('Reabrir do ponto salvo');
+    expect(markup).not.toContain('Cancelar conversa');
     expect(markup).toContain('id="briefing-chat-summary"');
     expect(markup).toContain('Fechar briefing');
     expect(markup).not.toContain('disabled="">Fechar briefing');
+  });
+
+  it('offers a halted conversation with nothing to close no control it could never use', () => {
+    const markup = render(state(conversationSnapshot({ state: 'cancelled', messageCount: 1 })));
+
+    expect(markup).toContain('Nada foi enviado ao curador');
+    expect(markup).toContain('criar uma nova execução');
+    expect(markup).not.toContain('Cancelar conversa');
+    expect(markup).not.toContain('Fechar briefing');
+    expect(markup).not.toContain('<button');
   });
 
   it('never blames a ceiling for a close the captain made manual by cancelling', () => {
