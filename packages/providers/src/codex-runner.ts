@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { cp, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { ZodError } from 'zod';
 import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
 import type { JsonModelRunner, JsonRunRequest } from './json-runner.js';
@@ -11,6 +12,8 @@ const CODEX_AUTH_FAILURE = /chatgpt sign[- ]?in|unauthori[sz]ed|\bnot\s+(?:authe
 export const CODEX_MODEL = 'gpt-5.6-sol';
 export const CODEX_REASONING_EFFORT = 'high';
 export const CODEX_RUNNER_TIMEOUT_MS = 7 * 60_000;
+/** Every Codex session gets its own directory under this prefix; nothing else is reachable from it. */
+export const CODEX_WORKSPACE_PREFIX = 'pwb-codex-';
 
 export interface CodexExecutorOptions {
   signal?: AbortSignal;
@@ -22,7 +25,20 @@ export type CodexExecutor = (executable: string, args: string[], options: CodexE
 
 export interface CodexJsonRunnerOptions {
   executable?: string;
-  cwd?: string;
+  /**
+   * Parent directory the per-session workspaces are created in. Defaults to
+   * the OS temporary directory and may never be the repository checkout: the
+   * CLI's `--sandbox read-only` stops writes, not reads, and a prompt is not
+   * an ACL, so the directory Codex is given *is* the read boundary.
+   */
+  workspaceRoot?: string;
+  /**
+   * Absolute paths a task is allowed to read. Each entry is copied into the
+   * session workspace before the prompt is passed; everything else stays
+   * outside the boundary. Empty by default, because a worker is answered from
+   * the prompt alone.
+   */
+  allowlist?: readonly string[];
   timeoutMs?: number;
   /** Injected by tests; production executes the local Codex CLI. */
   execute?: CodexExecutor;
@@ -159,52 +175,98 @@ async function executeCodex(executable: string, args: string[], options: CodexEx
   });
 }
 
-async function withSchemaFile<T>(cwd: string, schema: unknown, operation: (schemaPath: string) => Promise<T>): Promise<T> {
-  const directory = await mkdtemp(join(cwd, '.pwb-codex-schema-'));
-  try {
-    const serialized = JSON.stringify(schema);
-    if (serialized === undefined) throw new Error('Codex output schema could not be serialized.');
-    const schemaPath = join(directory, 'schema.json');
-    await writeFile(schemaPath, serialized, 'utf8');
-    return await operation(schemaPath);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
+/**
+ * Walks up from `start` to the checkout that contains it, so the workspace
+ * boundary can be refused before a session ever sees repository content.
+ */
+async function repositoryRoot(start: string): Promise<string | undefined> {
+  let directory = resolve(start);
+  for (;;) {
+    try {
+      await stat(join(directory, '.git'));
+      return directory;
+    } catch {
+      const parent = dirname(directory);
+      if (parent === directory) return undefined;
+      directory = parent;
+    }
   }
+}
+
+function contains(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
+}
+
+/**
+ * Creates the dedicated working directory one Codex session runs in, copies
+ * the task's allowlist into it, and removes it when the session ends. The
+ * schema file Codex reads is written here too, so nothing untracked is ever
+ * left inside the repository.
+ */
+async function withWorkspace<T>(root: string | undefined, allowlist: readonly string[], operation: (workspace: string) => Promise<T>): Promise<T> {
+  const parent = resolve(root ?? tmpdir());
+  const repository = await repositoryRoot(process.cwd());
+  if (repository !== undefined && contains(repository, parent)) {
+    throw new CodexCliError('CODEX_WORKSPACE_INVALID', `A Codex session may not run inside the repository checkout ${repository}; give it a workspace root outside it.`);
+  }
+  await mkdir(parent, { recursive: true });
+  const workspace = await mkdtemp(join(parent, CODEX_WORKSPACE_PREFIX));
+  try {
+    for (const entry of allowlist) {
+      const source = resolve(entry);
+      await cp(source, join(workspace, basename(source)), { recursive: true, errorOnExist: true, force: false });
+    }
+    return await operation(workspace);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+}
+
+async function withSchemaFile<T>(workspace: string, schema: unknown, operation: (schemaPath: string) => Promise<T>): Promise<T> {
+  const serialized = JSON.stringify(schema);
+  if (serialized === undefined) throw new Error('Codex output schema could not be serialized.');
+  const schemaPath = join(workspace, 'schema.json');
+  await writeFile(schemaPath, serialized, 'utf8');
+  return await operation(schemaPath);
 }
 
 export class CodexJsonRunner implements JsonModelRunner {
   private readonly executable: string;
-  private readonly cwd: string;
+  private readonly workspaceRoot: string | undefined;
+  private readonly allowlist: readonly string[];
   private readonly timeoutMs: number;
   private readonly execute: CodexExecutor;
 
   constructor(options: CodexJsonRunnerOptions = {}) {
     this.executable = options.executable ?? 'codex';
-    this.cwd = resolve(options.cwd ?? process.cwd());
+    this.workspaceRoot = options.workspaceRoot;
+    this.allowlist = [...(options.allowlist ?? [])];
     this.timeoutMs = options.timeoutMs ?? CODEX_RUNNER_TIMEOUT_MS;
     this.execute = options.execute ?? executeCodex;
   }
 
   private async runWithDiagnostics(request: JsonRunRequest, signal?: AbortSignal): Promise<CodexRunResult> {
     try {
-      const execute = (schemaPath?: string): Promise<{ stdout: string; stderr: string }> => this.execute(this.executable, [
-        'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
-        '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false',
-        '--json', ...(schemaPath ? ['--output-schema', schemaPath] : []),
-        '--sandbox', 'read-only', '--ephemeral', '-C', this.cwd, request.prompt,
-      ], { cwd: this.cwd, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
-      const result = request.strictSchema === false ? await execute() : await withSchemaFile(this.cwd, request.schema, execute);
-      if (!result.stdout.trim() && CODEX_AUTH_FAILURE.test(result.stderr)) {
-        throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
-      }
-      try {
-        return { output: parseCodexOutput(result.stdout), stderr: result.stderr };
-      } catch (error) {
-        if (error instanceof CodexCliError && CODEX_AUTH_FAILURE.test(result.stderr)) {
+      return await withWorkspace(this.workspaceRoot, this.allowlist, async (workspace) => {
+        const execute = (schemaPath?: string): Promise<{ stdout: string; stderr: string }> => this.execute(this.executable, [
+          'exec', '-m', CODEX_MODEL, '-c', `model_reasoning_effort=${CODEX_REASONING_EFFORT}`,
+          '-c', 'service_tier="standard"', '-c', 'features.fast_mode=false',
+          '--json', ...(schemaPath ? ['--output-schema', schemaPath] : []),
+          '--sandbox', 'read-only', '--ephemeral', '-C', workspace, request.prompt,
+        ], { cwd: workspace, timeoutMs: Math.min(this.timeoutMs, request.deadlineMs), ...(signal ? { signal } : {}) });
+        const result = request.strictSchema === false ? await execute() : await withSchemaFile(workspace, request.schema, execute);
+        if (!result.stdout.trim() && CODEX_AUTH_FAILURE.test(result.stderr)) {
           throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
         }
-        throw error;
-      }
+        try {
+          return { output: parseCodexOutput(result.stdout), stderr: result.stderr };
+        } catch (error) {
+          if (error instanceof CodexCliError && CODEX_AUTH_FAILURE.test(result.stderr)) {
+            throw classifyProcessError({ code: 'CODEX_AUTH', stderr: result.stderr });
+          }
+          throw error;
+        }
+      });
     } catch (error) {
       const details = error as { code?: unknown; name?: unknown };
       if (details.code === 'ABORT_ERR' || details.name === 'AbortError') throw error;
