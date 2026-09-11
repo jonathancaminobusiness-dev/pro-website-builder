@@ -10,6 +10,12 @@ import { affordances, pendingMessage, progressLabel, type ConversationUiState } 
  * Copy boundary: nothing here says “ver proposta”, “gerar identidade” or
  * “abrir preview”, and no control in this panel opens one. The only way out is
  * “Fechar briefing”; the visual stage owns the rest.
+ *
+ * Known limitation, to be picked up by the integration slice: a cancelled or
+ * failed conversation cannot be reopened on the same execution, because the
+ * core slice exposes no server capability to restart one. The panel therefore
+ * says so and offers the editable summary, or a new execution when there is no
+ * persisted text to close.
  */
 export interface BriefingConversationProps {
   state: ConversationUiState;
@@ -23,6 +29,8 @@ export interface BriefingConversationProps {
   onCancel: () => void;
   onConfirm: () => void;
   onRetry: () => void;
+  /** Drops the failed request so the field it came from can be edited and sent again. */
+  onDiscard: () => void;
   onResume: () => void;
   /** Loads a past answer back into the field so the captain can correct it. */
   onCorrect: (turn: ConversationTurn) => void;
@@ -71,7 +79,9 @@ export default function BriefingConversation(props: BriefingConversationProps): 
       <div className="section-heading">
         <div><p className="eyebrow">Antes do Gate 1</p><h2 id="briefing-chat-title">Conversa de briefing</h2></div>
       </div>
-      <p className="chat-progress" role="status">{progress ?? 'Abrindo a conversa desta execução…'}</p>
+      {state.availability === 'unreachable'
+        ? <p className="chat-progress" role="status">Não foi possível abrir a conversa desta execução.</p>
+        : <p className="chat-progress" role="status">{progress ?? 'Abrindo a conversa desta execução…'}</p>}
       {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} onRetry={props.onRetry} onResume={props.onResume} />}
     </section>;
   }
@@ -85,6 +95,10 @@ export default function BriefingConversation(props: BriefingConversationProps): 
   // Correcting a turn loads it back into the draft, so it is offered only while
   // a field bound to the draft is on screen to receive it.
   const draftVisible = showEntry || showQuestion;
+  const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
+  const haltedExit = showSummary
+    ? 'Feche o briefing pelo resumo editável acima: é ele que libera a etapa de identidade.'
+    : 'Não há texto salvo para fechar um briefing, então o caminho daqui é criar uma nova execução.';
 
   return <section className="briefing-chat" aria-labelledby="briefing-chat-title">
     <div className="section-heading">
@@ -119,7 +133,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
 
     {progress && <p className="chat-progress" role="status">{progress}</p>}
 
-    {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} onRetry={props.onRetry} onResume={props.onResume} />}
+    {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} onRetry={props.onRetry} onDiscard={props.onDiscard} />}
 
     {showEntry && <div className="chat-compose">
       <label htmlFor="briefing-chat-entry">Conte sobre o negócio: nicho, promessa, provas e o que a identidade deve evitar</label>
@@ -128,6 +142,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         rows={5}
         value={state.draft}
         maxLength={snapshot.limits.briefingMaxLength}
+        readOnly={can.locked}
         onChange={(event) => props.onDraftChange(event.target.value)}
         placeholder="Ex.: somos uma clínica veterinária de bairro; queremos prevenção, sem parecer hospital frio nem pet shop genérico."
       />
@@ -155,6 +170,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         rows={3}
         value={state.draft}
         maxLength={snapshot.limits.briefingMaxLength}
+        readOnly={can.locked}
         aria-describedby="briefing-chat-question"
         onChange={(event) => props.onDraftChange(event.target.value)}
       />
@@ -172,6 +188,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         rows={7}
         value={state.summaryDraft}
         maxLength={snapshot.limits.briefingMaxLength}
+        readOnly={can.locked}
         onChange={(event) => props.onSummaryChange(event.target.value)}
       />
       <div className="briefing-meta">
@@ -189,11 +206,11 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         a failed conversation — still has an exit. */}
     {!can.closed && <div className="actions chat-exit">
       <button className="secondary" onClick={props.onCancel} disabled={!can.canCancel}>Cancelar conversa</button>
-      {state.failure === null && <button className="secondary" onClick={props.onResume} disabled={can.busy}>Reabrir do ponto salvo</button>}
+      {!draftVisible && !showSummary && !halted && state.failure === null && <button className="secondary" onClick={props.onResume} disabled={can.locked}>Reabrir do ponto salvo</button>}
     </div>}
 
     {snapshot.state === 'cancelled' && <p className="chat-cancelled" role="status">
-      Conversa cancelada. Nada foi enviado ao curador e nenhuma etapa de identidade foi gasta. A execução continua aberta: reabra a conversa do ponto salvo ou feche o briefing pelo resumo editável acima, que é o que libera a etapa de identidade.
+      Conversa cancelada. Nada foi enviado ao curador e nenhuma etapa de identidade foi gasta, e ela não volta a abrir nesta execução. {haltedExit}
     </p>}
 
     {can.closed && <p className="chat-closed" role="status">
@@ -201,7 +218,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
     </p>}
 
     {snapshot.state === 'failed' && <p className="error-banner" role="alert">
-      A conversa parou: {snapshot.error ?? 'o servidor não conseguiu continuar.'} Nada foi fechado e nada foi enviado ao curador; reabra a conversa do ponto salvo ou feche o briefing pelo resumo editável.
+      A conversa parou: {snapshot.error ?? 'o servidor não conseguiu continuar.'} Nada foi fechado e nada foi enviado ao curador, e ela não continua nesta execução. {haltedExit}
     </p>}
 
     {snapshot.directions.length > 0 && <div className="chat-directions">
@@ -223,11 +240,17 @@ export default function BriefingConversation(props: BriefingConversationProps): 
   </section>;
 }
 
-function ChatFailure(props: { failure: { kind: string; message: string }; canRetry: boolean; onRetry: () => void; onResume: () => void }): ReactElement {
+/**
+ * The failed request and the two honest ways out of it: replay it exactly as it
+ * was sent, or drop it and edit the field again. A panel with no conversation
+ * yet has neither field nor pending body, so it offers the read instead.
+ */
+function ChatFailure(props: { failure: { kind: string; message: string }; canRetry: boolean; onRetry: () => void; onDiscard?: () => void; onResume?: () => void }): ReactElement {
   return <div className="chat-failure" role="alert">
     <p>{props.failure.message}</p>
     <div className="actions">
-      <button className="secondary" onClick={props.onResume}>Reabrir do ponto salvo</button>
+      {props.onResume && <button className="secondary" onClick={props.onResume}>Reabrir do ponto salvo</button>}
+      {props.onDiscard && props.canRetry && <button className="secondary" onClick={props.onDiscard}>Editar e reenviar</button>}
       {props.canRetry && <button className="primary" onClick={props.onRetry}>Tentar novamente</button>}
     </div>
   </div>;

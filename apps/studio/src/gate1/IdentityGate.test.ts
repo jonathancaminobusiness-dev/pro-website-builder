@@ -54,7 +54,7 @@ function controllerFor(snapshot: ConversationSnapshot | null): BriefingConversat
   return {
     state,
     closedBriefing: snapshot && snapshot.state === 'final' && snapshot.closedAt !== undefined ? snapshot.summary : null,
-    resume: noop, retry: noop, sendEntry: noop, answer: noop, skip: noop, cancel: noop, confirm: noop,
+    resume: noop, retry: noop, discard: noop, sendEntry: noop, answer: noop, skip: noop, cancel: noop, confirm: noop,
     setDraft: noop, setSummary: noop, correct: noop,
   };
 }
@@ -133,6 +133,21 @@ describe('Gate 1 execution progress', () => {
 
     expect(markup).toContain('Abrindo a conversa desta execução…');
     expect(markup).toContain('disabled="">Abrindo a conversa desta execução…');
+    expect(markup).not.toContain('>Executar etapa de identidade<');
+  });
+
+  it('names a conversation it could not read instead of a read still running, and keeps the stage closed', () => {
+    const unreadable: BriefingConversationController = {
+      ...controllerFor(null),
+      state: conversationReducer(
+        conversationReducer(initialConversationState('identity-progress-fixture'), { type: 'begin', intent: { kind: 'resume' } }),
+        { type: 'failed', failure: { kind: 'refused', message: 'Falha ao ler a conversa.' } },
+      ),
+    };
+    const markup = renderGate(snapshot('queued'), false, false, unreadable);
+
+    expect(markup).toContain('disabled="">Não foi possível abrir a conversa desta execução');
+    expect(markup).not.toContain('Abrindo a conversa desta execução…');
     expect(markup).not.toContain('>Executar etapa de identidade<');
   });
 

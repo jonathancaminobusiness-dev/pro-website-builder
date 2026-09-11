@@ -27,6 +27,7 @@ function render(next: ConversationUiState): string {
     onCancel: () => undefined,
     onConfirm: () => undefined,
     onRetry: () => undefined,
+    onDiscard: () => undefined,
     onResume: () => undefined,
     onCorrect: () => undefined,
   }));
@@ -139,7 +140,8 @@ describe('briefing conversation panel', () => {
     const markup = render(state(conversationSnapshot({ state: 'failed', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], error: 'o modelo não respondeu', messageCount: 1 })));
 
     expect(markup).toContain('A conversa parou');
-    expect(markup).toContain('Reabrir do ponto salvo');
+    expect(markup).toContain('não continua nesta execução');
+    expect(markup).not.toContain('Reabrir do ponto salvo');
     expect(markup).toContain('disabled="">Cancelar conversa');
     expect(markup).toContain('Fechar briefing');
     expect(markup).not.toContain('disabled="">Fechar briefing');
@@ -170,14 +172,61 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('Pergunta 3');
   });
 
-  it('says plainly that a cancelled conversation sent nothing to the curator, and still offers a way out', () => {
+  it('says plainly that a cancelled conversation sent nothing to the curator, and offers the close it can still do', () => {
     const markup = render(state(conversationSnapshot({ state: 'cancelled', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 })));
 
     expect(markup).toContain('Nada foi enviado ao curador');
-    expect(markup).toContain('Reabrir do ponto salvo');
+    expect(markup).toContain('não volta a abrir nesta execução');
+    expect(markup).not.toContain('Reabrir do ponto salvo');
     expect(markup).toContain('id="briefing-chat-summary"');
     expect(markup).toContain('Fechar briefing');
     expect(markup).not.toContain('disabled="">Fechar briefing');
+  });
+
+  it('sends a cancelled conversation with no persisted text to a new execution instead of an empty close', () => {
+    const markup = render(state(conversationSnapshot({ state: 'cancelled', messageCount: 0 })));
+
+    expect(markup).toContain('criar uma nova execução');
+    expect(markup).not.toContain('id="briefing-chat-summary"');
+    expect(markup).not.toContain('Fechar briefing');
+    expect(markup).not.toContain('Reabrir do ponto salvo');
+  });
+
+  it('never offers to reopen the conversation over a field the captain is editing', () => {
+    const summaryVisible = render(state(conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 })));
+    const answerVisible = render(state(conversationSnapshot({ state: 'question', question: clarifyingQuestion(), messageCount: 2 })));
+
+    expect(summaryVisible).toContain('id="briefing-chat-summary"');
+    expect(summaryVisible).not.toContain('Reabrir do ponto salvo');
+    expect(answerVisible).toContain('id="briefing-chat-answer"');
+    expect(answerVisible).not.toContain('Reabrir do ponto salvo');
+  });
+
+  it('freezes the field a failed request came from and offers to edit it instead of replaying it', () => {
+    const failed = state(
+      conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
+      { type: 'begin', intent: { kind: 'confirm', request: { idempotencyKey: 'key-confirm', summary: CONSOLIDATED_SUMMARY } } },
+      { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
+    );
+    const markup = render(failed);
+
+    expect(markup).toContain('readOnly=""');
+    expect(markup).toContain('Editar e reenviar');
+    expect(markup).toContain('Tentar novamente');
+    expect(markup).toContain('disabled="">Fechar briefing');
+    expect(render(conversationReducer(failed, { type: 'discard' }))).not.toContain('readOnly=""');
+  });
+
+  it('says the conversation could not be read instead of reporting a read still running', () => {
+    const unreachable = conversationReducer(
+      conversationReducer(initialConversationState('identity-1'), { type: 'begin', intent: { kind: 'resume' } }),
+      { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
+    );
+    const markup = render(unreachable);
+
+    expect(markup).toContain('Não foi possível abrir a conversa desta execução');
+    expect(markup).not.toContain('Abrindo a conversa desta execução…');
+    expect(markup).toContain('Tentar novamente');
   });
 
   it('stops offering the entry composer once a ceiling was reached', () => {

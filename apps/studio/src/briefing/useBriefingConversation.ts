@@ -9,6 +9,8 @@ export interface BriefingConversationController {
   closedBriefing: string | null;
   resume: () => void;
   retry: () => void;
+  /** Drops the request that failed so the field it came from can be edited and sent again. */
+  discard: () => void;
   sendEntry: () => void;
   answer: () => void;
   skip: () => void;
@@ -75,6 +77,7 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
       dispatch({ type: 'retry' });
       void run(pending, runId);
     },
+    discard: () => dispatch({ type: 'discard' }),
     sendEntry: () => send('entry', latest.current.draft.trim()),
     answer: () => send('answer', latest.current.draft.trim()),
     skip: () => send('skip', ''),
