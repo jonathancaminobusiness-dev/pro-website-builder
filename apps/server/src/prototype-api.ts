@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { agentTaskSchema, createFixtureIR, hashJson, stageRoles, type Approval, type DesignIR } from '@pwb/domain';
 import { Applier, DEFAULT_MAX_ACTIVE_CLAUDE, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
+import { lintDesign } from '@pwb/linter';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { declaresDarkScheme } from '@pwb/domain';
 import { readStateConditions } from '@pwb/render-hub';
@@ -344,6 +345,7 @@ export class PrototypeRunRegistry {
     if (record.outcome.gate === 'vetoed' && input.decision === 'approved') throw new Error('A vetoed revision cannot be approved; the deterministic gate has to pass first.');
     const version = record.store.get(record.outcome.versionId);
     if (!version) throw new Error(`Run ${runId} has lost its reviewed revision.`);
+    if (input.decision === 'approved') this.requireClean(version);
     const approval: Approval = {
       id: `${runId}-prototype-${record.decisions.length}-${input.decision}`,
       stage: 'prototype', approverRole: 'captain', versionId: version.id, versionHash: version.hash,
@@ -353,6 +355,22 @@ export class PrototypeRunRegistry {
     await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'gate2.decided', payload: { decision: approval.decision, versionId: approval.versionId, rationale: approval.rationale } });
     await this.persist(record);
     return this.snapshot(record);
+  }
+
+  /**
+   * No gate closes over a document the linter rejects, and Gate 2 is not the exception it used to be.
+   * `A11Y-090` and `COPY-110` are severity `error` - a route with no `h1`, a heading level skipped,
+   * placeholder copy still in the page - and nothing blocked on them here while every other gate
+   * blocked on its own. It is measured from the reviewed revision rather than read off the outcome,
+   * so what refuses the approval is the document being approved.
+   *
+   * Only the prototype stage's own rules block: an identity-stage error is Gate 1's to refuse and
+   * this stage may not write `/identity`, so blocking on one here would be a gate no captain could pass.
+   */
+  private requireClean(version: VersionRecord): void {
+    const errors = lintDesign(version.ir).findings.filter((finding) => finding.severity === 'error' && finding.stage === 'prototype');
+    if (errors.length === 0) return;
+    throw new Error(`O Gate 2 não aprova a revisão ${version.id} com ${errors.length} erro(s) de lint do protótipo: ${errors.map((finding) => `${finding.id} ${finding.path}`).join('; ')}`);
   }
 
   private require(runId: string): PrototypeRunRecord & { outcome: PrototypeStageOutcome } {
