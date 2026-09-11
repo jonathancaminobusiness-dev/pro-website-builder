@@ -398,6 +398,34 @@ describe('identity run', () => {
     expect(run.snapshot().directions).toHaveLength(3);
   });
 
+  it('discards the fan-out when persisting it fails, so nothing frozen or undecidable survives', async () => {
+    const repository = new ProjectRepository(database);
+    let failing = false;
+    const guarded = Object.create(repository) as ProjectRepository;
+    guarded.saveVersion = async (version) => {
+      if (failing) throw new Error('disco cheio');
+      await repository.saveVersion(version);
+    };
+    const runId = 'identity-persistencia-falhou';
+    const run = new IdentityRun({ runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    await run.initialize();
+    await driveToConfirmation(run);
+    failing = true;
+
+    const failed = await run.start();
+
+    expect(failed.status).toBe('failed');
+    // A gate cannot decide directions whose stage the run no longer holds, so
+    // the snapshot offers none.
+    expect(failed.directions).toEqual([]);
+    expect(run.snapshot().directions).toEqual([]);
+
+    const corrected = await run.conversation.confirm({ briefing: 'Clínica de bairro preventiva, corrigida depois da falha.', idempotencyKey: 'confirm-1' });
+
+    expect(corrected.confirmations).toHaveLength(1);
+    expect(run.snapshot().briefing).toBe('Clínica de bairro preventiva, corrigida depois da falha.');
+  });
+
   it('freezes nothing when the stage failed, so the next revision applies before and after a restart', async () => {
     const repository = new ProjectRepository(database);
     const fake = new FakeIdentityProvider();

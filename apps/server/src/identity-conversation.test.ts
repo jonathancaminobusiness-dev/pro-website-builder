@@ -431,6 +431,17 @@ describe('briefing conversation safe answers', () => {
     expect(tasks).toHaveLength(8);
   });
 
+  it('refuses a colour that is only a prefix of the one the captain wrote', async () => {
+    const shortened = succeeded(turn({ intent: 'recommendation', nextState: 'recommendation', hypotheses: ['A base pode partir de algo como #2E7 com areia.'] }));
+    const { conversation, tasks } = harness([shortened, shortened]);
+
+    const snapshot = await conversation.send({ message: 'Queremos manter o verde #2E7D32 da marca atual.', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(tasks[1]?.brief).toContain('Saída visual recusada (hex-color)');
+    expect(snapshot.fallback).toBe(true);
+    expect(snapshot.messages.every((message) => !message.text.includes('#2E7 '))).toBe(true);
+  });
+
   it('still refuses a hex value the model wrote into a conceptual direction it authored', async () => {
     const painted = turn({ ...FINAL, directions: [{ ...direction('dir-um', 'Um'), palette: 'Base areia com verde #2E7D32 nos destaques.' }, direction('dir-dois', 'Dois'), direction('dir-tres', 'Três')] } as Partial<BriefingConversationTurn> & Pick<BriefingConversationTurn, 'intent' | 'nextState'>);
     const { conversation } = harness([succeeded(CONFIRMATION), succeeded(painted), succeeded(painted)]);

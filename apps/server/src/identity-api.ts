@@ -79,7 +79,6 @@ export async function handleIdentityRequest(
   if (!run) { send(404, { error: 'Identity run not found.' }); return true; }
   const action = match[2];
   const subAction = match[3];
-  if (subAction && action !== 'conversation') { send(404, { error: 'Not found.' }); return true; }
 
   if (request.method === 'GET' && !action) { send(200, run.snapshot()); return true; }
 
