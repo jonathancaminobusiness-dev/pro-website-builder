@@ -149,6 +149,23 @@ describe('Gate 3 over the local API', () => {
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
   });
 
+  it('refuses a second preparation while one is still in flight', async () => {
+    const { origin, runId, run } = await harness();
+    // The claim is taken before the first await, so the route sees it while the
+    // first preparation is still compiling: two of them would interleave the
+    // snapshot, the compiled bytes and the refiner's idempotency key.
+    const inFlight = run.prepareRelease();
+    const refused = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: string }).error).toMatch(/já está sendo preparado/);
+
+    const prepared = await inFlight;
+    expect(run.releaseSnapshot()?.digest).toBe(prepared.digest);
+    // The claim is released with the preparation, so the gate still prepares.
+    const again = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
+    expect(again.status).toBe(200);
+  });
+
   it('ships the faces the project offers, and the release record carries their terms', async () => {
     const bytes = Buffer.from([119, 79, 70, 50, 9, 8, 7, 6]);
     const fontsDir = await mkdtemp(join(tmpdir(), 'pwb-run-fonts-'));
