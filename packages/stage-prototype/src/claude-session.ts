@@ -32,6 +32,8 @@ export interface ClaudeAsk<T> {
   schema: unknown;
   parse: (value: unknown) => T;
   deadlineMs: number;
+  /** Paths this ask names and the worker must be able to open, such as a critic's own screenshots. */
+  allowlist?: readonly string[];
   signal?: AbortSignal;
 }
 

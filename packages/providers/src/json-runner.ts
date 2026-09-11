@@ -18,6 +18,13 @@ export interface JsonRunRequest {
   prompt: string;
   /** JSON Schema the provider may hand to its binary; every provider validates the answer on return. */
   schema: unknown;
+  /**
+   * Paths this one request may read, named in the prompt. A sandboxed provider
+   * copies them into the session's workspace and points the prompt at the
+   * copies; a provider whose worker reads the originals ignores it. Empty by
+   * default, because a worker is answered from its prompt alone.
+   */
+  allowlist?: readonly string[];
   strictSchema?: boolean;
   deadlineMs: number;
 }
