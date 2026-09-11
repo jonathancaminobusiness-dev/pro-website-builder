@@ -144,7 +144,7 @@ describe('identity run', () => {
       },
     };
     const runId = 'identity-briefing-confirmado';
-    const run = new IdentityRun({ runId, repository, provider, briefing: 'Texto inicial, que a conversa ainda vai substituir.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider, briefing: 'Texto inicial, que a conversa ainda vai substituir.' });
     await run.initialize();
     await driveToConfirmation(run);
     const signed = 'Clínica de bairro preventiva para cães e gatos, que equilibra autoridade clínica e proximidade cotidiana.';
@@ -170,7 +170,7 @@ describe('identity run', () => {
     const provider: ModelProvider = {
       async propose(task, signal) { tasks.push(task.id); return inner.propose(task, signal); },
     };
-    const run = new IdentityRun({ runId: 'identity-conversa-cancelada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-conversa-cancelada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
     await run.conversation.send({ action: 'cancel', idempotencyKey: 'cancel-1' });
@@ -189,7 +189,7 @@ describe('identity run', () => {
 
   it('keeps the legacy start when a cancel closes a conversation the captain never wrote in', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-cancel-sem-conversa', repository, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-cancel-sem-conversa', repository, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
 
     const cancelled = await run.conversation.send({ action: 'cancel', idempotencyKey: 'cancel-1' });
@@ -212,7 +212,7 @@ describe('identity run', () => {
       async propose(task, signal) { tasks.push(task.id); return inner.propose(task, signal); },
     };
     const runId = 'identity-conversa-ilegivel';
-    const run = new IdentityRun({ runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
     await run.conversation.send({ action: 'cancel', idempotencyKey: 'cancel-1' });
@@ -220,7 +220,7 @@ describe('identity run', () => {
     // still on disk, still holding the cancelled round, no longer parseable.
     await repository.saveConversation(runId, JSON.stringify({ ...run.conversation.snapshot(), messages: [{ escrito: 'por outra versão' }] }));
 
-    const restored = new IdentityRun({ runId, repository, provider });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider });
     expect(await restored.restore()).toBe(true);
 
     await expect(restored.start()).rejects.toThrow(/não pôde ser lida/);
@@ -238,7 +238,7 @@ describe('identity run', () => {
 
   it('keeps the stage refused after a reopen until the next conversation signs a briefing', async () => {
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-conversa-reaberta', repository, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-conversa-reaberta', repository, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
     await run.conversation.send({ action: 'cancel', idempotencyKey: 'cancel-1' });
@@ -268,7 +268,7 @@ describe('identity run', () => {
     const provider: ModelProvider = {
       async propose(task, signal) { tasks.push(task.id); return inner.propose(task, signal); },
     };
-    const run = new IdentityRun({ runId: 'identity-resumo-nao-aprova', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-resumo-nao-aprova', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
 
@@ -293,12 +293,12 @@ describe('identity run', () => {
       },
     };
     const runId = 'identity-restart-confirmado';
-    const run = new IdentityRun({ runId, repository, provider, briefing: 'Texto inicial, que a conversa ainda vai substituir.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider, briefing: 'Texto inicial, que a conversa ainda vai substituir.' });
     await run.initialize();
     await driveToConfirmation(run);
     await run.conversation.confirm({ briefing: 'Clínica de bairro preventiva, confirmada antes do restart.', idempotencyKey: 'confirm-1' });
 
-    const restored = new IdentityRun({ runId, repository, provider });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider });
     expect(await restored.restore()).toBe(true);
     const started = await restored.start();
 
@@ -320,7 +320,7 @@ describe('identity run', () => {
     };
     // No `briefing` and no conversation: the omitted field is the legacy flow,
     // and it still runs on the fixed compatibility briefing.
-    const run = new IdentityRun({ runId: 'identity-sem-conversa', repository, provider });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-sem-conversa', repository, provider });
     await run.initialize();
 
     const started = await run.start();
