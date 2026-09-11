@@ -313,10 +313,40 @@ describe('briefing conversation state machine', () => {
     expect(reopened.revision).toBe(2);
     const archived = reopened.previousRevisions[0];
     expect(archived?.closedAs).toBe('unreadable');
+    expect(archived?.revision).toBe(1);
     expect(archived?.unreadable?.raw).toBe(onDisk);
     expect(archived?.unreadable?.reason).toContain('messages');
     // What the captain said is still there, byte for byte, for whoever can read it.
     expect(archived?.unreadable?.raw).toContain('Clínica veterinária de bairro.');
+  });
+
+  it('archives a damaged round under the number its own record still names, and under none when it names none', async () => {
+    const third = harness([succeeded(RECOMMENDATION), succeeded(RECOMMENDATION)]);
+    await third.conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    await third.conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    await third.conversation.reopen({ idempotencyKey: nextKey() });
+    await third.conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
+    await third.conversation.reopen({ idempotencyKey: nextKey() });
+    expect(third.conversation.snapshot().revision).toBe(3);
+    const onDisk = JSON.stringify({ ...JSON.parse(third.conversation.serialize()) as Record<string, unknown>, messages: [{ escrito: 'por outra versão' }] });
+
+    const named = harness([]).conversation;
+    named.restore(onDisk);
+    const afterNamed = await named.reopen({ idempotencyKey: nextKey() });
+
+    // The row still says which round it was, so that is the round archived and
+    // the next one continues the execution's own numbering.
+    expect(afterNamed.previousRevisions[0]?.revision).toBe(3);
+    expect(afterNamed.revision).toBe(4);
+    expect(afterNamed.messages[0]?.text).toContain('A conversa 3');
+
+    const anonymous = harness([]).conversation;
+    anonymous.restore('{ isto não é json');
+    const afterAnonymous = await anonymous.reopen({ idempotencyKey: nextKey() });
+
+    // Nothing in the record says which round it was, so nothing claims to.
+    expect(afterAnonymous.previousRevisions[0]?.revision).toBeUndefined();
+    expect(afterAnonymous.messages[0]?.text).not.toMatch(/\d/);
   });
 
   it('stays damaged when the reopen write fails, instead of falling back to an execution that never had a chat', async () => {

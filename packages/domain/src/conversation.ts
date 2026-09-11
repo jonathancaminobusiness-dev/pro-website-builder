@@ -392,7 +392,12 @@ export type BriefingConversationError = z.infer<typeof briefingConversationError
  * previous one stays readable. Nothing here is ever rewritten.
  */
 export const briefingConversationRevisionSchema = z.object({
-  revision: z.number().int().positive(),
+  /**
+   * Which round of this execution it was. Absent only on a round archived as
+   * `unreadable` whose record never yielded one: a number nobody can read is
+   * left unstated rather than invented.
+   */
+  revision: z.number().int().positive().optional(),
   /**
    * How this round ended: the two states a captain closes one in, plus
    * `unreadable` for a round whose persisted record no build could read back.

@@ -38,6 +38,12 @@ const HISTORY_WINDOW = 12;
 /** Idempotency keys kept per execution. A conversation is short; this is generous and bounded. */
 const KEY_MEMORY = 100;
 
+/** The round a damaged record still names, when it names one this server can trust. */
+function revisionOf(parsed: unknown): number | undefined {
+  const value = parsed !== null && typeof parsed === 'object' ? (parsed as { revision?: unknown }).revision : undefined;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
 /** The first field the persisted conversation got wrong, worded for the captain rather than for a schema. */
 function parseProblem(issues: ReadonlyArray<{ path: Array<string | number>; message: string }>): string {
   const first = issues[0];
@@ -166,7 +172,7 @@ export class BriefingConversation {
    * conversation could be built from it: why it was refused, and the bytes
    * themselves, which are the only copy of what that round said.
    */
-  private damaged: { reason: string; raw: string } | undefined;
+  private damaged: { reason: string; raw: string; revision?: number } | undefined;
   private readonly timeoutMs: number;
   private readonly maxQuestions: number;
   private readonly now: () => Date;
@@ -198,7 +204,11 @@ export class BriefingConversation {
     try { parsed = JSON.parse(serialized) as unknown; }
     catch { this.damaged = { reason: 'o texto salvo não é um JSON válido', raw: serialized }; return; }
     const snapshot = briefingConversationSnapshotSchema.safeParse(parsed);
-    if (!snapshot.success) { this.damaged = { reason: parseProblem(snapshot.error.issues), raw: serialized }; return; }
+    if (!snapshot.success) {
+      const revision = revisionOf(parsed);
+      this.damaged = { reason: parseProblem(snapshot.error.issues), raw: serialized, ...(revision === undefined ? {} : { revision }) };
+      return;
+    }
     this.damaged = undefined;
     const record = snapshot.data;
     this.data = {
@@ -420,7 +430,7 @@ export class BriefingConversation {
     if (this.damaged !== undefined) {
       const damaged = this.damaged;
       const archived: BriefingConversationRevision = {
-        revision: this.data.revision,
+        ...(damaged.revision === undefined ? {} : { revision: damaged.revision }),
         closedAs: 'unreadable',
         closedAt: this.now().toISOString(),
         messages: [],
@@ -431,9 +441,14 @@ export class BriefingConversation {
       };
       this.data = emptyState();
       this.data.previousRevisions.push(archived);
-      this.data.revision = archived.revision + 1;
+      if (damaged.revision !== undefined) this.data.revision = damaged.revision + 1;
       this.damaged = undefined;
-      this.append({ author: 'system', text: `A conversa ${archived.revision} desta execução não pôde ser lida (${damaged.reason}); o registro dela fica arquivado exatamente como estava. Esta é a conversa ${this.data.revision}.`, state: 'entry' });
+      // The damaged round is named only when its own record still says which
+      // one it was; a number this server would have to invent is not one the
+      // captain is told.
+      this.append({ author: 'system', text: damaged.revision === undefined
+        ? `A conversa anterior desta execução não pôde ser lida (${damaged.reason}); o registro dela fica arquivado exatamente como estava, e nem o número dela é legível. Esta é uma conversa nova.`
+        : `A conversa ${damaged.revision} desta execução não pôde ser lida (${damaged.reason}); o registro dela fica arquivado exatamente como estava. Esta é a conversa ${this.data.revision}.`, state: 'entry' });
       return await this.commit(input.idempotencyKey);
     }
     if (!canReopenBriefingConversation(this.data.state)) throw new ConversationError(this.reopenRefusal(), 409);
