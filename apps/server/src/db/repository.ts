@@ -9,14 +9,15 @@ const sqlIdentityBriefing = IDENTITY_BRIEFING.replaceAll("'", "''");
 const migration = `PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, parent_id TEXT, hash TEXT NOT NULL, ir TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, briefing TEXT NOT NULL DEFAULT '${sqlIdentityBriefing}', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY NOT NULL, project_id TEXT NOT NULL, briefing TEXT NOT NULL DEFAULT '${sqlIdentityBriefing}', conversation TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tasks (id TEXT NOT NULL, run_id TEXT NOT NULL, attempt INTEGER NOT NULL, stage TEXT NOT NULL, role TEXT NOT NULL, state TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (run_id, id, attempt));
 CREATE TABLE IF NOT EXISTS patches (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, base_version_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, project_id TEXT NOT NULL, stage TEXT NOT NULL, approver_role TEXT NOT NULL, version_id TEXT NOT NULL, version_hash TEXT NOT NULL, decision TEXT NOT NULL, rationale TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY NOT NULL, run_id TEXT NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS prototype_runs (id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL, step TEXT NOT NULL, detail TEXT NOT NULL, error TEXT, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL);`;
 
-const SCHEMA_VERSION = 4;
+/** The schema the migration brings a database up to; tests assert against this rather than a copied literal. */
+export const SCHEMA_VERSION = 5;
 
 export function openDatabase(filename: string): LocalDatabase {
   const sqlite = new Database(filename);
@@ -30,8 +31,21 @@ export function openDatabase(filename: string): LocalDatabase {
   sqlite.exec(migration);
   if (current < 3) sqlite.transaction(() => renameImagerySources(sqlite))();
   if (current < 4) sqlite.transaction(() => addRunBriefing(sqlite))();
+  if (current < 5) sqlite.transaction(() => addRunConversation(sqlite))();
   sqlite.pragma(`user_version = ${SCHEMA_VERSION}`);
   return { sqlite, orm: drizzle(sqlite, { schema }) };
+}
+
+/**
+ * The briefing conversation of an execution, as one nullable column. A database
+ * written before this version has no conversations to lose, and a row whose
+ * column is still NULL reads back as an execution that never started one — which
+ * is exactly what it is.
+ */
+function addRunConversation(sqlite: Database.Database): void {
+  const columns = sqlite.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>;
+  if (columns.some((column) => column.name === 'conversation')) return;
+  sqlite.exec('ALTER TABLE runs ADD COLUMN conversation TEXT');
 }
 
 function addRunBriefing(sqlite: Database.Database): void {
@@ -110,9 +124,19 @@ export class ProjectRepository {
     });
   }
 
-  async getRun(runId: string): Promise<{ id: string; projectId: string; briefing: string } | undefined> {
-    const row = this.db.sqlite.prepare('SELECT id, project_id AS projectId, briefing FROM runs WHERE id = ?').get(runId) as { id: string; projectId: string; briefing: string } | undefined;
-    return row;
+  /** Writes the serialized briefing conversation onto the execution; a run that does not exist yet simply has nothing to write to. */
+  async saveConversation(runId: string, conversation: string): Promise<void> {
+    await this.write(() => { this.db.sqlite.prepare('UPDATE runs SET conversation = ? WHERE id = ?').run(conversation, runId); });
+  }
+
+  /** Moves the execution onto the briefing a confirmation produced, without touching the conversation that produced it. */
+  async updateRunBriefing(runId: string, briefing: string): Promise<void> {
+    await this.write(() => { this.db.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run(briefing, runId); });
+  }
+
+  async getRun(runId: string): Promise<{ id: string; projectId: string; briefing: string; conversation?: string } | undefined> {
+    const row = this.db.sqlite.prepare('SELECT id, project_id AS projectId, briefing, conversation FROM runs WHERE id = ?').get(runId) as { id: string; projectId: string; briefing: string; conversation: string | null } | undefined;
+    return row ? { id: row.id, projectId: row.projectId, briefing: row.briefing, ...(row.conversation === null ? {} : { conversation: row.conversation }) } : undefined;
   }
 
   async listVersions(projectId: string): Promise<Array<{ id: string; parentId?: string; hash: string; ir: DesignIR }>> {

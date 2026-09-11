@@ -2,7 +2,7 @@
   "name": "@pwb/domain",
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": "./dist/index.js", "./briefing": "./dist/briefing.js", "./schema.json": "./dist/schema-json.js" },
+  "exports": { ".": "./dist/index.js", "./briefing": "./dist/briefing.js", "./conversation": "./dist/conversation.js", "./schema.json": "./dist/schema-json.js" },
   "types": "./dist/index.d.ts",
   "scripts": { "build": "tsc -p tsconfig.json" },
   "dependencies": { "zod": "^3.25.0", "zod-to-json-schema": "^3.24.5" }

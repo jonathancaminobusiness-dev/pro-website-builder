@@ -1,5 +1,7 @@
 export * from './agent.js';
 export * from './color.js';
+export * from './conversation.js';
+export * from './conversation-schema-json.js';
 export * from './divergence.js';
 export * from './approval.js';
 export * from './briefing.js';
