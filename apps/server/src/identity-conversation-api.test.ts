@@ -114,9 +114,10 @@ describe('briefing conversation API', () => {
     await post(server.origin, briefingConversationConfirmPath('conversa-briefing'), { briefing: 'Clínica de bairro preventiva, com autoridade clínica e proximidade cotidiana.', idempotencyKey: 'confirm-1' });
     const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-briefing`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string; conversation?: BriefingConversationSnapshot };
 
-    // The fixture leaves one gap open, so the confirmed briefing has to declare it.
-    expect(run.briefing).toContain('Clínica de bairro preventiva, com autoridade clínica e proximidade cotidiana.');
-    expect(run.briefing).toContain('Lacunas declaradas em aberto:');
+    // The execution carries exactly the text the captain signed; the gaps the
+    // fixture leaves open travel beside it, in the confirmation record.
+    expect(run.briefing).toBe('Clínica de bairro preventiva, com autoridade clínica e proximidade cotidiana.');
+    expect(run.conversation?.confirmations[0]?.openGaps.length).toBeGreaterThan(0);
     expect(run.conversation?.state).toBe('final');
   });
 
