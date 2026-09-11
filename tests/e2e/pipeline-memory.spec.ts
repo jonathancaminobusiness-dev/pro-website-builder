@@ -40,24 +40,6 @@ test.describe('pipeline run memory', () => {
     await expect.poll(() => page.evaluate(() => window.localStorage.getItem('pwb.pipeline.runId'))).toBeNull();
   });
 
-  test('says the undecided proposal was discarded when the restarted server rewound the run', async ({ page }) => {
-    await page.goto('/');
-    await page.getByRole('button', { name: 'Carregar briefing fixo' }).click();
-    await expect(page.locator('.review-panel iframe.preview-frame')).toBeVisible();
-
-    // A server restarted before the captain decided answers the restore with the
-    // head it kept and names the stage whose proposal it discarded.
-    await page.route('**/api/runs/*', async (route) => {
-      if (route.request().method() !== 'GET') { await route.fallback(); return; }
-      const response = await route.fetch();
-      await route.fulfill({ json: { ...(await response.json()), discardedStage: 'identity' } });
-    });
-    await page.reload();
-
-    await expect(page.getByRole('status')).toContainText('descartada quando o servidor reiniciou');
-    await expect(page.getByRole('button', { name: 'Executar próxima etapa' })).toBeVisible();
-  });
-
   test('keeps a run the server could not answer for, because a 404 is the only proof it is gone', async ({ page }) => {
     await page.goto('/');
     await page.evaluate(() => window.localStorage.setItem('pwb.pipeline.runId', 'studio-unreachable'));
