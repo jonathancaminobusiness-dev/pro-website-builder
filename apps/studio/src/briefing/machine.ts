@@ -102,7 +102,7 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
     case 'resumed':
       return state.snapshot === null
         ? { ...state, availability: 'absent', pending: null, failure: null }
-        : { ...state, pending: null, failure: { message: 'Não foi possível reabrir a conversa desta execução: o servidor não a encontrou. Nada foi fechado e o que já foi lido continua aqui. Tente novamente.' } };
+        : { ...state, failure: { message: 'Não foi possível reabrir a conversa desta execução: o servidor não a encontrou. Nada foi fechado e o que já foi lido continua aqui. Tente novamente.' } };
     case 'draft':
       return { ...state, draft: action.value };
     case 'summaryDraft':
@@ -128,14 +128,13 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
         failure: null,
       };
     }
-    // A failure keeps the request pending only while it holds a field the
-    // screen can still change; anything else is dropped, so every exit the
-    // conversation had stays live behind the error the captain can replay.
+    // The request stays pending so a retry replays it exactly as it was sent;
+    // what it does not do is hold the screen, which `locked` decides from the
+    // body the request carries.
     case 'failed':
       return {
         ...state,
         availability: state.snapshot === null && state.pending?.kind === 'resume' ? 'unreachable' : state.availability,
-        pending: holdsEditableBody(state.pending) ? state.pending : null,
         failure: action.failure,
       };
   }
@@ -202,7 +201,11 @@ export interface ConversationAffordances {
   /** A ceiling was reached: the panel stops asking and offers the editable summary and a manual close. */
   atLimit: boolean;
   closed: boolean;
-  /** The failure can be replayed: the pending request as it was sent, or the read that failed. */
+  /**
+   * The failed request can be sent again exactly as it was. It is withdrawn
+   * once the captain writes into the field a bodyless failure reopened: the
+   * text they just typed is the action they chose, not the one that failed.
+   */
   canRetry: boolean;
   /**
    * The failed request carried text from a field on screen, so dropping it and
@@ -214,8 +217,9 @@ export interface ConversationAffordances {
 export function affordances(state: ConversationUiState, now: Date): ConversationAffordances {
   const snapshot = state.snapshot;
   const busy = state.pending !== null && state.failure === null;
-  const locked = state.pending !== null;
-  const canRetry = state.failure !== null;
+  const locked = busy || holdsEditableBody(state.pending);
+  const bodylessSend = state.pending?.kind === 'send' && !holdsEditableBody(state.pending);
+  const canRetry = state.failure !== null && !(bodylessSend && state.draft.trim() !== '');
   const canDiscard = canRetry && holdsEditableBody(state.pending);
   const ready = state.availability === 'available' && snapshot !== null;
   if (!ready || snapshot === null) {

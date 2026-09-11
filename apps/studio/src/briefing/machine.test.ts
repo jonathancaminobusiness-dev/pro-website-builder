@@ -61,7 +61,6 @@ describe('conversation ui state', () => {
 
     for (const state of [lost, unreadable]) {
       const can = affordances(state, NOW);
-      expect(state.pending).toBeNull();
       expect(can.locked).toBe(false);
       expect(can.canCancel).toBe(true);
       expect(can.canRetry).toBe(true);
@@ -74,7 +73,6 @@ describe('conversation ui state', () => {
     const failed = reduce(asking, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
     const can = affordances(failed, NOW);
 
-    expect(failed.pending).toBeNull();
     expect(can.locked).toBe(false);
     expect(can.canSkip).toBe(true);
     expect(can.canCancel).toBe(true);
@@ -82,12 +80,28 @@ describe('conversation ui state', () => {
     expect(can.canDiscard).toBe(false);
   });
 
+  it('withdraws the replay of a failed skip once the captain answers the question instead', () => {
+    const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
+    const failed = reduce(asking, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
+    const typed = conversationReducer(failed, { type: 'draft', value: 'Segurança clínica.' });
+
+    expect(affordances(failed, NOW).canRetry).toBe(true);
+    expect(affordances(typed, NOW).canRetry).toBe(false);
+    expect(affordances(typed, NOW).canAnswer).toBe(true);
+    expect(affordances(conversationReducer(typed, { type: 'draft', value: '' }), NOW).canRetry).toBe(true);
+  });
+
+  it('keeps replaying a failed read while the captain types, since typing answers nothing it sent', () => {
+    const failed = reduce(initialConversationState(), { type: 'begin', intent: { kind: 'resume' } }, { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) }, { type: 'draft', value: 'Somos uma clínica de bairro.' });
+
+    expect(affordances(failed, NOW).canRetry).toBe(true);
+  });
+
   it('holds the field a failed answer came from until the captain decides what to do with it', () => {
     const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
     const failed = reduce(asking, { type: 'draft', value: 'Segurança clínica.' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
     const can = affordances(failed, NOW);
 
-    expect(failed.pending).not.toBeNull();
     expect(can.locked).toBe(true);
     expect(can.canDiscard).toBe(true);
   });

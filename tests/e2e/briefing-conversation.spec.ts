@@ -125,6 +125,29 @@ test('keeps the panel usable when a skip is refused, and replays the skip on dem
   expect(skips).toHaveLength(1);
 });
 
+test('answers the question the captain typed into instead of replaying the skip that failed', async ({ page }) => {
+  const api = await openConversation(page);
+  const chat = page.locator('.briefing-chat');
+
+  await page.getByLabel(/Conte sobre o negócio/).fill(ENTRY);
+  await page.getByRole('button', { name: 'Enviar para leitura' }).click();
+  await expect(chat.locator('#briefing-chat-question')).toHaveCount(1);
+
+  await page.route('**/conversation', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ runId: 'identity-conversation-e2e', state: 'recommendation' }) }), { times: 1 });
+  await page.getByRole('button', { name: 'Pular esta pergunta' }).click();
+  await expect(chat.getByRole('alert')).toContainText('não seguiu o contrato');
+
+  await page.getByLabel('Sua resposta').fill('Segurança clínica sem perder o carinho.');
+  // The typed text is the action the captain chose; the skip is no longer on offer.
+  await expect(chat.getByRole('button', { name: 'Tentar novamente' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Responder' }).click();
+
+  await expect(page.getByLabel(/Briefing final, editável/)).toHaveValue(CONSOLIDATED_SUMMARY);
+  expect(api.writes.filter((write) => write.body.intent === 'skip')).toHaveLength(0);
+  expect(api.writes.filter((write) => write.body.intent === 'answer')).toHaveLength(1);
+  await expect(chat.locator('.chat-turn', { hasText: 'Segurança clínica sem perder o carinho.' })).toHaveCount(1);
+});
+
 test('explains an off-contract response and lets the captain try again', async ({ page }) => {
   await openConversation(page, { breakNextResponse: true });
   const chat = page.locator('.briefing-chat');
