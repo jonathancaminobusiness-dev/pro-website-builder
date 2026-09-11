@@ -9,7 +9,7 @@ import { partitionEvidence } from './evidence.js';
 import { evaluateReleaseGate } from './gate.js';
 import { checkPreviewReleaseParity, unreviewedFaces } from './parity.js';
 import { PatchRefiner } from './refiner.js';
-import { DeterministicReleaseSummarizer, type ReleaseSummarizerProvider } from './summarizer.js';
+import { DeterministicReleaseSummarizer, sealSummary, type ReleaseSummarizerProvider } from './summarizer.js';
 
 export interface FinalizationStageOptions {
   criticProvider: ReleaseCriticProvider;
@@ -159,9 +159,14 @@ export class FinalizationStage {
     });
     // The summarizer has no gate authority, so its failure cannot cost the
     // captain the report either: it escalates and the report goes out unsummarized.
+    //
+    // And the stage seals what it gets back, rather than trusting each provider
+    // to have sealed itself: `ReleaseSummarizerProvider` is a public interface,
+    // so an implementation nobody here wrote could otherwise put a false
+    // `vetoCount` — or a claimed gate authority — into the captain's report.
     let summary: ReleaseSummary | undefined;
     try {
-      summary = await this.summarizer.summarize({ bundleDigest: compiled.digest, vetoes: draft.vetoes, critiques, escalations: draft.escalations }, input.signal);
+      summary = sealSummary(await this.summarizer.summarize({ bundleDigest: compiled.digest, vetoes: draft.vetoes, critiques, escalations: draft.escalations }, input.signal), draft.vetoes);
     } catch (error) {
       if (input.signal?.aborted) throw error;
       const reason = error instanceof Error ? error.message : 'O release-summarizer falhou sem mensagem.';
