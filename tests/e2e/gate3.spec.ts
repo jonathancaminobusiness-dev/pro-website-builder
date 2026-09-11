@@ -44,7 +44,7 @@ test('the captain reads the release report on Gate 3 and publishes the bundle', 
 
   // A new briefing is a new run, so Gate 3 comes back empty and ready instead of
   // showing the finished run's report.
-  await page.getByRole('button', { name: 'Reiniciar briefing' }).click();
+  await page.getByRole('button', { name: 'Novo briefing' }).click();
   await expect(gate.getByText('Prepare o release para compilar o bundle', { exact: false })).toBeVisible();
   await expect(gate.getByRole('button', { name: 'Preparar release' })).toBeEnabled();
 });
