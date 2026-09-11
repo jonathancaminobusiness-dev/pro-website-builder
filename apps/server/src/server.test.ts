@@ -126,4 +126,40 @@ describe('local API', () => {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     second.sqlite.close();
   });
+
+  it('answers 409 to a second release preparation while the first is still in flight', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-api-prepare-'));
+    const db = openDatabase(join(dir, 'prepare.sqlite'));
+    const runs = new Map<string, FixtureRun>();
+    const server = createApiServer({ runs, createRun: async (id) => { const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; } });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+    await fetch(`${origin}/api/runs`, { method: 'POST', headers: studio, body: JSON.stringify({ runId: 'prepare-race' }) });
+    // Both captain gates closed, so Gate 3 is the only one still open.
+    for (const stage of ['identity', 'prototype'] as const) {
+      await fetch(`${origin}/api/runs/prepare-race/stage`, { method: 'POST', headers: studio });
+      await fetch(`${origin}/api/runs/prepare-race/approve`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', stage }) });
+    }
+    await fetch(`${origin}/api/runs/prepare-race/stage`, { method: 'POST', headers: studio });
+
+    // Two preparations race: one compiles the gate, the other is refused the way
+    // a taken run id is, instead of interleaving a second compilation into the
+    // snapshot the studio will publish.
+    const [first, second] = await Promise.all([
+      fetch(`${origin}/api/runs/prepare-race/release`, { method: 'POST', headers: studio }),
+      fetch(`${origin}/api/runs/prepare-race/release`, { method: 'POST', headers: studio }),
+    ]);
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([200, 409]);
+    const refused = first.status === 409 ? first : second;
+    expect(((await refused.json()) as { error: string }).error).toMatch(/já está sendo preparado/);
+    const accepted = first.status === 200 ? first : second;
+    const prepared = (await accepted.json()) as { digest: string };
+    // The snapshot names the one preparation that ran, and a later one still works.
+    expect(runs.get('prepare-race')!.releaseSnapshot()!.digest).toBe(prepared.digest);
+    expect((await fetch(`${origin}/api/runs/prepare-race/release`, { method: 'POST', headers: studio })).status).toBe(200);
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    db.sqlite.close();
+  });
 });
