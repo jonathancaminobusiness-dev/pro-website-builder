@@ -134,17 +134,38 @@ describe('briefing conversation API', () => {
     expect(started.status).toBe(200);
 
     const late = await post(server.origin, briefingConversationConfirmPath('conversa-congelada'), { briefing: 'Outro briefing, escrito depois da largada.', idempotencyKey: 'confirm-2' });
-    // The same rule holds at the boundary every turn passes through, so no
-    // model call is bought on a briefing the execution can no longer take.
+    // The same rule holds at the boundary every turn passes through, so the two
+    // routes send the captain to the same place instead of to a revision the
+    // confirmation would refuse.
     const turn = await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'Pensando melhor, mudamos de ideia.', idempotencyKey: 'turn-5' });
 
     expect(turn.status).toBe(409);
     expect(late.status).toBe(409);
-    expect((await late.json() as { error: string }).error).toMatch(/congelado/);
+    const frozen = (await late.json() as { error: string }).error;
+    expect(frozen).toMatch(/congelado/);
+    expect((await turn.json() as { error: string }).error).toBe(frozen);
     const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-congelada`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string };
     expect(run.briefing).toBe('Clínica de bairro preventiva, com acompanhamento contínuo.');
     const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-congelada')}`, { headers: { origin: STUDIO_ORIGIN } }));
     expect(conversation.confirmations).toHaveLength(1);
+  });
+
+  it('refuses a turn the conversation would otherwise accept once the stage has started', async () => {
+    const server = await conversationServer();
+    await createRun(server.origin, 'conversa-em-curso', FIRST_TEXT);
+    const opened = await snapshotOf(await post(server.origin, briefingConversationPath('conversa-em-curso'), { idempotencyKey: 'turn-1' }));
+    expect(opened.state).toBe('recommendation');
+    const started = await post(server.origin, '/api/identity/runs/conversa-em-curso/start', { approverRole: 'captain' });
+    expect(started.status).toBe(200);
+
+    // The conversation would take this message; only the frozen execution refuses it.
+    const refused = await post(server.origin, briefingConversationPath('conversa-em-curso'), { message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
+
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: string }).error).toMatch(/congelado/);
+    const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-em-curso')}`, { headers: { origin: STUDIO_ORIGIN } }));
+    expect(conversation.state).toBe('recommendation');
+    expect(conversation.messages).toHaveLength(2);
   });
 
   it('never duplicates a turn when the same idempotency key is retried', async () => {

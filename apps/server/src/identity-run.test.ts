@@ -303,7 +303,7 @@ describe('identity run', () => {
     expect(run.snapshot().directions).toHaveLength(3);
   });
 
-  it('keeps the briefing editable after the stage failed, with the same answer before and after a restart', async () => {
+  it('freezes nothing when the stage failed, so the next revision applies before and after a restart', async () => {
     const repository = new ProjectRepository(database);
     const fake = new FakeIdentityProvider();
     const provider: ModelProvider = {
