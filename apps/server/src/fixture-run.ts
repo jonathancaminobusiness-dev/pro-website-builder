@@ -31,6 +31,12 @@ export interface FixtureSnapshot {
   approvals: Approval[];
   exportManifest?: ReleaseManifest;
   lintErrorCount: number;
+  /**
+   * The stage whose undecided proposal a restart discarded, when a restore
+   * rewound the head to the last version the captain approved. The captain is
+   * told the work is gone instead of reading a rewound document as progress.
+   */
+  discardedStage?: Stage;
 }
 
 export class FixtureRun {
@@ -46,6 +52,7 @@ export class FixtureRun {
   private status: FixtureStatus = 'queued';
   private exportManifest: ReleaseManifest | undefined;
   private lintErrorCount = 0;
+  private discardedStage: Stage | undefined;
   private initialized = false;
   private started = false;
   private statusBeforeCancel: FixtureStatus = 'queued';
@@ -104,6 +111,9 @@ export class FixtureRun {
     this.lintErrorCount = lintDesign(head.ir).errorCount;
     this.approvals.push(...approvals);
     this.stageIndex = Math.min(approved.length, STAGES.length);
+    const kept = new Set<string>();
+    for (let cursor = byId.get(head.id); cursor; cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined) kept.add(cursor.id);
+    this.discardedStage = versions.some((version) => !kept.has(version.id)) ? STAGES[this.stageIndex] : undefined;
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
     const events = await this.options.repository.listEvents(runId);
@@ -251,7 +261,7 @@ export class FixtureRun {
     return this.snapshot();
   }
 
-  snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
+  snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount, ...(this.discardedStage ? { discardedStage: this.discardedStage } : {}) }; }
 
   /**
    * Why Gate 3 may not run yet, or nothing when it may.
@@ -325,6 +335,7 @@ export class FixtureRun {
   }
 
   private launch(stage: Stage): Promise<void> {
+    this.discardedStage = undefined;
     const plan = this.planner.plan(this.runId(), this.currentVersion.id, BRIEF);
     const controller = new AbortController();
     this.runAbort = controller;

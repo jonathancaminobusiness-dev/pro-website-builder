@@ -428,6 +428,7 @@ describe('phase 0 fixture run', () => {
     expect(String(events.at(-1)?.payload.reason)).toMatch(/color\.ink/);
     const after = run.snapshot();
     expect(after.currentVersion.id).toBe(before.currentVersion.id);
+    expect(after.discardedStage).toBeUndefined();
     expect(after.rendered).toEqual(before.rendered);
     expect(after.status).toBe('queued');
     db.sqlite.close();
@@ -521,9 +522,11 @@ describe('phase 0 fixture run', () => {
     expect(after.currentVersion.id).toBe(root.id);
     expect(after.status).toBe('queued');
     expect(after.approvals).toHaveLength(0);
+    expect(after.discardedStage).toBe('identity');
 
     const next = await restored.runNext();
     expect(next.currentStage).toBe('identity');
+    expect(next.discardedStage).toBeUndefined();
     expect(next.currentVersion.parentId).toBe(root.id);
     const events = await repository.listEvents('run-pending');
     expect(events.filter((event) => event.type === 'run.started')).toHaveLength(1);
