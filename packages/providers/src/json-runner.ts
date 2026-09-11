@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
-import type { ClaudeRunnerOptions } from './model.js';
+import type { ClaudeExecutor, ClaudeRunnerOptions } from './model.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -76,26 +76,33 @@ export class JsonRunnerError extends Error {
   constructor(message: string, public readonly code: string) { super(message); this.name = 'JsonRunnerError'; }
 }
 
-const DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
+/** The headless JSON worker touches nothing: no filesystem, no network, no sub-agent. */
+export const JSON_RUNNER_DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
+
+/** The production spawn: no shell, the request's own deadline, and nothing of the parent environment beyond it. */
+const executeClaudeJson: ClaudeExecutor = async (executable, args, options) => await execFileAsync(executable, args, {
+  shell: false, timeout: options.timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...(options.signal ? { signal: options.signal } : {}),
+});
 
 export class ClaudeJsonRunner implements JsonModelRunner {
-  private readonly options: Required<Omit<ClaudeRunnerOptions, 'timeoutMs' | 'execute'>>;
+  private readonly options: Required<Omit<ClaudeRunnerOptions, 'timeoutMs'>>;
 
-  constructor(options: Omit<ClaudeRunnerOptions, 'timeoutMs' | 'execute'> = {}) {
-    this.options = { executable: 'claude', maxTurns: 4, ...options };
+  /** `execute` is injected by tests; production spawns the owner's local Claude Code binary with no shell. */
+  constructor(options: Omit<ClaudeRunnerOptions, 'timeoutMs'> = {}) {
+    this.options = { executable: 'claude', maxTurns: 4, execute: executeClaudeJson, ...options };
   }
 
   async run(request: JsonRunRequest, signal?: AbortSignal): Promise<unknown> {
     try {
-      const { stdout } = await execFileAsync(this.options.executable, [
+      const { stdout } = await this.options.execute(this.options.executable, [
         '-p', request.prompt,
         '--output-format', 'json',
         '--json-schema', JSON.stringify(request.schema),
         '--session-id', randomUUID(),
         '--no-session-persistence',
         '--max-turns', String(this.options.maxTurns),
-        '--disallowed-tools', DENIED_TOOLS,
-      ], { shell: false, timeout: request.deadlineMs, signal, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+        '--disallowed-tools', JSON_RUNNER_DENIED_TOOLS,
+      ], { timeoutMs: request.deadlineMs, ...(signal ? { signal } : {}) });
       const raw: unknown = JSON.parse(stdout);
       return raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;
     } catch (error) {
