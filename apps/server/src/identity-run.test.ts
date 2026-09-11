@@ -239,7 +239,7 @@ describe('identity run', () => {
         return fake.propose(task, signal);
       },
     };
-    const run = new IdentityRun({ runId: 'identity-confirma-na-largada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-confirma-na-largada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
 
@@ -266,7 +266,7 @@ describe('identity run', () => {
     const provider: ModelProvider = {
       async propose(task, signal) { tasks.push(task.id); return fake.propose(task, signal); },
     };
-    const run = new IdentityRun({ runId: 'identity-conversa-parada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-conversa-parada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await run.cancel();
     expect(run.snapshot().status).toBe('cancelled');
@@ -290,7 +290,7 @@ describe('identity run', () => {
       },
     };
     const runId = 'identity-parada-no-fechamento';
-    const run = new IdentityRun({ runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
 
@@ -315,7 +315,7 @@ describe('identity run', () => {
       await repository.saveConversation(id, conversation, briefing);
     };
     const runId = 'identity-confirmacao-sem-disco';
-    const run = new IdentityRun({ runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
     const retried = 'confirm-1';
@@ -350,7 +350,7 @@ describe('identity run', () => {
       await repository.saveConversation(id, conversation, briefing);
     };
     const runId = 'identity-largada-na-confirmacao';
-    const run = new IdentityRun({ runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
 
@@ -383,7 +383,7 @@ describe('identity run', () => {
         return fake.propose(task, signal);
       },
     };
-    const run = new IdentityRun({ runId: 'identity-conversa-congelada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-conversa-congelada', repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await run.conversation.send({ action: 'answer', idempotencyKey: 'turn-0' });
     expect(run.conversation.state).toBe('recommendation');
@@ -407,7 +407,7 @@ describe('identity run', () => {
       await repository.saveVersion(version);
     };
     const runId = 'identity-persistencia-falhou';
-    const run = new IdentityRun({ runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository: guarded, provider: new FakeIdentityProvider(), briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
     failing = true;
@@ -442,7 +442,7 @@ describe('identity run', () => {
       },
     };
     const runId = 'identity-briefing-apos-falha';
-    const run = new IdentityRun({ runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
+    const run = new IdentityRun({ modelAlias: 'fake', runId, repository, provider, briefing: 'Clínica veterinária de bairro, preventiva.' });
     await run.initialize();
     await driveToConfirmation(run);
     await run.conversation.confirm({ briefing: 'Primeira versão do briefing confirmada.', idempotencyKey: 'confirm-1' });
@@ -454,7 +454,7 @@ describe('identity run', () => {
     expect(corrected.confirmations.map((entry) => entry.revision)).toEqual([1, 2]);
     expect(run.snapshot().briefing).toBe('Segunda versão, escrita depois da falha.');
 
-    const restored = new IdentityRun({ runId, repository, provider });
+    const restored = new IdentityRun({ modelAlias: 'fake', runId, repository, provider });
     expect(await restored.restore()).toBe(true);
     expect(restored.snapshot().status).toBe('failed');
 
