@@ -87,8 +87,8 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [briefing, setBriefing] = useState(IDENTITY_BRIEFING);
 
   useEffect(() => {
-    if (snapshot) setBriefing(snapshot.briefing);
-  }, [snapshot?.runId, snapshot?.briefing]);
+    if (snapshot && snapshot.status !== 'unrecoverable') setBriefing(snapshot.briefing);
+  }, [snapshot?.runId, snapshot?.briefing, snapshot?.status]);
 
   const openRunForm = (label: string): ReactElement => <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
     <label htmlFor="gate1-open-run">{label}</label>

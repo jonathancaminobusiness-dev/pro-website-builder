@@ -49,7 +49,7 @@ export async function handleIdentityRequest(
     const runId = typeof input.runId === 'string' ? input.runId : `identity-${randomUUID()}`;
     let briefing: string | undefined;
     if (Object.prototype.hasOwnProperty.call(input, 'briefing')) {
-      try { briefing = normalizeIdentityBriefing(input.briefing, true); }
+      try { briefing = normalizeIdentityBriefing(input.briefing); }
       catch (error) { if (error instanceof BriefingValidationError) { send(400, { error: error.message }); return true; } throw error; }
     }
     // A run that is only on disk exists just as much as one this process holds:

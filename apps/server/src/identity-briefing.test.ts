@@ -27,10 +27,10 @@ describe('briefing migration', () => {
   });
 
   it('normalizes supplied values and rejects invalid server-layer input', () => {
-    expect(normalizeIdentityBriefing('  Nicho editorial.  ', true)).toBe('Nicho editorial.');
-    expect(normalizeIdentityBriefing(undefined, false)).toBe(IDENTITY_BRIEFING);
-    expect(() => normalizeIdentityBriefing(' \n\t ', true)).toThrow(BriefingValidationError);
-    expect(() => normalizeIdentityBriefing('a'.repeat(IDENTITY_BRIEFING_MAX_LENGTH + 1), true)).toThrow(BriefingValidationError);
-    expect(() => normalizeIdentityBriefing(42, true)).toThrow(BriefingValidationError);
+    expect(normalizeIdentityBriefing('  Nicho editorial.  ')).toBe('Nicho editorial.');
+    expect(normalizeIdentityBriefing(undefined)).toBe(IDENTITY_BRIEFING);
+    expect(() => normalizeIdentityBriefing(' \n\t ')).toThrow(BriefingValidationError);
+    expect(() => normalizeIdentityBriefing('a'.repeat(IDENTITY_BRIEFING_MAX_LENGTH + 1))).toThrow(BriefingValidationError);
+    expect(() => normalizeIdentityBriefing(42)).toThrow(BriefingValidationError);
   });
 });

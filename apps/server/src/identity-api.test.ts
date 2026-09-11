@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
-import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH, LEGACY_INVALID_BRIEFING_MESSAGE } from './identity-briefing.js';
+import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH, INVALID_IDENTITY_BRIEFING, LEGACY_INVALID_BRIEFING_MESSAGE } from './identity-briefing.js';
 import { STUDIO_ORIGIN } from './security.js';
 
 const servers: Array<{ close: () => Promise<void> }> = [];
@@ -152,10 +152,12 @@ describe('identity run creation', () => {
 
     for (const runId of runIds) {
       const restored = await fetch(`http://127.0.0.1:${port}/api/identity/runs/${runId}`);
-      const snapshot = await restored.json() as { status: string; error?: string };
+      const snapshot = await restored.json() as { status: string; briefing: string; error?: string };
       expect(restored.status).toBe(200);
       expect(snapshot.status).toBe('unrecoverable');
       expect(snapshot.error).toBe(LEGACY_INVALID_BRIEFING_MESSAGE);
+      expect(snapshot.briefing).toBe(INVALID_IDENTITY_BRIEFING);
+      expect(snapshot.briefing).not.toBe(IDENTITY_BRIEFING);
       const retry = await fetch(`http://127.0.0.1:${port}/api/identity/runs/${runId}/start`, { method: 'POST', headers: { origin: STUDIO_ORIGIN, 'content-type': 'application/json' }, body: JSON.stringify({ approverRole: 'captain' }) });
       expect(retry.status).toBe(400);
       expect(await retry.json()).toEqual({ error: LEGACY_INVALID_BRIEFING_MESSAGE });

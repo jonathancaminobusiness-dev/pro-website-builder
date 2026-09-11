@@ -5,7 +5,7 @@ import { HiggsfieldMcpProvider, type ModelProvider, type RasterProvider } from '
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { approvalOf, identityHash, identityLint, identityStageDeadlineMs as calculateIdentityStageDeadlineMs, IDENTITY_STAGE_DEADLINE_CODE, IdentityStage, pruneRenderCache, resolveIdentityStageDeadlines, StageError, type IdentityAsset, type IdentityCandidate, type IdentityGateState, type IdentityHandoff, type IdentityStageDeadlines, type IdentityStageResult } from '@pwb/stage-identity';
 import type { ProjectRepository } from './db/repository.js';
-import { BriefingValidationError, IDENTITY_BRIEFING, LEGACY_INVALID_BRIEFING_MESSAGE, normalizeIdentityBriefing } from './identity-briefing.js';
+import { BriefingValidationError, IDENTITY_BRIEFING, INVALID_IDENTITY_BRIEFING, LEGACY_INVALID_BRIEFING_MESSAGE, normalizeIdentityBriefing } from './identity-briefing.js';
 
 export { IDENTITY_BRIEFING } from './identity-briefing.js';
 
@@ -127,7 +127,7 @@ export class IdentityRun {
   private readonly deadlines: IdentityStageDeadlines;
 
   constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number }) {
-    this.briefing = normalizeIdentityBriefing(options.briefing, options.briefing !== undefined);
+    this.briefing = normalizeIdentityBriefing(options.briefing);
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     const ir = createFixtureIR();
     this.root = new Applier(this.store, new PatchGate()).createRoot(ir);
@@ -171,13 +171,14 @@ export class IdentityRun {
     const run = await this.options.repository.getRun(this.options.runId);
     if (!run) return false;
     try {
-      const briefing = normalizeIdentityBriefing(run.briefing, run.briefing !== undefined);
+      const briefing = normalizeIdentityBriefing(run.briefing);
       if (briefing !== run.briefing) await this.options.repository.updateRunBriefing(this.options.runId, briefing);
       this.briefing = briefing;
     } catch (error) {
       if (!(error instanceof BriefingValidationError)) throw error;
       this.status = 'unrecoverable';
       this.started = true;
+      this.briefing = INVALID_IDENTITY_BRIEFING;
       this.failure = LEGACY_INVALID_BRIEFING_MESSAGE;
       return true;
     }
@@ -292,12 +293,21 @@ export class IdentityRun {
    * rule has one definition rather than a copy per route.
    */
   private refuseIfTerminal(what: string): void {
-    if (this.status === 'unrecoverable') throw new StageError(this.failure ?? LEGACY_INVALID_BRIEFING_MESSAGE);
+    this.refuseIfUnrecoverable();
     if (this.status === 'cancelled') throw new StageError(`This run was cancelled; ${what}`);
   }
 
+  /**
+   * A legacy run whose persisted briefing is invalid has nothing to decide and
+   * nothing to stop, so every route refuses it. Stopping a run the captain
+   * already stopped stays the idempotent no-op it has always been.
+   */
+  private refuseIfUnrecoverable(): void {
+    if (this.status === 'unrecoverable') throw new StageError(this.failure ?? LEGACY_INVALID_BRIEFING_MESSAGE);
+  }
+
   async cancel(): Promise<IdentityRunSnapshot> {
-    this.refuseIfTerminal('change its state.');
+    this.refuseIfUnrecoverable();
     // What the stop is worth is decided before anything is awaited: a fan-out
     // that had already produced its result is the most expensive artefact in
     // the run, and awaiting first would let it finish and be discarded anyway.

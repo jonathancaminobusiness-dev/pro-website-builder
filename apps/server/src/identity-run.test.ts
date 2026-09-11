@@ -711,6 +711,11 @@ describe('identity run', () => {
     await expect(run.start()).rejects.toThrow(/cancelled/i);
     expect(run.snapshot().status).toBe('cancelled');
 
+    // Stopping a stopped run is the no-op the second click on the Studio's
+    // cancel button relies on, not an error the captain has to read.
+    const again = await run.cancel();
+    expect(again.status).toBe('cancelled');
+
     const events = await repository.listEvents('identity-stopped');
     expect(events.some((event) => event.type === 'identity.run.cancelled')).toBe(true);
   });
