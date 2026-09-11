@@ -133,7 +133,7 @@ export interface IdentityStageOptions {
   store: VersionStore;
   scheduler?: Scheduler;
   raster?: RasterProvider;
-  modelAlias?: string;
+  modelAlias: string;
   deadlines?: Partial<IdentityStageDeadlines>;
   onEvent?: (type: string, payload: Record<string, unknown>) => Promise<void> | void;
   now?: () => string;
@@ -298,7 +298,7 @@ export class IdentityStage {
     this.scheduler = options.scheduler ?? new Scheduler();
     this.branches = new CandidateBranchStore(options.store);
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
-    this.modelAlias = options.modelAlias ?? 'claude-local';
+    this.modelAlias = options.modelAlias;
     this.now = options.now ?? (() => new Date().toISOString());
   }
 

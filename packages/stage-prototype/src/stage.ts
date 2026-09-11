@@ -32,7 +32,7 @@ export interface PrototypeStageOptions {
   evidence: EvidenceSource;
   brief: string;
   /** The model that answers this stage's tasks, as the composer records it on every task it derives. */
-  modelAlias?: string;
+  modelAlias: string;
   budget?: LoopBudget;
   now?: () => number;
   onEvent?: (type: string, payload: Record<string, unknown>) => void | Promise<void>;
@@ -70,7 +70,7 @@ export class PrototypeStageError extends Error {
  * their own sessions, and one refinement cycle per pass of a loop that always stops for a stated reason.
  */
 export class PrototypeStage {
-  private get modelAlias(): string { return this.options.modelAlias ?? 'claude-local'; }
+  private get modelAlias(): string { return this.options.modelAlias; }
 
   private readonly budget: LoopBudget;
   private readonly now: () => number;

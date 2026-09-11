@@ -485,7 +485,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());
-    const stage = new FinalizationStage({
+    const stage = new FinalizationStage({ modelAlias: 'fake',
       criticProvider,
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       compilerOptions: COMPILER_OPTIONS,
@@ -564,7 +564,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());
-    const stage = new FinalizationStage({
+    const stage = new FinalizationStage({ modelAlias: 'fake',
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(failing),
       compilerOptions: COMPILER_OPTIONS,
@@ -581,7 +581,7 @@ describe('the finalization stage end to end with the deterministic providers', (
     const store = new VersionStore();
     const applier = new Applier(store, new PatchGate());
     const version = applier.createRoot(createFixtureIR());
-    const stage = new FinalizationStage({
+    const stage = new FinalizationStage({ modelAlias: 'fake',
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       summarizer: failing,
@@ -605,7 +605,7 @@ describe('the finalization stage end to end with the deterministic providers', (
       baseVersionId: approved.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'refino anterior', confidence: 1,
       stage: 'finalization', role: 'compiler', idempotencyKey: 'refino-anterior',
     }, { allowedPaths: ['/reviewRecord'], stage: 'finalization', role: 'compiler' }, approved.id);
-    const stage = new FinalizationStage({
+    const stage = new FinalizationStage({ modelAlias: 'fake',
       criticProvider: new FakeReleaseCriticProvider(),
       refiner: new PatchRefiner(new FakeReleaseRefiner()),
       compilerOptions: COMPILER_OPTIONS,

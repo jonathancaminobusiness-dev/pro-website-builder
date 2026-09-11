@@ -18,7 +18,7 @@ export interface FinalizationStageOptions {
   scheduler?: Scheduler;
   compilerOptions: Omit<ReleaseCompilerOptions, 'fonts'> & Pick<ReleaseCompilerOptions, 'fonts'>;
   promptVersion?: string;
-  modelAlias?: string;
+  modelAlias: string;
 }
 
 export interface FinalizationStageInput {
@@ -192,7 +192,7 @@ export class FinalizationStage {
       evidence: partitionEvidence(input.evidence, { digest: compiled.digest, irHash: compiled.irHash }).credited,
       attempt: 1,
       promptVersion: this.options.promptVersion ?? 'phase3-v1',
-      modelAlias: this.options.modelAlias ?? 'claude-local',
+      modelAlias: this.options.modelAlias,
     };
     const built = criticTasks(context);
     const byId = new Map(built.map((entry) => [entry.task.id, entry.definition]));
@@ -234,7 +234,7 @@ export class FinalizationStage {
       baseVersionId: version.id,
       inputDigest: hashJson({ runId, attempt, findings: findings.map((finding) => finding.id).sort() }),
       promptVersion: this.options.promptVersion ?? 'phase3-v1',
-      modelAlias: this.options.modelAlias ?? 'claude-local',
+      modelAlias: this.options.modelAlias,
       deadlineMs: 8 * 60_000,
       allowedPaths: REFINER_PATHS,
       brief: 'Resolva os achados de release com o menor patch possível, sem reescrever o site.',

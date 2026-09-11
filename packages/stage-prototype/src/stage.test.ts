@@ -34,7 +34,7 @@ function harness(): Harness {
 }
 
 function stageFor(setup: Harness, composer: ComposerProvider = new FakeSectionComposer(), critique: CritiqueProvider = new FakeCritiqueProvider()): PrototypeStage {
-  return new PrototypeStage({
+  return new PrototypeStage({ modelAlias: 'fake',
     store: setup.store,
     applier: setup.applier,
     scheduler: new Scheduler({ maxActiveClaude: 3 }),
@@ -112,7 +112,7 @@ describe('prototype stage', () => {
         return { evidence: bundle.evidence.filter((entry) => entry.context.viewport === 768), captures: bundle.captures };
       },
     };
-    const stage = new PrototypeStage({
+    const stage = new PrototypeStage({ modelAlias: 'fake',
       store: setup.store, applier: setup.applier, scheduler: new Scheduler({ maxActiveClaude: 3 }),
       architect: new FakeInformationArchitect(), composer: new FakeSectionComposer(),
       critique: new FakeCritiqueProvider(), evidence: narrow,
@@ -349,7 +349,7 @@ describe('control seed', () => {
     const applier = new Applier(store, new PatchGate());
     const base = applier.createRoot(createOffRhythmControlIR());
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
-    const stage = new PrototypeStage({
+    const stage = new PrototypeStage({ modelAlias: 'fake',
       store, applier, scheduler: new Scheduler({ maxActiveClaude: 3 }),
       architect: new FakeInformationArchitect(), composer: new FakeSectionComposer(),
       critique: new FakeCritiqueProvider(), evidence: new DerivedEvidenceSource(),
@@ -398,19 +398,6 @@ describe('prototype stage model alias', () => {
     expect(ids.some((id) => id.includes('-critic-'))).toBe(true);
     // Not one task may claim Claude produced it while Codex answered.
     expect([...new Set(scheduler.seen.map((task) => task.modelAlias))]).toEqual(['codex-gpt-5.6-sol']);
-  });
-
-  it('still names Claude when no provider is given, as the default it always was', async () => {
-    const setup = harness();
-    const scheduler = new RecordingScheduler({ maxActiveClaude: 3 });
-    const stage = new PrototypeStage({
-      store: setup.store, applier: setup.applier, scheduler,
-      architect: new FakeInformationArchitect(), composer: new FakeSectionComposer(),
-      critique: new FakeCritiqueProvider(), evidence: new DerivedEvidenceSource(),
-      brief: 'Compilar a identidade aprovada em um protótipo de três rotas.',
-    });
-    await stage.run({ runId: 'run-alias-default', baseVersionId: setup.base.id });
-    expect([...new Set(scheduler.seen.map((task) => task.modelAlias))]).toEqual(['claude-local']);
   });
 });
 

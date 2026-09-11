@@ -12,7 +12,7 @@ import { IdentityStage } from './stage.js';
 function newStage() {
   const store = new VersionStore();
   const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
-  const stage = new IdentityStage({
+  const stage = new IdentityStage({ modelAlias: 'fake',
     runId: 'run-handoff', baseVersionId: root.id, briefing: 'Uma oficina de produto autoral precisa explicar seu processo.',
     provider: new FakeIdentityProvider(), store, raster: new HiggsfieldMcpProvider({ configured: false }),
   });

@@ -17,7 +17,7 @@ describe('phase 0 secret boundary', () => {
   it('keeps database dump, rendered bundle, and captured log data free of secret-like values', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pwb-secrets-'));
     const database = openDatabase(join(root, 'secrets.sqlite'));
-    const run = new FixtureRun({ modelAlias: 'claude-local', repository: new ProjectRepository(database), release: releaseOptions(join(root, 'exports')), provider: createModelProvider() });
+    const run = new FixtureRun({ modelAlias: 'fake', repository: new ProjectRepository(database), release: releaseOptions(join(root, 'exports')), provider: createModelProvider() });
     const snapshot = await run.initialize('secret-scan').then(() => run.runAll());
     // The release the run stopped at: the exact bytes Gate 3 would publish.
     const compiled = compileRelease(renderDesign(snapshot.currentVersion.ir), snapshot.currentVersion.ir, { siteUrl: 'https://site.invalid', siteName: 'pro-website-builder' });
@@ -34,7 +34,7 @@ describe('phase 0 secret boundary', () => {
     const root = await mkdtemp(join(tmpdir(), 'pwb-identity-secrets-'));
     const database = openDatabase(join(root, 'identity-secrets.sqlite'));
     const repository = new ProjectRepository(database);
-    const run = new IdentityRun({ runId: 'identity-secret-scan', repository, provider: createIdentityProvider() });
+    const run = new IdentityRun({ modelAlias: 'fake', runId: 'identity-secret-scan', repository, provider: createIdentityProvider() });
     await run.initialize();
     const snapshot = await run.start();
     await run.approve({ directionId: snapshot.directions[0]!.directionId, approverRole: 'captain', rationale: 'Aprovada para o scan.' });

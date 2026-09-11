@@ -126,7 +126,7 @@ export class IdentityRun {
   private briefing: string;
   private readonly deadlines: IdentityStageDeadlines;
 
-  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number; modelAlias?: string }) {
+  constructor(private readonly options: { runId: string; repository: ProjectRepository; provider: ModelProvider; raster?: RasterProvider; scheduler?: Scheduler; briefing?: string; renderCacheDir?: string; deadlines?: Partial<IdentityStageDeadlines>; stageDeadlineMs?: number; modelAlias: string }) {
     this.briefing = normalizeIdentityBriefing(options.briefing);
     this.deadlines = resolveIdentityStageDeadlines(options.deadlines);
     const ir = createFixtureIR();
@@ -147,7 +147,7 @@ export class IdentityRun {
       baseVersionId: this.root.id,
       briefing: this.briefing,
       provider: this.options.provider,
-      ...(this.options.modelAlias ? { modelAlias: this.options.modelAlias } : {}),
+      modelAlias: this.options.modelAlias,
       store: this.store,
       ...(this.options.scheduler ? { scheduler: this.options.scheduler } : {}),
       deadlines: this.deadlines,
