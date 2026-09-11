@@ -292,9 +292,9 @@ export class IdentityRun {
         this.status = 'needs_review';
         await this.checkpoint();
       }).catch(async (error: unknown) => {
-        // A run that failed holds nothing: the partial result goes with the
-        // stage it came from, so the snapshot never shows directions no gate
-        // can decide and the briefing is free again.
+        // A run that failed holds nothing: the partial result is discarded, so
+        // the snapshot never shows directions no gate can decide and the
+        // briefing is free again.
         this.result = undefined;
         this.failure = error instanceof Error ? error.message : 'The identity stage failed.';
         this.status = 'failed';
@@ -375,6 +375,10 @@ export class IdentityRun {
 
   async approve(input: { directionId: string; approverRole: string; rationale: string; overrideRationale?: string }): Promise<IdentityRunSnapshot> {
     this.refuseIfCancelled('Gate 1 cannot be decided on it.');
+    // Both gate routes decide on what the run holds: a direction the run no
+    // longer carries is refused here rather than handed to a stage whose
+    // fan-out the run already discarded.
+    this.candidate(input.directionId);
     const approval = await this.stage.approve({ ...input, ...(this.abort ? { signal: this.abort.signal } : {}) });
     const record: Approval = approvalOf(approval.record, this.approvals.length);
     await ignoringDuplicate(this.options.repository.createApproval({ ...record, runId: this.options.runId, projectId: this.projectId }));
