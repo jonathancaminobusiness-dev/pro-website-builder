@@ -4,7 +4,7 @@
 
 **Goal:** Enforce one server-owned briefing normalization contract for every identity execution while preserving the existing Studio and persistence behavior.
 
-**Architecture:** The server briefing module will expose a typed normalizer that distinguishes omitted legacy input from supplied input. The HTTP API and `IdentityRun` will use the same function before execution creation, so SQLite, snapshots, restart restoration, and curator prompts all consume the normalized value.
+**Architecture:** The server briefing module will expose a typed single-argument normalizer that returns the legacy briefing only for omitted input. The HTTP API and `IdentityRun` will use the same function before execution creation, so SQLite, snapshots, restart restoration, and curator prompts all consume the normalized value.
 
 **Tech Stack:** Node HTTP, TypeScript, Vitest, SQLite-backed repository, existing `@pwb/domain` briefing constants.
 
@@ -27,7 +27,7 @@
 
 **Interfaces:**
 - Consumes: the existing `IDENTITY_BRIEFING` and `IDENTITY_BRIEFING_MAX_LENGTH` exports.
-- Produces: failing coverage for `normalizeIdentityBriefing(value, supplied)` and its `BriefingValidationError` messages.
+- Produces: failing coverage for `normalizeIdentityBriefing(value)` and its `BriefingValidationError` messages.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -67,7 +67,7 @@ git commit -m "test(server): define briefing normalization contract"
 - Modify: `apps/server/src/identity-run.test.ts`
 
 **Interfaces:**
-- Consumes: `normalizeIdentityBriefing(value: unknown, supplied: boolean): string` and `BriefingValidationError` from `identity-briefing.ts`.
+- Consumes: `normalizeIdentityBriefing(value: unknown): string` and `BriefingValidationError` from `identity-briefing.ts`.
 - Produces: API 400 validation through the shared normalizer and normalized values for direct `IdentityRun` construction and persistence.
 
 - [ ] **Step 1: Write the failing direct-construction test**

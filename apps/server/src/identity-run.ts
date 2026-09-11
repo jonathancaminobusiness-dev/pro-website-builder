@@ -375,7 +375,7 @@ export class IdentityRun {
 
   /** Applies a token change to the approved identity, which is what reopens Gate 1. */
   async changeToken(input: { tokenPath: string; value: TokenValue; rationale: string }): Promise<IdentityRunSnapshot> {
-    this.refuseIfTerminal('change a token on it.');
+    this.refuseIfUnrecoverable();
     const changed = await this.stage.changeToken(input);
     const version = this.store.get(changed.versionId)!;
     await ignoringDuplicate(this.options.repository.saveVersion({ id: version.id, projectId: this.projectId, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir }));

@@ -1,6 +1,6 @@
 import { IDENTITY_BRIEFING, IDENTITY_BRIEFING_MAX_LENGTH } from '@pwb/domain/briefing';
 import { renderBriefingCreateButton, renderBriefingEditor, renderBriefingReplacementConfirmation, renderBriefingReplacementOffer, type BriefingEditorElementFactory } from '@pwb/renderer/briefing-editor';
-import { createElement, useCallback, useEffect, useState, type ReactElement } from 'react';
+import { createElement, useCallback, useState, type ReactElement } from 'react';
 
 export interface IdentityDirectionView {
   directionId: string;
@@ -85,10 +85,9 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const [tokenPath, setTokenPath] = useState('color.accent');
   const [tokenValue, setTokenValue] = useState('#ff7a00');
   const [briefing, setBriefing] = useState(IDENTITY_BRIEFING);
-
-  useEffect(() => {
-    if (snapshot && snapshot.status !== 'unrecoverable') setBriefing(snapshot.briefing);
-  }, [snapshot?.runId, snapshot?.briefing, snapshot?.status]);
+  // The briefing a replacement run would be created with is always written from
+  // scratch: nothing the captain did not read and choose is ever posted.
+  const [replacementBriefing, setReplacementBriefing] = useState('');
 
   const openRunForm = (label: string): ReactElement => <form className="token-form open-run" onSubmit={(event) => { event.preventDefault(); props.onOpen(openRunId.trim()); }}>
     <label htmlFor="gate1-open-run">{label}</label>
@@ -119,11 +118,13 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
   const createConfirm = (replacing: string, offer: string): ReactElement => confirming === asking && !actionsBlocked
     ? renderBriefingReplacementConfirmation(briefingElementFactory, {
         replacing,
+        editor: renderBriefingEditor(briefingElementFactory, { value: replacementBriefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setReplacementBriefing }),
         disabled: props.busy,
+        createDisabled: replacementBriefing.trim() === '',
         onKeep: () => setConfirming(''),
-        onCreate: () => { setConfirming(''); props.onCreate(briefing.trim()); },
+        onCreate: () => { setConfirming(''); props.onCreate(replacementBriefing.trim()); setReplacementBriefing(''); },
       })
-    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => setConfirming(asking) });
+    : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => { setReplacementBriefing(''); setConfirming(asking); } });
 
   const briefingEditor = renderBriefingEditor(briefingElementFactory, { value: briefing, maxLength: IDENTITY_BRIEFING_MAX_LENGTH, onChange: setBriefing });
   const briefingCreateButton = renderBriefingCreateButton(briefingElementFactory, { disabled: props.busy || briefing.trim() === '', onCreate: () => props.onCreate(briefing.trim()) });

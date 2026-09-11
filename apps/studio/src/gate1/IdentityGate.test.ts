@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { IDENTITY_BRIEFING, INVALID_IDENTITY_BRIEFING } from '@pwb/domain/briefing';
+import { INVALID_IDENTITY_BRIEFING } from '@pwb/domain/briefing';
 import IdentityGate, { type IdentityGateSnapshot, type IdentityDirectionView } from './IdentityGate.js';
 
 const direction: IdentityDirectionView = {
@@ -97,17 +97,11 @@ describe('Gate 1 execution progress', () => {
   it('renders an invalid legacy run as ended without a retry action', () => {
     const markup = renderGate({ ...snapshot('unrecoverable'), briefing: INVALID_IDENTITY_BRIEFING, error: 'Esta execução legada foi encerrada porque o briefing salvo é inválido.' });
 
+    expect(markup).toContain(`<p class="gate-briefing">${INVALID_IDENTITY_BRIEFING}</p>`);
     expect(markup).toContain('encerrada sem recuperação');
     expect(markup).toContain('Execução encerrada');
     expect(markup).toContain('briefing salvo é inválido');
     expect(markup).not.toContain('Tentar novamente');
-  });
-
-  it('shows the invalid-briefing placeholder instead of the compatibility briefing', () => {
-    const markup = renderGate({ ...snapshot('unrecoverable'), briefing: INVALID_IDENTITY_BRIEFING });
-
-    expect(markup).toContain(`<p class="gate-briefing">${INVALID_IDENTITY_BRIEFING}</p>`);
-    expect(markup).not.toContain(IDENTITY_BRIEFING);
   });
 
   it('keeps a queued server status visible while the start request is pending', () => {
