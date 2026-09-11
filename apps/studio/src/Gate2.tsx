@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { failureMessage, isMissing, POLL_MAX_FAILURES, requestJson } from './request.js';
+import { measuredViewport, pendingFindingIds } from './gate2-review.js';
 import './gate2.css';
 
 type Verdict = 'pass' | 'revise' | 'uncertain';
@@ -74,11 +76,14 @@ const statusCopy: Record<Progress['status'], string> = {
 };
 const isActive = (status: Progress['status']): boolean => status === 'queued' || status === 'running';
 
+/**
+ * Every read and every write of this screen goes through the one helper the
+ * Studio has, so a refusal the server could not explain — a 500 with no JSON —
+ * reaches the captain in the language of the interface instead of the
+ * browser's own 'Failed to fetch'.
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_ORIGIN}${path}`, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
-  const payload = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error ?? 'Não foi possível concluir a ação.');
-  return payload;
+  return requestJson<T>(`${API_ORIGIN}${path}`, init);
 }
 
 function describePatch(patch: ProposedPatch | undefined): string {
@@ -152,22 +157,27 @@ export default function Gate2(): ReactElement {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [route, setRoute] = useState('/');
-  const [viewport, setViewport] = useState(1440);
+  // The width the comparison opens at is one the evidence measured; nothing
+  // else can be shown, because nothing else was captured.
+  const [viewport, setViewport] = useState<number | null>(null);
   const [mode, setMode] = useState<'side' | 'overlay' | 'difference'>('side');
   const [lens, setLens] = useState<'perception' | 'comprehension' | 'projection'>('projection');
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const [gateReason, setGateReason] = useState('');
+  /** A decision the server would refuse: its reason is the captain's to write. */
+  const undecidable = (findingId: string): boolean => (reasons[findingId]?.trim() ?? '') === '';
 
   const adopt = useCallback((next: Snapshot): void => {
     setSnapshot(next);
     const routes = next.result?.routes ?? [];
     setRoute((current) => routes.some((entry) => entry.route === current) ? current : routes[0]?.route ?? '/');
+    setViewport((current) => measuredViewport(next.result?.viewports ?? [], current));
   }, []);
 
   const act = useCallback(async (action: () => Promise<Snapshot>): Promise<void> => {
     setBusy(true); setError('');
     try { adopt(await action()); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); }
+    catch (cause) { setError(failureMessage(cause)); }
     finally { setBusy(false); }
   }, [adopt]);
 
@@ -184,15 +194,31 @@ export default function Gate2(): ReactElement {
     if (!runId) { setSnapshot(null); return; }
     let live = true;
     let timer: number | undefined;
+    // A read that failed is retried, because the server may be restarting
+    // mid-measurement, but only so many times: a server that never comes back
+    // ends the loop and says so instead of being read in silence.
+    let failures = 0;
     const poll = async (): Promise<void> => {
       try {
         const next = await request<Snapshot>(`/api/prototype/runs/${encodeURIComponent(runId)}`);
         if (!live) return;
+        failures = 0;
         adopt(next);
         setError(next.error ?? '');
         if (isActive(next.status)) timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
       } catch (cause) {
-        if (live) setError(cause instanceof Error ? cause.message : 'Erro desconhecido.');
+        if (!live) return;
+        if (isMissing(cause)) {
+          setError('Esta execução não está mais no servidor.');
+          return;
+        }
+        failures += 1;
+        if (failures >= POLL_MAX_FAILURES) {
+          setError('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.');
+          return;
+        }
+        setError(failureMessage(cause));
+        timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
       }
     };
     void poll();
@@ -204,13 +230,32 @@ export default function Gate2(): ReactElement {
     if (runId) return;
     let live = true;
     let timer: number | undefined;
+    let failures = 0;
+    // The banner belongs to whatever last spoke to the captain: this loop clears
+    // only the message it put there, never the refusal one of his own actions got.
+    let reported = '';
+    const report = (message: string): void => { reported = message; setError(message); };
     const poll = async (): Promise<void> => {
       try {
         const payload = await request<{ runs: Progress[] }>('/api/prototype/runs');
         if (!live) return;
+        failures = 0;
+        const mine = reported;
+        reported = '';
+        setError((current) => (current === mine ? '' : current));
         setRecent(payload.runs);
         if (payload.runs.some((entry) => isActive(entry.status))) timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
-      } catch { if (live) setRecent([]); }
+      } catch (cause) {
+        if (!live) return;
+        setRecent([]);
+        failures += 1;
+        if (failures >= POLL_MAX_FAILURES) {
+          report('Não foi possível ler as execuções deste servidor. Recarregue para tentar de novo.');
+          return;
+        }
+        report(failureMessage(cause));
+        timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
+      }
     };
     void poll();
     return () => { live = false; if (timer !== undefined) window.clearTimeout(timer); };
@@ -222,18 +267,32 @@ export default function Gate2(): ReactElement {
       const created = await request<Snapshot>('/api/prototype/runs', { method: 'POST', body: JSON.stringify({ approverRole: 'captain', runId: `gate2-${Date.now()}` }) });
       window.location.hash = `${GATE2_ROUTE}/${encodeURIComponent(created.runId)}`;
       setRunId(created.runId);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); }
+    } catch (cause) { setError(failureMessage(cause)); }
     finally { setBusy(false); }
   };
-  const decide = async (runId: string, findingId: string, decision: IssueDecision): Promise<void> => act(() => request<Snapshot>(`/api/prototype/runs/${runId}/decision`, {
-    method: 'POST', body: JSON.stringify({ approverRole: 'captain', findingId, decision, rationale: reasons[findingId]?.trim() || `${decisionCopy[decision]} sem observação adicional do capitão.` }),
-  }));
-  const settle = async (runId: string, decision: 'approved' | 'rejected'): Promise<void> => act(() => request<Snapshot>(`/api/prototype/runs/${runId}/gate`, {
-    method: 'POST', body: JSON.stringify({ approverRole: 'captain', decision, rationale: gateReason.trim() || (decision === 'approved' ? 'Protótipo aprovado pelo capitão.' : 'Protótipo devolvido para revisão.') }),
-  }));
+  // The reason a decision carries is the captain's own. The screen never writes
+  // one for him: the server refuses an empty rationale, and a sentence the
+  // Studio invented would answer that check without anyone having decided.
+  const decide = async (runId: string, findingId: string, decision: IssueDecision): Promise<void> => {
+    const rationale = reasons[findingId]?.trim() ?? '';
+    if (rationale === '') return;
+    await act(() => request<Snapshot>(`/api/prototype/runs/${runId}/decision`, {
+      method: 'POST', body: JSON.stringify({ approverRole: 'captain', findingId, decision, rationale }),
+    }));
+  };
+  const settle = async (runId: string, decision: 'approved' | 'rejected'): Promise<void> => {
+    const rationale = gateReason.trim();
+    if (rationale === '') return;
+    await act(() => request<Snapshot>(`/api/prototype/runs/${runId}/gate`, {
+      method: 'POST', body: JSON.stringify({ approverRole: 'captain', decision, rationale }),
+    }));
+  };
 
   const result = snapshot?.result;
   const decided = useMemo(() => new Map((result?.decisions ?? []).map((entry) => [entry.findingId, entry])), [result]);
+  // The gate closes on a reviewed set: while a finding is undecided there is
+  // nothing to approve, and the button says so instead of being live.
+  const pending = useMemo(() => pendingFindingIds(result?.issues ?? [], result?.decisions ?? []), [result]);
   const vetoes = result?.qa.filter((check) => check.severity === 'veto') ?? [];
 
   if (!snapshot) {
@@ -312,7 +371,7 @@ export default function Gate2(): ReactElement {
             </div>
             <div className="gate2-selects">
               <label>Largura
-                <select value={viewport} onChange={(event) => setViewport(Number(event.target.value))}>
+                <select value={viewport ?? ''} disabled={result.viewports.length === 0} onChange={(event) => setViewport(Number(event.target.value))}>
                   {result.viewports.map((width) => <option key={width} value={width}>{width}px</option>)}
                 </select>
               </label>
@@ -328,7 +387,9 @@ export default function Gate2(): ReactElement {
             {' · '}<strong>{result.after.label}</strong> <code>{result.after.versionId}</code>
             {!result.repaired && <> · nenhum reparo foi aplicado, então os dois lados são a mesma revisão e a diferença é vazia</>}
           </p>
-          <Compare mode={mode} viewport={viewport} before={result.before.versionId} after={result.after.versionId} route={route} />
+          {viewport === null
+            ? <p className="gate2-note">Esta execução não mediu nenhuma largura, então não há comparação para abrir.</p>
+            : <Compare mode={mode} viewport={viewport} before={result.before.versionId} after={result.after.versionId} route={route} />}
         </section>
 
         <section className="gate2-evidence">
@@ -407,9 +468,10 @@ export default function Gate2(): ReactElement {
                     <div className="gate2-decide">
                       <label className="sr-only" htmlFor={`reason-${issue.id}`}>Motivo da decisão sobre {issue.id}</label>
                       <input id={`reason-${issue.id}`} placeholder="Motivo da decisão" value={reasons[issue.id] ?? ''} onChange={(event) => setReasons((current) => ({ ...current, [issue.id]: event.target.value }))} />
-                      <button className="primary" disabled={busy} onClick={() => void decide(snapshot.runId, issue.id, 'accepted')}>Aceitar</button>
-                      <button className="secondary" disabled={busy} onClick={() => void decide(snapshot.runId, issue.id, 'rejected')}>Rejeitar</button>
-                      <button className="secondary" disabled={busy} onClick={() => void decide(snapshot.runId, issue.id, 'deferred')}>Adiar</button>
+                      <button className="primary" disabled={busy || undecidable(issue.id)} onClick={() => void decide(snapshot.runId, issue.id, 'accepted')}>Aceitar</button>
+                      <button className="secondary" disabled={busy || undecidable(issue.id)} onClick={() => void decide(snapshot.runId, issue.id, 'rejected')}>Rejeitar</button>
+                      <button className="secondary" disabled={busy || undecidable(issue.id)} onClick={() => void decide(snapshot.runId, issue.id, 'deferred')}>Adiar</button>
+                      {undecidable(issue.id) && <small className="gate2-note">Escreva o motivo: ele fica registrado com a decisão.</small>}
                     </div>
                   )}
                 </article>
@@ -420,9 +482,10 @@ export default function Gate2(): ReactElement {
           <div className="gate2-final">
             <label className="sr-only" htmlFor="gate-reason">Motivo da decisão do gate</label>
             <input id="gate-reason" placeholder="Motivo da decisão do gate" value={gateReason} onChange={(event) => setGateReason(event.target.value)} />
-            <button className="secondary" disabled={busy || Boolean(result.approval)} onClick={() => void settle(snapshot.runId, 'rejected')}>Devolver para revisão</button>
-            <button className="primary" disabled={busy || result.gate === 'vetoed' || Boolean(result.approval)} onClick={() => void settle(snapshot.runId, 'approved')}>Aprovar o Gate 2</button>
+            <button className="secondary" disabled={busy || gateReason.trim() === '' || Boolean(result.approval)} onClick={() => void settle(snapshot.runId, 'rejected')}>Devolver para revisão</button>
+            <button className="primary" disabled={busy || pending.length > 0 || gateReason.trim() === '' || result.gate === 'vetoed' || Boolean(result.approval)} onClick={() => void settle(snapshot.runId, 'approved')}>Aprovar o Gate 2</button>
           </div>
+          {pending.length > 0 && !result.approval && <p className="gate2-note">{pending.length} de {result.issues.length} achado(s) ainda sem decisão: o Gate 2 só fecha sobre o conjunto revisado.</p>}
           {result.approval && <p className="gate2-decided" role="status">Gate {result.approval.decision === 'approved' ? 'aprovado' : 'devolvido'} em {result.approval.versionId} · {result.approval.rationale}</p>}
           {error && <p className="error-banner" role="alert">{error}</p>}
         </section>

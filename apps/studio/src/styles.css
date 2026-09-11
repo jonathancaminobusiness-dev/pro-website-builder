@@ -105,6 +105,7 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .open-run { justify-content: center; }
 .run-id { margin-top: 6px; color: #879095; font-size: .72rem; overflow-wrap: anywhere; }
 .gate-panel .preview-frame { margin-top: 20px; }
+.direction-card .direction-preview { height: 300px; margin: 16px 0 0; }
 .briefing-editor { width: min(100%, 720px); display: grid; gap: 8px; margin: 16px auto 18px; text-align: left; }
 .briefing-editor label { color: #18252d; font-size: .8rem; font-weight: 750; }
 .briefing-editor textarea { width: 100%; border: 1px solid #c7bcb0; border-radius: 12px; padding: 12px 14px; color: #18252d; background: #faf7f1; font: inherit; line-height: 1.55; resize: vertical; }

@@ -61,6 +61,20 @@ async function serveSeededRun(page: Page): Promise<() => Promise<void>> {
   return async () => { database.sqlite.close(); await rm(dir, { recursive: true, force: true }); };
 }
 
+/**
+ * The gate closes on a reviewed set and every decision carries the captain's own
+ * reason, so the screen offers approval only once nothing is left undecided.
+ */
+async function decideEveryFinding(page: Page, reason: string): Promise<void> {
+  const pending = page.locator('.gate2-issue .gate2-decide');
+  for (let index = await pending.count(); index > 0; index = await pending.count()) {
+    const first = pending.first();
+    await first.getByPlaceholder('Motivo da decisão').fill(reason);
+    await first.getByRole('button', { name: 'Aceitar' }).click();
+    await expect(pending).toHaveCount(index - 1);
+  }
+}
+
 test.describe('Gate 2 review screen', () => {
   test.setTimeout(300_000);
 
@@ -129,6 +143,13 @@ test.describe('Gate 2 review screen', () => {
     await page.getByRole('button', { name: 'percepção' }).click();
     await expect(page.locator('.gate2-critic p').first()).toContainText('Leitura');
 
+    // The width the comparison opens at is one this run measured; the select
+    // offers nothing else.
+    const widths = await page.locator('.gate2-selects select option').evaluateAll((nodes) => nodes.map((node) => (node as HTMLOptionElement).value));
+    const chosen = await page.locator('.gate2-selects select').inputValue();
+    expect(widths).toContain(chosen);
+
+    await decideEveryFinding(page, 'Revisado pelo capitão nesta rodada.');
     await page.getByPlaceholder('Motivo da decisão do gate').fill('Hierarquia e comportamento aprovados pelo capitão.');
     await page.getByRole('button', { name: 'Aprovar o Gate 2' }).click();
     await expect(page.getByRole('status')).toContainText('Gate aprovado');
@@ -152,11 +173,21 @@ test.describe('Gate 2 review screen', () => {
       await expect(issues.first().locator('dd code').first()).not.toBeEmpty();
       await expect(issues.first()).toContainText('set_token');
 
+      // The reason is the captain's: with nothing written there is nothing to
+      // send, and the screen never invents the sentence the server asks for.
+      await expect(issues.first().getByRole('button', { name: 'Aceitar' })).toBeDisabled();
       await issues.first().getByPlaceholder('Motivo da decisão').fill('Reparo causal; o ritmo volta ao contrato.');
+      await expect(issues.first().getByRole('button', { name: 'Aceitar' })).toBeEnabled();
+
+      // Nor is the gate approvable while a finding is undecided.
+      await page.getByPlaceholder('Motivo da decisão do gate').fill('Hierarquia e comportamento aprovados pelo capitão.');
+      await expect(page.getByRole('button', { name: 'Aprovar o Gate 2' })).toBeDisabled();
+
       await issues.first().getByRole('button', { name: 'Aceitar' }).click();
       await expect(issues.first().locator('.gate2-decided')).toContainText('Aceito · Reparo causal');
 
-      await page.getByPlaceholder('Motivo da decisão do gate').fill('Hierarquia e comportamento aprovados pelo capitão.');
+      await decideEveryFinding(page, 'Revisado pelo capitão nesta rodada.');
+      await expect(page.getByRole('button', { name: 'Aprovar o Gate 2' })).toBeEnabled();
       await page.getByRole('button', { name: 'Aprovar o Gate 2' }).click();
       await expect(page.getByRole('status')).toContainText('Gate aprovado');
     } finally { await close(); }

@@ -31,6 +31,12 @@ export interface FixtureSnapshot {
   approvals: Approval[];
   exportManifest?: ReleaseManifest;
   lintErrorCount: number;
+  /**
+   * The stage whose undecided proposal a restart discarded, when a restore
+   * rewound the head to the last version the captain approved. The captain is
+   * told the work is gone instead of reading a rewound document as progress.
+   */
+  discardedStage?: Stage;
 }
 
 export class FixtureRun {
@@ -46,6 +52,7 @@ export class FixtureRun {
   private status: FixtureStatus = 'queued';
   private exportManifest: ReleaseManifest | undefined;
   private lintErrorCount = 0;
+  private discardedStage: Stage | undefined;
   private initialized = false;
   private started = false;
   private statusBeforeCancel: FixtureStatus = 'queued';
@@ -93,6 +100,7 @@ export class FixtureRun {
     const versions = await this.options.repository.listVersions(run.projectId);
     if (versions.length === 0) return false;
     this.runIdentifier = runId;
+    if (this.options.release) this.releaseRun = new ReleaseRun(runId, this.options.release);
     const byId = new Map(versions.map((version) => [version.id, version]));
     for (const version of versions) this.store.save({ id: version.id, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir });
     const approvals = await this.options.repository.listApprovals(runId);
@@ -104,9 +112,18 @@ export class FixtureRun {
     this.lintErrorCount = lintDesign(head.ir).errorCount;
     this.approvals.push(...approvals);
     this.stageIndex = Math.min(approved.length, STAGES.length);
+    const events = await this.options.repository.listEvents(runId);
+    // The project holds every run's versions, so what this run left undecided is
+    // read from its own log, in order: a proposal it made on the head it still
+    // holds is pending until a rejection retires it, and a rerun proposes again.
+    const undecided = new Set<string>();
+    for (const event of events) {
+      if (event.type === 'version.created' && byId.get(String(event.payload.versionId))?.parentId === head.id) undecided.add(String(event.payload.versionId));
+      if (event.type === 'version.rewound') { undecided.delete(String(event.payload.rejectedVersionId)); undecided.delete(String(event.payload.retiredVersionId)); }
+    }
+    this.discardedStage = undecided.size > 0 ? STAGES[this.stageIndex] : undefined;
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
-    const events = await this.options.repository.listEvents(runId);
     this.started = events.some((event) => event.type === 'run.started');
     for (const event of events) if (event.type === 'task.queued') this.attempts.set(event.payload.stage as Stage, Number(event.payload.attempt));
     this.initialized = true;
@@ -208,7 +225,7 @@ export class FixtureRun {
     }
     await ignoringDuplicate(this.options.repository.createApproval({ ...rejection, runId: this.runId(), projectId: this.projectId() }));
     await this.record('approval.recorded', { stage, decision: 'rejected', versionId: rejection.versionId });
-    if (parent) await this.record('version.rewound', { stage, rejectedVersionId: rejection.versionId, versionId: parent.id });
+    if (parent) await this.record('version.rewound', { stage, rejectedVersionId: rejection.versionId, retiredVersionId: rejected.id, versionId: parent.id });
     return this.snapshot();
   }
 
@@ -251,7 +268,7 @@ export class FixtureRun {
     return this.snapshot();
   }
 
-  snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
+  snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount, ...(this.discardedStage ? { discardedStage: this.discardedStage } : {}) }; }
 
   /**
    * Why Gate 3 may not run yet, or nothing when it may.
@@ -325,6 +342,7 @@ export class FixtureRun {
   }
 
   private launch(stage: Stage): Promise<void> {
+    this.discardedStage = undefined;
     const plan = this.planner.plan(this.runId(), this.currentVersion.id, BRIEF);
     const controller = new AbortController();
     this.runAbort = controller;

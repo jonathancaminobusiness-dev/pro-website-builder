@@ -428,6 +428,7 @@ describe('phase 0 fixture run', () => {
     expect(String(events.at(-1)?.payload.reason)).toMatch(/color\.ink/);
     const after = run.snapshot();
     expect(after.currentVersion.id).toBe(before.currentVersion.id);
+    expect(after.discardedStage).toBeUndefined();
     expect(after.rendered).toEqual(before.rendered);
     expect(after.status).toBe('queued');
     db.sqlite.close();
@@ -501,6 +502,143 @@ describe('phase 0 fixture run', () => {
     second.sqlite.close();
   });
 
+  it('carries a run restored after a restart through Gate 3 instead of losing its release', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-gate3-'));
+    const dbPath = join(dir, 'gate3.sqlite');
+    const releaseRoot = join(dir, 'releases');
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await original.initialize('run-gate3-restart');
+    await original.runNext();
+    await original.approve('identity', 'captain');
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-gate3-restart')).toBe(true);
+    expect(restored.releaseEnabled()).toBe(true);
+
+    await restored.runNext();
+    await restored.approve('prototype', 'captain');
+    await restored.runNext();
+    await completeEvidence(restored, join(releaseRoot, '..', 'evidence'));
+    const prepared = await restored.prepareRelease();
+    expect(prepared.report.blocked).toBe(false);
+    await restored.publishRelease(prepared.digest, 'Publicado depois de um reinício.', 'fixture');
+    expect(restored.snapshot().status).toBe('succeeded');
+    second.sqlite.close();
+  });
+
+  it('does not blame a run for versions another run in the same project left behind', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-sibling-'));
+    const dbPath = join(dir, 'sibling.sqlite');
+    const first = openDatabase(dbPath);
+    const repository = new ProjectRepository(first);
+    const older = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    await older.initialize('run-older');
+    await older.runNext();
+    const fresh = new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    await fresh.initialize('run-fresh');
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-fresh')).toBe(true);
+    expect(restored.snapshot().discardedStage).toBeUndefined();
+    second.sqlite.close();
+  });
+
+  it('does not report a rejected proposal as discarded, because the captain already decided it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-rejected-'));
+    const dbPath = join(dir, 'rejected.sqlite');
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    await original.initialize('run-rejected');
+    await original.runNext();
+    await original.reject('identity', 'captain');
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-rejected')).toBe(true);
+    expect(restored.snapshot().discardedStage).toBeUndefined();
+
+    // The stage runs again and the restart now finds a proposal nobody decided.
+    await restored.runNext();
+    second.sqlite.close();
+    const third = openDatabase(dbPath);
+    const again = new FixtureRun({ repository: new ProjectRepository(third), release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    expect(await again.restore('run-rejected')).toBe(true);
+    expect(again.snapshot().discardedStage).toBe('identity');
+    third.sqlite.close();
+  });
+
+  it('stops reporting a proposal a later restart no longer holds, instead of blaming the next stage', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-stale-'));
+    const dbPath = join(dir, 'stale.sqlite');
+    // Each attempt proposes something of its own, so the re-run after the restart
+    // lands on a version of its own instead of recreating the discarded one.
+    const fake = new FakeModelProvider();
+    const varying: ModelProvider = {
+      async propose(task, signal) {
+        const result = await fake.propose(task, signal);
+        return { ...result, proposal: { ...result.proposal!, operations: [{ op: 'replace', path: '/reviewRecord/findings', value: [`proposta da tentativa ${task.attempt}`] }] } };
+      },
+    };
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    await original.initialize('run-stale');
+    const abandoned = (await original.runNext()).currentVersion.id;
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const resumed = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    expect(await resumed.restore('run-stale')).toBe(true);
+    expect(resumed.snapshot().discardedStage).toBe('identity');
+    expect((await resumed.runNext()).currentVersion.id).not.toBe(abandoned);
+    await resumed.approve('identity', 'captain');
+    second.sqlite.close();
+
+    const third = openDatabase(dbPath);
+    const again = new FixtureRun({ repository: new ProjectRepository(third), release: releaseOptions(join(dir, 'exports')), provider: varying });
+    expect(await again.restore('run-stale')).toBe(true);
+    const after = again.snapshot();
+    expect(after.approvals.filter((entry) => entry.decision === 'approved')).toHaveLength(1);
+    expect(after.discardedStage).toBeUndefined();
+    third.sqlite.close();
+  });
+
+  it('does not report a rejected finalization as discarded when the release adopted a refinement', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-finalization-'));
+    const dbPath = join(dir, 'finalization.sqlite');
+    const releaseRoot = join(dir, 'releases');
+    const first = openDatabase(dbPath);
+    const original = new FixtureRun({ repository: new ProjectRepository(first), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    await original.initialize('run-finalization');
+    await atFinalizationGate(original);
+    await completeEvidence(original, join(releaseRoot, '..', 'evidence'));
+    const staged = original.snapshot().currentVersion.id;
+    await original.prepareRelease();
+    // Gate 3 adopts a refinement on top of the version the stage produced, the
+    // way ReleaseRun.prepare does when the refiner answers with a repair.
+    const context = original.releaseContext();
+    const refined = context.applier.apply(
+      { operations: [{ op: 'replace', path: '/reviewRecord/findings', value: ['refino adotado pelo gate 3'] }], baseVersionId: context.current.id, touchedPaths: ['/reviewRecord/findings'], rationale: 'Refino determinístico.', confidence: 1, stage: 'finalization', role: 'compiler', idempotencyKey: 'refino-gate-3' },
+      { allowedPaths: ['/reviewRecord'], stage: 'finalization', role: 'compiler' },
+      context.current.id,
+    );
+    await context.adopt(refined);
+    expect(original.snapshot().currentVersion.id).not.toBe(staged);
+    await original.reject('finalization', 'captain');
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(releaseRoot), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-finalization')).toBe(true);
+    expect(restored.snapshot().discardedStage).toBeUndefined();
+    second.sqlite.close();
+  });
+
   it('discards an ungated proposal when the process restarts before the captain decides', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-restore-pending-'));
     const dbPath = join(dir, 'pending.sqlite');
@@ -521,9 +659,11 @@ describe('phase 0 fixture run', () => {
     expect(after.currentVersion.id).toBe(root.id);
     expect(after.status).toBe('queued');
     expect(after.approvals).toHaveLength(0);
+    expect(after.discardedStage).toBe('identity');
 
     const next = await restored.runNext();
     expect(next.currentStage).toBe('identity');
+    expect(next.discardedStage).toBeUndefined();
     expect(next.currentVersion.parentId).toBe(root.id);
     const events = await repository.listEvents('run-pending');
     expect(events.filter((event) => event.type === 'run.started')).toHaveLength(1);

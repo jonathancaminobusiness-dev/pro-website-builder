@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Gate2 from './Gate2.js';
 import Gate3Panel from './Gate3Panel.js';
 import IdentityGate, { type IdentityGateSnapshot } from './gate1/IdentityGate.js';
-import { failureMessage, isMissing, RequestError, requestJson } from './request.js';
+import { failureMessage, isMissing, POLL_MAX_FAILURES, RequestError, requestJson } from './request.js';
+import { forgetRun, rememberedRun, rememberRun } from './rememberedRun.js';
 
 interface Snapshot {
   runId: string;
@@ -15,11 +16,13 @@ interface Snapshot {
   exportManifest?: { digest: string; routes: Array<{ route: string; path: string }> };
 
   lintErrorCount: number;
+  discardedStage?: 'identity' | 'prototype' | 'finalization';
 }
 
 const API_ORIGIN = import.meta.env.VITE_API_ORIGIN ?? 'http://127.0.0.1:4310';
 const PREVIEW_ORIGIN = import.meta.env.VITE_PREVIEW_ORIGIN ?? 'http://127.0.0.1:4311';
 const stages = [{ id: 'identity', label: '01 Identidade' }, { id: 'prototype', label: '02 Protótipo' }, { id: 'finalization', label: '03 Finalização' }] as const;
+const stageName: Record<'identity' | 'prototype' | 'finalization', string> = { identity: 'identidade', prototype: 'protótipo', finalization: 'finalização' };
 const views = [{ id: 'pipeline', label: 'Pipeline' }, { id: 'gate1', label: 'Gate 1 · identidade' }] as const;
 type ViewId = (typeof views)[number]['id'];
 
@@ -29,24 +32,21 @@ type ViewId = (typeof views)[number]['id'];
  * from the ledger instead of starting an expensive fan-out again.
  */
 const IDENTITY_RUN_KEY = 'pwb.gate1.runId';
-function rememberedIdentityRun(): string {
-  try { return window.localStorage.getItem(IDENTITY_RUN_KEY) ?? ''; } catch { return ''; }
-}
-function rememberIdentityRun(runId: string): void {
-  try { window.localStorage.setItem(IDENTITY_RUN_KEY, runId); } catch { /* a browser that refuses storage still decides the gate in this session */ }
-}
-function forgetIdentityRun(): void {
-  try { window.localStorage.removeItem(IDENTITY_RUN_KEY); } catch { /* nothing to forget */ }
-}
+/**
+ * The pipeline execution this browser last worked on, remembered the way Gate 1
+ * remembers its own. Reloading the tab used to lose the execution forever: the
+ * screen started empty and the only way forward was paying for a new run.
+ */
+const PIPELINE_RUN_KEY = 'pwb.pipeline.runId';
+const rememberedIdentityRun = (): string => rememberedRun(IDENTITY_RUN_KEY);
+const rememberIdentityRun = (runId: string): void => rememberRun(IDENTITY_RUN_KEY, runId);
+const forgetIdentityRun = (): void => forgetRun(IDENTITY_RUN_KEY);
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return requestJson<T>(`${API_ORIGIN}${path}`, init);
 }
 
 const GATE2_ROUTE = '#/gate-2';
-
-/** How many consecutive reads may fail before the screen stops following a queued, recovering, or working run. */
-const POLL_MAX_FAILURES = 10;
 
 interface IdentityReadSource {
   generation: number;
@@ -89,6 +89,7 @@ export default function App() {
   const recoveryAttempts = useRef({ runId: '', count: 0 });
   const pendingStart = useRef<{ runId: string; epoch: number } | null>(null);
   const latestIdentity = useRef<IdentityGateSnapshot | null>(null);
+  const currentSnapshot = useRef<Snapshot | null>(null);
   const previewUrl = useMemo(() => snapshot ? `${PREVIEW_ORIGIN}/preview/${encodeURIComponent(snapshot.currentVersion.id)}${route}` : '', [route, snapshot]);
 
   useEffect(() => {
@@ -97,12 +98,38 @@ export default function App() {
     return () => window.removeEventListener('hashchange', track);
   }, []);
 
+  const adoptSnapshot = (next: Snapshot): void => { currentSnapshot.current = next; setSnapshot(next); };
+
   async function act(action: () => Promise<Snapshot>): Promise<void> {
     setBusy(true); setError('');
-    try { setSnapshot(await action()); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); } finally { setBusy(false); }
+    try { adoptSnapshot(await action()); } catch (cause) { setError(failureMessage(cause)); } finally { setBusy(false); }
   }
 
-  const create = () => act(async () => (await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) })).snapshot);
+  const create = () => act(async () => {
+    const created = await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) });
+    rememberRun(PIPELINE_RUN_KEY, created.runId);
+    return created.snapshot;
+  });
+
+  // The remembered execution is re-read on load, so a reload finds the pipeline
+  // where it was left. Only a run the server no longer knows — a 404 — drops the
+  // pointer; a server that is not listening yet says nothing about whether the
+  // run exists, so the id is kept and the failure is shown.
+  const readRememberedPipelineRun = useCallback((): void => {
+    const remembered = rememberedRun(PIPELINE_RUN_KEY);
+    if (!remembered) return;
+    void request<Snapshot>(`/api/runs/${encodeURIComponent(remembered)}`).then(
+      // A run the captain started in the meantime is the one on screen.
+      (next) => { if (!currentSnapshot.current) adoptSnapshot(next); },
+      (cause: unknown) => {
+        if (isMissing(cause)) { forgetRun(PIPELINE_RUN_KEY); return; }
+        if (currentSnapshot.current) return;
+        setError(failureMessage(cause));
+      },
+    );
+  }, []);
+
+  useEffect(() => { readRememberedPipelineRun(); }, [readRememberedPipelineRun]);
 
   const acceptIdentityRun = useCallback((next: IdentityGateSnapshot, source: IdentityReadSource = { generation: identityGeneration.current, epoch: startEpoch.current, kind: 'action' }): boolean => {
     if (source.generation !== identityGeneration.current) return false;
@@ -320,9 +347,9 @@ export default function App() {
     <header className="topbar"><div><span className="eyebrow">FIRSTMATE / STUDIO LOCAL</span><h1>Compilador de identidade</h1></div><nav className="view-tabs" aria-label="Telas do estúdio">{views.map((item) => <button key={item.id} className={view === item.id ? 'selected' : ''} aria-current={view === item.id ? 'page' : undefined} onClick={() => setView(item.id)}>{item.label}</button>)}</nav><span className="local-pill">uso próprio · pt-BR</span><a className="gate2-link" href={GATE2_ROUTE}>Gate 2 · revisão do protótipo →</a></header>
     {view === 'gate1' ? <main className="workspace workspace-single"><IdentityGate snapshot={identity} busy={busy} error={identityError} unreachableRunId={unreachableRunId} onCreate={createIdentityRun} onOpen={openIdentityRun} onRetry={readRememberedRun} onStart={startIdentityRun} onCancel={cancelIdentityRun} inFlight={executionInFlight} startRecoveryPending={startRecoveryPending} onApprove={approveDirection} onReject={rejectDirection} onChangeToken={changeIdentityToken} previewOrigin={PREVIEW_ORIGIN} /></main> : <main className="workspace">
       <section className="intro-panel"><p className="eyebrow">A identidade é o contrato</p><h2>Da direção visual ao site final, uma fonte de verdade.</h2><p>O editor mostra propostas tipadas; o renderer determinístico cuida do resultado. Os três gates desta versão são do capitão.</p><button className="primary" onClick={create} disabled={busy}>{busy ? 'Preparando…' : snapshot ? 'Reiniciar briefing' : 'Carregar briefing fixo'}</button></section>
-      <section className="stage-panel"><div className="section-heading"><div><p className="eyebrow">Pipeline</p><h2>Três etapas, três decisões</h2></div>{snapshot && <span className={`status status-${snapshot.status}`}>{snapshot.status === 'needs_review' ? 'aguarda gate' : snapshot.status === 'rejected' ? 'rejeitado · reexecutar' : snapshot.status}</span>}</div><div className="stage-list">{stages.map((stage, index) => { const approval = snapshot?.approvals.find((item) => item.stage === stage.id); const active = snapshot?.currentStage === stage.id; return <div className={`stage-row ${active ? 'active' : ''}`} key={stage.id}><span className="stage-number">0{index + 1}</span><div><strong>{stage.label}</strong><small>{approval ? approval.decision === 'approved' ? 'Aprovado pelo capitão' : 'Rejeitado para revisão' : active ? 'Proposta pronta para revisão' : 'Bloqueada pelo gate anterior'}</small></div><span className="stage-dot" />{active && <span className="active-mark">●</span>}</div>; })}</div><div className="actions">{snapshot?.status === 'needs_review' ? <><button className="secondary" onClick={() => review('reject')} disabled={busy}>Rejeitar proposta</button>{snapshot.currentStage === 'finalization' ? <span className="qa-chip">Aprovar é publicar o bundle no Gate 3 abaixo</span> : <button className="primary" onClick={() => review('approve')} disabled={busy}>Aprovar gate</button>}</> : <button className="primary" onClick={runStage} disabled={!snapshot || busy || snapshot.status === 'succeeded'}>{busy ? 'Executando…' : snapshot?.status === 'succeeded' ? 'Release publicado' : snapshot?.status === 'rejected' ? 'Refazer etapa' : 'Executar próxima etapa'}</button>}</div></section>
+      <section className="stage-panel"><div className="section-heading"><div><p className="eyebrow">Pipeline</p><h2>Três etapas, três decisões</h2></div>{snapshot && <span className={`status status-${snapshot.status}`}>{snapshot.status === 'needs_review' ? 'aguarda gate' : snapshot.status === 'rejected' ? 'rejeitado · reexecutar' : snapshot.status}</span>}</div><div className="stage-list">{stages.map((stage, index) => { const approval = snapshot?.approvals.find((item) => item.stage === stage.id); const active = snapshot?.currentStage === stage.id; return <div className={`stage-row ${active ? 'active' : ''}`} key={stage.id}><span className="stage-number">0{index + 1}</span><div><strong>{stage.label}</strong><small>{approval ? approval.decision === 'approved' ? 'Aprovado pelo capitão' : 'Rejeitado para revisão' : active ? 'Proposta pronta para revisão' : 'Bloqueada pelo gate anterior'}</small></div><span className="stage-dot" />{active && <span className="active-mark">●</span>}</div>; })}</div>{snapshot?.discardedStage && <p className="gate-check blocked" role="status">A proposta da etapa de {stageName[snapshot.discardedStage]} ainda não decidida foi descartada quando o servidor reiniciou. Execute a etapa de novo.</p>}<div className="actions">{snapshot?.status === 'needs_review' ? <><button className="secondary" onClick={() => review('reject')} disabled={busy}>Rejeitar proposta</button>{snapshot.currentStage === 'finalization' ? <span className="qa-chip">Aprovar é publicar o bundle no Gate 3 abaixo</span> : <button className="primary" onClick={() => review('approve')} disabled={busy}>Aprovar gate</button>}</> : <button className="primary" onClick={runStage} disabled={!snapshot || busy || snapshot.status === 'succeeded'}>{busy ? 'Executando…' : snapshot?.status === 'succeeded' ? 'Release publicado' : snapshot?.status === 'rejected' ? 'Refazer etapa' : 'Executar próxima etapa'}</button>}</div></section>
       <section className="review-panel"><div className="section-heading"><div><p className="eyebrow">Revisão visual</p><h2>Preview isolado</h2></div><span className="qa-chip">linter: {snapshot?.lintErrorCount ?? 0} erros</span></div>{snapshot ? <><div className="route-tabs">{snapshot.rendered.routes.map((item) => <button key={item.route} className={route === item.route ? 'selected' : ''} onClick={() => setRoute(item.route)}>{item.route}</button>)}</div><iframe title="Preview do site" src={previewUrl} sandbox="" className="preview-frame" /></> : <div className="empty-state"><span>△</span><p>Carregue o briefing para abrir o primeiro contrato de identidade.</p></div>}</section>
-      <Gate3Panel key={snapshot?.runId ?? 'none'} runId={snapshot?.runId ?? null} apiOrigin={API_ORIGIN} onPublished={(run) => setSnapshot(run as Snapshot)} />
+      <Gate3Panel key={snapshot?.runId ?? 'none'} runId={snapshot?.runId ?? null} apiOrigin={API_ORIGIN} onPublished={(run) => adoptSnapshot(run as Snapshot)} />
       {error && <p className="error-banner" role="alert">{error}</p>}
     </main>}
     <footer><span>DesignIR → Preview → Export</span><span>renderer determinístico · preview em origem separada</span></footer>

@@ -226,6 +226,16 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
               <p className="direction-thesis">{direction.thesis}</p>
             </header>
 
+            {/* The decision is between whole documents, not token cards: each
+                card opens the isolated preview of its own version, on the
+                preview origin, before anything is approved. */}
+            <iframe
+              title={`Preview de ${direction.label}`}
+              className="preview-frame direction-preview"
+              sandbox=""
+              src={`${props.previewOrigin}/preview/${encodeURIComponent(direction.versionId)}/`}
+            />
+
             <ul className="swatch-row" aria-label={`Paleta de ${direction.label}`}>
               {direction.swatches.map((swatch) => <li key={swatch.path}>
                 <span className="swatch" style={{ background: swatch.value }} />

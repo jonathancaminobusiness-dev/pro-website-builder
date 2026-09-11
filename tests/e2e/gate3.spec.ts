@@ -22,6 +22,16 @@ test('the captain reads the release report on Gate 3 and publishes the bundle', 
   await expect(gate.getByText('Paridade preview / release')).toBeVisible();
   await expect(gate.getByText('sem autoridade de gate', { exact: false })).toBeVisible();
 
+  // The five critics were spent once. Leaving the screen unmounts this panel, so
+  // coming back re-reads the report the run already holds instead of preparing
+  // it again — no button is pressed here beyond the tab.
+  await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+  await expect(gate).toHaveCount(0);
+  await page.getByRole('button', { name: 'Pipeline', exact: true }).click();
+  await expect(gate.locator('.verdict')).toBeVisible();
+  await expect(gate.locator('.rubric-row')).toHaveCount(8);
+  await expect(gate.getByRole('button', { name: 'Recompilar e reavaliar' })).toBeVisible();
+
   const publish = gate.getByRole('button', { name: 'Publicar bundle e aprovar o gate' });
   const verdict = await gate.locator('.verdict').textContent();
   if (verdict?.includes('bloqueado')) {
