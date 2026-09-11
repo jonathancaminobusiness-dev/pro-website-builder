@@ -124,12 +124,12 @@ export class ProjectRepository {
     });
   }
 
-  /** Writes the serialized briefing conversation onto the execution; a run that does not exist yet simply has nothing to write to. */
   /**
    * The conversation, and the briefing a confirmation moved the execution onto,
    * in one transaction: a confirmation records itself and moves the execution
    * together or not at all, so no execution ever carries a briefing its
-   * transcript does not name.
+   * transcript does not name. A run that does not exist yet simply has nothing
+   * to write to.
    */
   async saveConversation(runId: string, conversation: string, briefing?: string): Promise<void> {
     await this.write(() => this.db.sqlite.transaction(() => {

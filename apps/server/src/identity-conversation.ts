@@ -234,19 +234,21 @@ export class BriefingConversation {
 
   private async runSend(input: { message?: string | undefined; action: BriefingMessageAction; idempotencyKey: string }): Promise<BriefingConversationSnapshot> {
     if (this.data.appliedKeys.includes(input.idempotencyKey)) return this.snapshot();
+    // The execution answers before the conversation does, so a captain on a
+    // frozen execution reads the same refusal from both routes instead of being
+    // sent to a revision the confirmation would refuse. A stop buys no turn and
+    // moves no briefing, so `cancelling` lets the captain close the chat on an
+    // execution that can no longer take a briefing.
+    this.options.guardTurn?.({ cancelling: input.action === 'cancel' });
     if (!canSendBriefingMessage(this.data.state)) throw new ConversationError(this.closedReason(), 409);
 
     if (input.action === 'cancel') {
-      // A stop buys no turn and moves no briefing, so an execution that can no
-      // longer take a briefing still takes the captain closing the chat.
-      this.options.guardTurn?.({ cancelling: true });
       this.append({ author: 'system', text: 'Conversa cancelada pelo capitão. A execução e o briefing já confirmado continuam disponíveis.', state: 'cancelled' });
       this.data.state = 'cancelled';
       this.data.attempt = 0;
       return await this.commit(input.idempotencyKey);
     }
 
-    this.options.guardTurn?.({ cancelling: false });
     const action: 'answer' | 'correct' | 'skip' = input.action;
     const text = this.captainText(input.message, action);
     if (this.data.state === 'entry') {
