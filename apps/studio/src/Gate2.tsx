@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { failureMessage, POLL_MAX_FAILURES, requestJson } from './request.js';
+import { failureMessage, isMissing, POLL_MAX_FAILURES, requestJson } from './request.js';
 import { measuredViewport, pendingFindingIds } from './gate2-review.js';
 import './gate2.css';
 
@@ -208,6 +208,10 @@ export default function Gate2(): ReactElement {
         if (isActive(next.status)) timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
       } catch (cause) {
         if (!live) return;
+        if (isMissing(cause)) {
+          setError('Esta execução não está mais no servidor.');
+          return;
+        }
         failures += 1;
         if (failures >= POLL_MAX_FAILURES) {
           setError('Não foi possível acompanhar esta execução. Recarregue para ler o estado atual.');
@@ -227,12 +231,17 @@ export default function Gate2(): ReactElement {
     let live = true;
     let timer: number | undefined;
     let failures = 0;
+    // The banner belongs to whatever last spoke to the captain: this loop clears
+    // only the message it put there, never the refusal one of his own actions got.
+    let reported = '';
+    const report = (message: string): void => { reported = message; setError(message); };
     const poll = async (): Promise<void> => {
       try {
         const payload = await request<{ runs: Progress[] }>('/api/prototype/runs');
         if (!live) return;
         failures = 0;
-        setError('');
+        setError((current) => (current === reported ? '' : current));
+        reported = '';
         setRecent(payload.runs);
         if (payload.runs.some((entry) => isActive(entry.status))) timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
       } catch (cause) {
@@ -240,10 +249,10 @@ export default function Gate2(): ReactElement {
         setRecent([]);
         failures += 1;
         if (failures >= POLL_MAX_FAILURES) {
-          setError('Não foi possível ler as execuções deste servidor. Recarregue para tentar de novo.');
+          report('Não foi possível ler as execuções deste servidor. Recarregue para tentar de novo.');
           return;
         }
-        setError(failureMessage(cause));
+        report(failureMessage(cause));
         timer = window.setTimeout(() => void poll(), POLL_INTERVAL_MS);
       }
     };
