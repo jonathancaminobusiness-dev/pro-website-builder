@@ -104,6 +104,20 @@ function compareFonts(preview: FontDecision[], release: FontDecision[]): string[
   return differences;
 }
 
+/**
+ * The faces the release ships that no preview ever compared.
+ *
+ * `previewFaces` is absent whenever nothing served the document — every command
+ * line run — and `compareFonts` then has nothing to compare, so every route
+ * reports as identical while the bundle still self-hosts faces the captain never
+ * looked at. Naming those faces is what keeps that silence from reading as
+ * parity: the gate raises them as an open point instead.
+ */
+export function unreviewedFaces(compiled: CompiledSite, previewFaces?: FontDecision[]): string[] {
+  if (previewFaces !== undefined) return [];
+  return compiled.fonts.filter((decision) => decision.selfHosted).map(faceName);
+}
+
 function compare(route: string, preview: DocumentView, release: DocumentView): string[] {
   const differences: string[] = [];
   if (preview.title !== release.title) differences.push(`O título difere: preview ${JSON.stringify(preview.title)}, release ${JSON.stringify(release.title)}.`);
