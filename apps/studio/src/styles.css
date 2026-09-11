@@ -114,3 +114,58 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .briefing-meta span { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 @media (max-width: 780px) { .topbar { flex-wrap: wrap; } .view-tabs { order: 3; width: 100%; } }
 @media (max-width: 520px) { .axis-list div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+
+/* Briefing conversation · the short chat before the identity stage */
+.briefing-chat { min-width: 0; border: 1px solid rgba(24,37,45,.12); border-radius: 18px; padding: clamp(16px, 3vw, 24px); margin: 18px 0 24px; background: rgba(244,239,230,.72); }
+.briefing-chat .section-heading { margin-bottom: 14px; flex-wrap: wrap; }
+.briefing-chat h2 { font-family: Georgia, serif; font-size: 1.2rem; font-weight: 500; letter-spacing: -.03em; }
+.chat-hint { max-width: 62ch; margin-top: 6px; color: #58676c; font-size: .82rem; line-height: 1.55; }
+.status-chat-question, .status-chat-confirmation { color: #a84f37; border-color: #dca58e; }
+.status-chat-final { color: #3f6b52; border-color: #a9c2b1; }
+.status-chat-cancelled, .status-chat-failed { color: #8c3a2c; border-color: #c98d7c; }
+.chat-counter { color: #697579; font-size: .74rem; font-variant-numeric: tabular-nums; }
+.chat-counter strong { color: #a84f37; font-weight: 700; }
+.chat-log { display: grid; gap: 12px; margin: 14px 0; padding: 0; list-style: none; }
+.chat-turn { min-width: 0; border: 1px solid rgba(24,37,45,.1); border-radius: 14px; padding: 12px 14px; background: #faf7f1; }
+.chat-turn.chat-captain { border-color: #cdbfae; background: #efe7da; }
+.chat-turn.chat-pending { opacity: .62; border-style: dashed; }
+.chat-role { color: #a84f37; font-size: .66rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.chat-message { margin-top: 6px; color: #18252d; line-height: 1.6; overflow-wrap: anywhere; }
+.reading-group { margin-top: 10px; }
+.reading-title { color: #58676c; font-size: .7rem; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
+.reading-group ul { margin: 4px 0 0; padding-left: 18px; color: #4a585e; font-size: .82rem; line-height: 1.55; }
+.reading-group.facts { border-left: 2px solid #a9c2b1; padding-left: 10px; }
+.reading-group.hypotheses { border-left: 2px solid #dca58e; padding-left: 10px; }
+.reading-group.unknowns { border-left: 2px solid #b9ac9f; padding-left: 10px; }
+.chat-why { margin-top: 10px; color: #58676c; font-size: .82rem; line-height: 1.55; }
+.chat-correct { margin-top: 10px; padding: 6px 12px; font-size: .74rem; }
+.chat-progress { border: 1px dashed #c7bcb0; border-radius: 12px; padding: 10px 14px; color: #58676c; font-size: .82rem; }
+.chat-failure { border: 1px solid #dca58e; border-radius: 14px; padding: 12px 14px; margin: 12px 0; color: #8c3d2a; background: #f8dfd3; }
+.chat-failure p { line-height: 1.55; }
+.chat-failure .actions { margin-top: 10px; flex-wrap: wrap; }
+.chat-compose, .chat-question, .chat-summary { display: grid; gap: 8px; margin-top: 16px; }
+.chat-compose label, .chat-question label, .chat-summary label { color: #18252d; font-size: .8rem; font-weight: 750; }
+.chat-compose textarea, .chat-question textarea, .chat-summary textarea { width: 100%; border: 1px solid #c7bcb0; border-radius: 12px; padding: 12px 14px; color: #18252d; background: #faf7f1; font: inherit; line-height: 1.55; resize: vertical; }
+.chat-compose textarea:focus, .chat-question textarea:focus, .chat-summary textarea:focus, .chat-options button:focus-visible, .chat-correct:focus-visible { outline: 2px solid rgba(216,100,69,.45); outline-offset: 2px; }
+.chat-question { border: 1px solid #dca58e; border-radius: 14px; padding: 14px; background: rgba(250,247,241,.9); }
+.chat-question-prompt { font-family: Georgia, serif; font-size: 1.08rem; line-height: 1.45; letter-spacing: -.02em; }
+.chat-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.chat-options button { padding: 8px 14px; font-size: .78rem; font-weight: 600; }
+.chat-compose .actions, .chat-question .actions, .chat-summary .actions { margin-top: 10px; flex-wrap: wrap; gap: 8px; }
+.chat-cancelled, .chat-closed { border-radius: 12px; padding: 12px 14px; margin-top: 14px; font-size: .84rem; line-height: 1.55; }
+.chat-cancelled { border: 1px solid #c98d7c; color: #8c3a2c; background: #f6e3da; }
+.chat-closed { border: 1px solid #a9c2b1; color: #3f6b52; background: #e2ede4; }
+.chat-directions { margin-top: 20px; }
+.chat-direction-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin-top: 10px; }
+.chat-direction { min-width: 0; border: 1px solid rgba(24,37,45,.12); border-radius: 14px; padding: 14px; background: #faf7f1; }
+.chat-direction h3 { margin: 4px 0 6px; font-family: Georgia, serif; font-size: 1.1rem; font-weight: 500; letter-spacing: -.03em; }
+.chat-direction-thesis { color: #58676c; font-size: .86rem; line-height: 1.55; }
+.chat-direction dl { display: grid; gap: 8px; margin: 12px 0 0; }
+.chat-direction dt { color: #a84f37; font-size: .66rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.chat-direction dd { margin: 2px 0 0; color: #4a585e; font-size: .84rem; line-height: 1.5; }
+.chat-direction-note { margin-top: 12px; color: #879095; font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; }
+@media (max-width: 520px) {
+  .briefing-chat .section-heading { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .chat-compose .actions, .chat-question .actions, .chat-summary .actions, .chat-failure .actions { justify-content: flex-start; }
+  .chat-options button, .chat-compose .actions button, .chat-question .actions button, .chat-summary .actions button { flex: 1 1 auto; }
+}
