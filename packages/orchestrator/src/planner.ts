@@ -1,11 +1,108 @@
 import { hashJson, stageRoles, stageWritablePaths, type AgentTask, type DesignIR } from '@pwb/domain';
 import type { VersionStore } from './applier.js';
+import { DEFAULT_MAX_ACTIVE_CLAUDE } from './scheduler.js';
 
 export interface RunPlan { runId: string; tasks: AgentTask[]; edges: [string, string][]; }
 
 const readablePaths = ['/identity', '/pages', '/assets', '/reviewRecord'];
 
-export const stageDeadlinesMs: Record<AgentTask['stage'], number> = { identity: 15 * 60_000, prototype: 15 * 60_000, finalization: 20 * 60_000 };
+const identityDirections = 3;
+const identityCuratorMs = 4 * 60_000;
+const identityDirectorMs = 7 * 60_000;
+const identityDefaultCriticMs = 3 * 60_000;
+const identityDefaultAccessibilityCriticMs = 10 * 60_000;
+const identityRefinerMs = 8 * 60_000;
+const identityArtDirectorMs = 5 * 60_000;
+const identityHeadroomMs = 5 * 60_000;
+
+export interface IdentityStageBudgetInput {
+  curatorMs: number;
+  directorMs: number;
+  initialCriticMs: number[];
+  refinerMs: number;
+  secondCriticMs: number[];
+  artDirectorMs: number;
+  directionCount: number;
+  maxActiveClaude: number;
+  correctiveAttempts: number;
+  headroomMs: number;
+}
+
+function criticDeadlineVariable(criticId: string): string {
+  return `PWB_IDENTITY_CRITIC_${criticId.replaceAll('-', '_').toUpperCase()}_DEADLINE_MS`;
+}
+
+function positiveEnvironmentMs(env: NodeJS.ProcessEnv, name: string): number | undefined {
+  const value = Number(env[name]?.trim());
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function effectiveCriticDeadlineMs(env: NodeJS.ProcessEnv, criticId: string, fallback: number): number {
+  return positiveEnvironmentMs(env, criticDeadlineVariable(criticId))
+    ?? positiveEnvironmentMs(env, 'PWB_IDENTITY_CRITIC_DEADLINE_MS')
+    ?? fallback;
+}
+
+function repeated(value: number, count: number): number[] {
+  return Array.from({ length: count }, () => value);
+}
+
+function claudeLaneDurationMs(durations: number[], maxActiveClaude: number): number {
+  const laneEndTimes = Array.from({ length: maxActiveClaude }, () => 0);
+  for (const duration of durations) {
+    const lane = laneEndTimes.indexOf(Math.min(...laneEndTimes));
+    laneEndTimes[lane]! += duration;
+  }
+  return Math.max(...laneEndTimes);
+}
+
+export function calculateIdentityStageDeadlineMs(input: IdentityStageBudgetInput): number {
+  const corrected = (deadlineMs: number): number => deadlineMs * (input.correctiveAttempts + 1);
+  const directorLaneMs = claudeLaneDurationMs(repeated(corrected(input.directorMs), input.directionCount), input.maxActiveClaude);
+  const initialCriticLaneMs = claudeLaneDurationMs(input.initialCriticMs.map(corrected), input.maxActiveClaude);
+  const secondCriticLaneMs = claudeLaneDurationMs(input.secondCriticMs.map(corrected), input.maxActiveClaude);
+  const artDirectorLaneMs = claudeLaneDurationMs(repeated(corrected(input.artDirectorMs), input.directionCount), input.maxActiveClaude);
+  return [
+    corrected(input.curatorMs),
+    directorLaneMs,
+    initialCriticLaneMs,
+    input.directionCount * input.refinerMs,
+    secondCriticLaneMs,
+    artDirectorLaneMs,
+    input.headroomMs,
+  ].reduce((total, duration) => total + duration, 0);
+}
+
+function defaultIdentityStageBudget(env: NodeJS.ProcessEnv = process.env): IdentityStageBudgetInput {
+  const brandFitCriticMs = effectiveCriticDeadlineMs(env, 'brand-fit-critic', identityDefaultCriticMs);
+  const divergenceCriticMs = effectiveCriticDeadlineMs(env, 'divergence-critic', identityDefaultCriticMs);
+  const accessibilityCriticMs = effectiveCriticDeadlineMs(env, 'system-a11y-critic', identityDefaultAccessibilityCriticMs);
+  return {
+    curatorMs: identityCuratorMs,
+    directorMs: identityDirectorMs,
+    initialCriticMs: [
+      ...repeated(brandFitCriticMs, identityDirections),
+      divergenceCriticMs,
+      ...repeated(accessibilityCriticMs, identityDirections),
+    ],
+    refinerMs: identityRefinerMs,
+    secondCriticMs: [
+      ...repeated(brandFitCriticMs, identityDirections),
+      ...repeated(accessibilityCriticMs, identityDirections),
+    ],
+    artDirectorMs: identityArtDirectorMs,
+    directionCount: identityDirections,
+    maxActiveClaude: DEFAULT_MAX_ACTIVE_CLAUDE,
+    correctiveAttempts: 1,
+    headroomMs: identityHeadroomMs,
+  };
+}
+
+export const stageDeadlinesMs: Record<AgentTask['stage'], number> = {
+  get identity() { return calculateIdentityStageDeadlineMs(defaultIdentityStageBudget()); },
+  prototype: 15 * 60_000,
+  finalization: 20 * 60_000,
+};
 
 function valueAt(ir: DesignIR, path: string): unknown {
   let current: unknown = ir;

@@ -34,6 +34,30 @@ describe('orchestrator', () => {
     expect(new RunPlanner(store).plan('run-default', root.id, 'brief').tasks.map((task) => task.deadlineMs)).toEqual(deadlines);
   });
 
+  it('budgets the identity stage for its complete supported critical path', () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const identity = new RunPlanner(store).plan('run-identity-critical-path', root.id, 'brief').tasks.find((task) => task.stage === 'identity');
+
+    expect(identity?.deadlineMs).toBe(119 * 60_000);
+  });
+
+  it('recomputes the identity budget from effective critic deadline overrides', () => {
+    const store = new VersionStore();
+    const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());
+    const previousGlobal = process.env.PWB_IDENTITY_CRITIC_DEADLINE_MS;
+    const previousAccessibility = process.env.PWB_IDENTITY_CRITIC_SYSTEM_A11Y_CRITIC_DEADLINE_MS;
+    process.env.PWB_IDENTITY_CRITIC_DEADLINE_MS = String(10 * 60_000);
+    delete process.env.PWB_IDENTITY_CRITIC_SYSTEM_A11Y_CRITIC_DEADLINE_MS;
+    try {
+      const identity = new RunPlanner(store).plan('run-identity-configured-path', root.id, 'brief').tasks.find((task) => task.stage === 'identity');
+      expect(identity?.deadlineMs).toBe(161 * 60_000);
+    } finally {
+      if (previousGlobal === undefined) delete process.env.PWB_IDENTITY_CRITIC_DEADLINE_MS; else process.env.PWB_IDENTITY_CRITIC_DEADLINE_MS = previousGlobal;
+      if (previousAccessibility === undefined) delete process.env.PWB_IDENTITY_CRITIC_SYSTEM_A11Y_CRITIC_DEADLINE_MS; else process.env.PWB_IDENTITY_CRITIC_SYSTEM_A11Y_CRITIC_DEADLINE_MS = previousAccessibility;
+    }
+  });
+
   it('gives each stage its own write boundary and refuses a later stage that touches the identity', () => {
     const store = new VersionStore();
     const root = new Applier(store, new PatchGate()).createRoot(createFixtureIR());

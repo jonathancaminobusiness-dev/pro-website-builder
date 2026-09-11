@@ -11,7 +11,7 @@ import { generateImageAsset, imageryPolicyViolations, plannedImagery } from './a
 import { directionVectorDraftSchemaFor, type ImagePromptPlan } from './contracts.js';
 import { FakeIdentityProvider, fakeIdentityFor } from './fake-identity-provider.js';
 import { identityChangeImpact, identityHash } from './gate.js';
-import { defaultIdentityDeadlines, IdentityStage, type IdentityStageDeadlines } from './stage.js';
+import { defaultIdentityDeadlines, identityStageDeadlineMs, IdentityStage, resolveIdentityStageDeadlines, type IdentityStageDeadlines } from './stage.js';
 import { stageRoles } from '@pwb/domain';
 
 const BRIEFING = 'Uma oficina de produto autoral precisa explicar seu processo sem parecer agência. A prova é o registro de cada decisão.';
@@ -46,6 +46,12 @@ describe('identity stage fan-out', () => {
   it('keeps the three-minute deadline for regular critics and gives system accessibility more room by default', () => {
     expect(defaultIdentityDeadlines.critic).toBe(3 * 60_000);
     expect(defaultIdentityDeadlines.criticById?.['system-a11y-critic']).toBe(10 * 60_000);
+  });
+
+  it('derives the outer budget from resolved deadlines and Claude lane capacity', () => {
+    expect(identityStageDeadlineMs(resolveIdentityStageDeadlines(), 3)).toBe(119 * 60_000);
+    expect(identityStageDeadlineMs(resolveIdentityStageDeadlines({ critic: 10 * 60_000 }), 3)).toBe(161 * 60_000);
+    expect(identityStageDeadlineMs(resolveIdentityStageDeadlines(), 1)).toBe(271 * 60_000);
   });
 
   it('opens Gate 1 without critic failures under the default deadline policy', async () => {
