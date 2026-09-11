@@ -18,7 +18,9 @@ execution, so the value persisted in `runs.briefing` and later restored into the
 curator is always the same normalized string.
 
 Restart restoration canonicalizes as it reads: `IdentityRun.restore()` writes a
-briefing back to `runs.briefing` when normalization changed it, and a legacy row
+briefing back to `runs.briefing` when normalization changed it — a best-effort
+convenience, since the normalized value is already the one in memory, so a write
+that fails still serves the run instead of failing the read — and a legacy row
 whose stored briefing cannot be normalized — blank, whitespace-only, or over the
 limit — ends the execution as `unrecoverable` rather than throwing. Such a run
 restores with the explicit `INVALID_IDENTITY_BRIEFING` placeholder and a clear
