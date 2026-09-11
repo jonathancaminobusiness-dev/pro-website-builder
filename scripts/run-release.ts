@@ -43,9 +43,10 @@ async function main(): Promise<void> {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
 
   // Gate 3 can only speak for faces a preview served, so this run serves the
-  // very version the gate is about to compile — asked for by `previewFaces`
-  // while the release is prepared — and hands the gate the faces that origin
-  // delivered. Port 0 keeps the CLI off the developer ports.
+  // version the stage hands the gate — asked for by `previewFaces` while the
+  // release is prepared, before any refinement cycle — and hands the gate the
+  // faces that origin delivered; the faces come from the fonts directory, so a
+  // refinement does not change them. Port 0 keeps the CLI off the developer ports.
   const preview = await startServedPreview(fontsDir);
   const release = new ReleaseRun('cli-release', {
     releaseRoot,

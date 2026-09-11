@@ -91,17 +91,22 @@ function faceName(decision: FontDecision | ServedFace): string {
  * stylesheet parsing above never sees an `@font-face` rule: without this, a
  * release rendered in a typeface the captain never looked at still reports every
  * route as identical.
+ *
+ * Only the faces the bundle really ships take part: a face the release refused
+ * to self-host has no `@font-face` rule on either side, so both views fall back
+ * to the same stack and there is nothing to compare.
  */
 function compareFonts(preview: ServedFace[], release: FontDecision[]): string[] {
   const differences: string[] = [];
-  const shipped = new Map(release.map((decision) => [faceName(decision), decision]));
+  const hosted = release.filter((decision): decision is FontDecision & { path: string } => decision.path !== undefined);
+  const shipped = new Map(hosted.map((decision) => [faceName(decision), decision]));
   for (const decision of preview) {
     const other = shipped.get(faceName(decision));
     if (other === undefined) { differences.push(`A face ${faceName(decision)} está no preview e não no release.`); continue; }
-    if (other.path !== decision.path) differences.push(`A face ${faceName(decision)} tem arquivos diferentes: preview ${decision.path ?? 'nenhum'}, release ${other.path ?? 'nenhum'}.`);
+    if (other.path !== decision.path) differences.push(`A face ${faceName(decision)} tem arquivos diferentes: preview ${decision.path}, release ${other.path}.`);
   }
   const reviewed = new Set(preview.map(faceName));
-  for (const decision of release) {
+  for (const decision of hosted) {
     if (!reviewed.has(faceName(decision))) differences.push(`A face ${faceName(decision)} está no release e não no preview.`);
   }
   return differences;

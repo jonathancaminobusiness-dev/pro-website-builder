@@ -225,8 +225,14 @@ describe('Gate 3 over the local API', () => {
     const fontsDir = await mkdtemp(join(tmpdir(), 'pwb-run-served-fonts-'));
     cleanups.push(async () => { await rm(fontsDir, { recursive: true, force: true }); });
     await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), bytes);
+    await writeFile(join(fontsDir, 'foundry-grotesk-400.woff2'), Buffer.from([119, 79, 70, 50, 6, 6, 6, 6]));
+    // The second face may not be redistributed, so neither view declares it and
+    // both fall back to the same stack: it is not a divergence.
     await writeFile(join(fontsDir, 'manifest.json'), JSON.stringify({
-      faces: [{ family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07' }],
+      faces: [
+        { family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07' },
+        { family: 'Foundry Grotesk', weight: '400', style: 'normal', format: 'woff2', file: 'foundry-grotesk-400.woff2', license: 'Foundry desktop licence', source: 'https://fonts.example/foundry-grotesk', author: 'Foundry', date: '2026-09-07' },
+      ],
     }), 'utf8');
 
     // Nothing served the document: the bundle self-hosts a face the gate cannot
@@ -251,7 +257,8 @@ describe('Gate 3 over the local API', () => {
     const served = await harness({ fontsDir, previewFaces: () => declared });
     const compared = await fetch(`${served.origin}/api/runs/${served.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(compared.report.parity.matched).toBe(true);
-    expect(compared.report.escalations.join(' ')).not.toMatch(/Fixture Sans/);
+    expect(compared.report.parity.routes.flatMap((route) => route.differences)).toEqual([]);
+    expect(compared.report.escalations.join(' ')).not.toMatch(/Fixture Sans|Foundry Grotesk/);
 
     // The same served document against a release that ships no face at all: the
     // comparison has two independent sides, so it says the face moved.

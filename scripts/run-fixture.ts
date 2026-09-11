@@ -53,9 +53,10 @@ async function main(): Promise<void> {
   try {
     const providerName = modelProviderName(process.env.PWB_MODEL_PROVIDER);
     // Gate 3 can only speak for faces a preview served, so this run serves the
-    // very version the gate compiles — the finalization version, asked for by
-    // `previewFaces` while the release is prepared — from the same origin the
-    // studio uses. Port 0 keeps the CLI off the developer ports.
+    // version the stage hands the gate — asked for by `previewFaces` while the
+    // release is prepared, before any refinement cycle — from the same origin
+    // the studio uses; the faces come from the fonts directory, so a refinement
+    // does not change them. Port 0 keeps the CLI off the developer ports.
     const preview = await startServedPreview(fontsDir);
     const run = new FixtureRun({
       repository: new ProjectRepository(database),
