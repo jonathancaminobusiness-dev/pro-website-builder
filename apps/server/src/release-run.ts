@@ -49,6 +49,15 @@ export interface ReleaseContext {
  */
 export type ReleaseApprover = 'captain' | 'fixture';
 
+/**
+ * A release already being prepared in this run. Preparing twice at once would
+ * interleave two compilations into one snapshot — and propose the same refiner
+ * patch twice — so the second caller is refused the way a taken run id is.
+ */
+export class ReleasePrepareConflictError extends Error {
+  constructor(runId: string) { super(`O release do run ${runId} já está sendo preparado.`); this.name = 'ReleasePrepareConflictError'; }
+}
+
 export interface ReleaseSnapshot {
   runId: string;
   digest: string;
@@ -86,10 +95,28 @@ export class ReleaseRun {
   private snapshotValue: ReleaseSnapshot | undefined;
   private compiled: CompiledSite | undefined;
   private context: ReleaseContext | undefined;
+  private preparing = false;
 
   constructor(private readonly runId: string, private readonly options: ReleaseRunOptions) {}
 
+  /**
+   * Compiles, critiques and evaluates Gate 3, and holds the report.
+   *
+   * The gate is claimed before the first await, as publishing claims it: two
+   * preparations that raced would each run a full stage and then interleave the
+   * three assignments this method ends with, so the report could name one
+   * execution's digest while the bytes held for publishing came from the other,
+   * and both would propose the refiner's patch under the same idempotency key —
+   * the loser turning into an escalation the captain never caused.
+   */
   async prepare(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
+    if (this.preparing) throw new ReleasePrepareConflictError(this.runId);
+    this.preparing = true;
+    try { return await this.prepareClaimed(context, signal); }
+    finally { this.preparing = false; }
+  }
+
+  private async prepareClaimed(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
     const chosen = providers(this.options.modelProvider ?? 'fake');
     const fonts = await loadFontSources(this.options.fontsDir);
     const stage = new FinalizationStage({
