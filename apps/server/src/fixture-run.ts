@@ -152,7 +152,8 @@ export class FixtureRun {
     if (stage === 'finalization') throw new Error('O gate de finalização é o Gate 3: publicar o bundle aprova a etapa.');
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting approval.`);
     const approved = this.currentVersion;
-    this.requireClean(stage, approved);
+    const unclean = this.lintRefusal(stage, approved);
+    if (unclean) throw new Error(unclean);
     const approval: Approval = { id: `${this.runId()}-${stage}-approval`, stage, approverRole: 'captain', versionId: approved.id, versionHash: approved.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
     const previousStatus = this.status;
     this.status = 'queued';
@@ -186,17 +187,24 @@ export class FixtureRun {
     this.requireInitialized();
     if (!this.releaseRun) throw new Error('A finalização não está habilitada nesta execução.');
     if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new ReleasePublishRefusedError('Stage finalization is not awaiting approval.');
-    this.requireClean('finalization', this.currentVersion);
+    const unclean = this.lintRefusal('finalization', this.currentVersion);
+    if (unclean) throw new ReleasePublishRefusedError(unclean);
     if (this.releaseRun.snapshot()?.refinedFromVersionId !== this.finalizationVersion?.id) throw new ReleasePublishRefusedError('O release preparado não é o da proposta que está no gate; prepare o release novamente antes de publicar.');
     this.status = 'queued';
     try { return await this.releaseRun.publish(approverRole, digest, rationale); }
     catch (error) { if (this.status === 'queued') this.status = 'needs_review'; throw error; }
   }
 
-  /** No gate closes over a document the linter rejects, Gate 3 included. */
-  private requireClean(stage: Stage, version: VersionRecord): void {
+  /**
+   * No gate closes over a document the linter rejects, Gate 3 included. The
+   * reason comes back instead of being thrown so each gate refuses in its own
+   * terms: a publish the release refuses is a conflict the Studio can read, not
+   * a server failure.
+   */
+  private lintRefusal(stage: Stage, version: VersionRecord): string | undefined {
     const lint = lintDesign(version.ir);
-    if (lint.errorCount > 0) throw new Error(`Stage ${stage} cannot be approved while version ${version.id} has ${lint.errorCount} lint error(s): ${lint.findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} ${finding.path}`).join('; ')}`);
+    if (lint.errorCount === 0) return undefined;
+    return `Stage ${stage} cannot be approved while version ${version.id} has ${lint.errorCount} lint error(s): ${lint.findings.filter((finding) => finding.severity === 'error').map((finding) => `${finding.id} ${finding.path}`).join('; ')}`;
   }
 
   async reject(stage: Stage, approverRole: 'captain' | string, rationale = 'Captain requested a revision.'): Promise<FixtureSnapshot> {
@@ -300,14 +308,19 @@ export class FixtureRun {
       approveFinalization: async (approverRole, rationale, manifest) => {
         const version = this.currentVersion;
         const approval: Approval = { id: `${this.runId()}-finalization-approval`, stage: 'finalization', approverRole, versionId: version.id, versionHash: version.hash, decision: 'approved', rationale, createdAt: new Date().toISOString() };
+        // Acceptance is the last step and it cannot fail halfway: everything
+        // durable is written first, and only then does the run become a
+        // succeeded one holding this manifest. A publish that dies before that
+        // point leaves the gate open, so the bytes it wrote can still be rolled
+        // back; once the gate is closed nothing is removed.
+        await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
+        await this.record('approval.recorded', { stage: 'finalization', decision: 'approved', versionId: approval.versionId });
+        await this.record('run.finished', { status: 'succeeded', digest: manifest.digest });
         this.approvals.push(approval);
         this.stageIndex += 1;
         this.exportManifest = manifest;
         this.status = 'succeeded';
         this.openGate('approved');
-        await ignoringDuplicate(this.options.repository.createApproval({ ...approval, runId: this.runId(), projectId: this.projectId() }));
-        await this.record('approval.recorded', { stage: 'finalization', decision: 'approved', versionId: approval.versionId });
-        await this.record('run.finished', { status: 'succeeded', digest: manifest.digest });
       },
       adopt: async (version) => {
         if (this.status !== 'needs_review' || this.currentStage !== 'finalization') throw new Error('O gate de finalização se moveu enquanto o release era preparado; a preparação não adota a versão refinada.');

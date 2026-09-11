@@ -245,12 +245,14 @@ again is refused rather than moving a finished run's document.
 
 A publish the release refuses answers `409` with its own reason, never `500`:
 nothing prepared in this execution, a digest the run no longer holds, a bundle
-prepared for another proposal, a veto still standing, or an open point never
-accepted in writing. The studio can tell the release having moved from the
-server having broken. And the bytes never outlive the acceptance: if the
-publication cannot be appended to the release record, or the gate cannot be
-approved, the bundle this publish wrote is removed again rather than left on
-disk with the run still needing review. A bundle that was already there — the
+prepared for another proposal, a document the linter rejects, a veto still
+standing, or an open point never accepted in writing. The studio can tell the
+release having moved from the server having broken. And the bytes never outlive
+the acceptance, which is the last step of a publish: the publication record and
+the gate's approval are written while the gate is still open, so a failure there
+removes the bundle this publish wrote rather than leaving it on disk with the
+run still needing review, and once the run is marked succeeded nothing is
+removed. A bundle that was already there — the
 same bytes published before — is never touched, because its own record stands
 for it.
 
