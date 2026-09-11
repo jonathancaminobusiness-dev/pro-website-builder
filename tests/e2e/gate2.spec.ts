@@ -5,6 +5,7 @@ import type { IncomingMessage } from 'node:http';
 import { expect, test, type Page } from '@playwright/test';
 import { createFixtureIR, type DesignIR } from '../../packages/domain/src/index.js';
 import { DerivedEvidenceSource } from '../../packages/stage-prototype/src/index.js';
+import { identityHash } from '../../packages/stage-identity/src/index.js';
 import { openDatabase, ProjectRepository } from '../../apps/server/src/db/repository.js';
 import { PrototypeRunRegistry } from '../../apps/server/src/prototype-api.js';
 import { handlePrototypeRequest } from '../../apps/server/src/prototype-routes.js';
@@ -30,10 +31,13 @@ function createOffRhythmControlIR(): DesignIR {
 async function serveSeededRun(page: Page): Promise<() => Promise<void>> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-seeded-'));
   const database = openDatabase(join(dir, 'gate2.sqlite'));
+  // The run always starts from an identity Gate 1 approved; here that identity is
+  // the revision with the defect, handed over exactly as the server hands one on.
+  const approved = createOffRhythmControlIR();
   const registry = new PrototypeRunRegistry({
     repository: new ProjectRepository(database),
     evidence: new DerivedEvidenceSource(),
-    seed: createOffRhythmControlIR,
+    identity: async () => ({ identityRunId: 'gate1-seeded', projectId: approved.meta.projectId, versionId: approved.meta.versionId, identityHash: identityHash(approved), approvedAt: new Date().toISOString(), stale: false, ir: approved, assets: [] }),
   });
 
   await page.route('**/api/prototype/**', async (route) => {
@@ -65,8 +69,20 @@ test.describe('Gate 2 review screen', () => {
   test.setTimeout(300_000);
 
   test('compares A with B on the same route and width, and records the captain decision', async ({ page }) => {
+    // The stage runs on the identity the captain approved, so Gate 1 is decided first;
+    // what the run measures has to be that identity and not a fixture.
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Gate 1 · identidade' }).click();
+    await page.getByRole('button', { name: 'Criar execução de identidade' }).click();
+    await page.getByRole('button', { name: 'Executar etapa de identidade' }).click();
+    await expect(page.locator('.direction-card')).toHaveCount(3, { timeout: 60_000 });
+    await page.getByLabel(/Motivo da decisão/).fill('Esta direção é a identidade que o protótipo deve carregar.');
+    await page.locator('.direction-card', { hasText: 'modular-technical' }).getByRole('button', { name: 'Aprovar esta direção' }).click();
+    await expect(page.locator('.gate-record')).toContainText('Decisão registrada.');
+
     await page.goto('/#/gate-2');
     await expect(page.getByRole('heading', { name: 'Hierarquia, comportamento e caráter' })).toBeVisible();
+    await expect(page.locator('.gate2-chain')).toContainText('parte da identidade aprovada no Gate 1');
 
     await page.getByRole('button', { name: 'Executar a etapa de protótipo' }).click();
 
@@ -79,6 +95,8 @@ test.describe('Gate 2 review screen', () => {
     const compare = page.locator('.compare');
     // The run measures every declared state at the representative widths in a real browser.
     await expect(compare).toBeVisible({ timeout: 240_000 });
+    // The identity measured in the revision under review is the one Gate 1 recorded.
+    await expect(page.getByText('identidade do Gate 1 medida nesta revisão')).toBeVisible();
 
     // A reload finds the same run: the review is addressable, not held in a tab's memory.
     await page.reload();

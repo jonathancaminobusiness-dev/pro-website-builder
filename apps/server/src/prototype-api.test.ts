@@ -4,12 +4,14 @@ import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { createFixtureIR, type DesignIR } from '@pwb/domain';
-import { FakeModelProvider } from '@pwb/providers';
+import { FakeIdentityProvider, identityHash } from '@pwb/stage-identity';
+import { FakeModelProvider, HiggsfieldMcpProvider } from '@pwb/providers';
 import { DerivedEvidenceSource, type EvidenceSource } from '@pwb/stage-prototype';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
-import { PrototypeRunRegistry, type Gate2Snapshot } from './prototype-api.js';
+import { IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
+import { PrototypeRunRegistry, type Gate2Snapshot, type IdentitySeed, type PrototypeRunRequest } from './prototype-api.js';
 
 const captain = { origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' };
 
@@ -26,12 +28,27 @@ function createOffRhythmControlIR(): DesignIR {
   return ir;
 }
 
-async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSource } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; close: () => Promise<void> }> {
+/** What Gate 1 hands on, as the server reads it back: the approved document, under its own version id. */
+function approvedIdentity(overrides: Partial<IdentitySeed> = {}): IdentitySeed {
+  const ir = createFixtureIR();
+  return { identityRunId: 'identity-chain', projectId: ir.meta.projectId, versionId: ir.meta.versionId, identityHash: identityHash(ir), approvedAt: new Date().toISOString(), stale: false, ir, assets: [], ...overrides };
+}
+
+async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSource; repository?: ProjectRepository; identity?: (request: PrototypeRunRequest) => Promise<IdentitySeed | undefined> } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; repository: ProjectRepository; close: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-'));
-  const db = openDatabase(join(dir, 'gate2.sqlite'));
-  const repository = new ProjectRepository(db);
+  // A caller that brings its own ledger owns it: a Gate 1 execution and the
+  // prototype seeded from it write the same rows.
+  const db = options.repository ? undefined : openDatabase(join(dir, 'gate2.sqlite'));
+  const repository = options.repository ?? new ProjectRepository(db!);
   // Synthesized evidence keeps these unit tests browserless; the server itself only ever measures.
-  const registry = new PrototypeRunRegistry({ repository, evidence: options.evidence ?? new DerivedEvidenceSource(), ...(options.seed ? { seed: options.seed } : {}) });
+  // Every run starts from an identity Gate 1 approved; a test that wants a
+  // document with a known defect hands it over as that approved identity.
+  const seeded = options.seed;
+  const registry = new PrototypeRunRegistry({
+    repository,
+    evidence: options.evidence ?? new DerivedEvidenceSource(),
+    identity: options.identity ?? (async () => approvedIdentity(seeded ? { ir: seeded() } : {})),
+  });
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs, prototypes: registry,
@@ -43,7 +60,8 @@ async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSour
   return {
     origin: `http://127.0.0.1:${port}`,
     registry,
-    close: async () => { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); db.sqlite.close(); },
+    repository,
+    close: async () => { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); db?.sqlite.close(); },
   };
 }
 
@@ -82,13 +100,13 @@ describe('Gate 2 API', () => {
       expect(refused.payload.error).toContain('Only the captain');
 
       // The start request answers at once with the id, because measuring takes minutes.
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run' });
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run', identityRunId: 'identity-chain' });
       expect(created.status).toBe(201);
       expect(created.payload.runId).toBe('gate2-run');
       expect(created.payload.status).toBe('queued');
       expect(created.payload.result).toBeUndefined();
 
-      const duplicate = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run' });
+      const duplicate = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-run', identityRunId: 'identity-chain' });
       expect(duplicate.status).toBe(409);
       expect((await fetch(`${api.origin}/api/prototype/runs/absent`)).status).toBe(404);
 
@@ -112,7 +130,7 @@ describe('Gate 2 API', () => {
     const held = blockingEvidence();
     const api = await harness({ evidence: held.evidence });
     try {
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-recover' });
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-recover', identityRunId: 'identity-chain' });
       expect(created.payload.status).toBe('queued');
       expect(created.payload.result).toBeUndefined();
       await until(api.origin, 'gate2-recover', (snapshot) => snapshot.status === 'running');
@@ -138,9 +156,9 @@ describe('Gate 2 API', () => {
     const held = blockingEvidence();
     const api = await harness({ evidence: held.evidence });
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-first' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-first', identityRunId: 'identity-chain' });
       await until(api.origin, 'gate2-first', (snapshot) => snapshot.status === 'running');
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-second' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-second', identityRunId: 'identity-chain' });
 
       // The second run holds no browser: it waits for the only measuring slot the server has.
       for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -157,7 +175,7 @@ describe('Gate 2 API', () => {
   it('serves both sides of the comparison from the isolated preview origin', async () => {
     const api = await harness();
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-preview' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-preview', identityRunId: 'identity-chain' });
       const result = (await settled(api.origin, 'gate2-preview')).result!;
       for (const versionId of [result.before.versionId, result.after.versionId]) {
         const document = api.registry.preview(versionId);
@@ -171,7 +189,7 @@ describe('Gate 2 API', () => {
     // Driven from a revision with a known defect, so the run always carries a finding to decide on.
     const api = await harness({ seed: createOffRhythmControlIR });
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-decide' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-decide', identityRunId: 'identity-chain' });
       const findingId = (await settled(api.origin, 'gate2-decide')).result!.issues[0]!.id;
       const path = '/api/prototype/runs/gate2-decide/decision';
 
@@ -189,7 +207,7 @@ describe('Gate 2 API', () => {
   it('records the gate decision against the reviewed revision and keeps it captain-only', async () => {
     const api = await harness();
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-gate' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-gate', identityRunId: 'identity-chain' });
       const created = await settled(api.origin, 'gate2-gate');
       const path = '/api/prototype/runs/gate2-gate/gate';
       expect((await post(api.origin, path, { approverRole: 'captain', decision: 'maybe', rationale: 'ok' })).status).toBe(400);
@@ -207,8 +225,8 @@ describe('Gate 2 API', () => {
     const repository = new ProjectRepository(db);
     const held = blockingEvidence();
     try {
-      const first = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), seed: createOffRhythmControlIR });
-      await first.create('gate2-restart');
+      const first = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), identity: async () => approvedIdentity({ ir: createOffRhythmControlIR() }) });
+      await first.create('gate2-restart', { identityRunId: 'identity-chain' });
       let before = first.get('gate2-restart')!;
       for (let attempt = 0; attempt < 400 && (before.status === 'running' || before.status === 'queued'); attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -217,11 +235,11 @@ describe('Gate 2 API', () => {
       await first.decide('gate2-restart', { findingId: before.result!.issues[0]!.id, decision: 'accepted', rationale: 'Reparo causal aceito.' });
 
       // A run that never finished measuring when the process stopped.
-      const stopped = new PrototypeRunRegistry({ repository, evidence: held.evidence });
-      await stopped.create('gate2-interrupted');
+      const stopped = new PrototypeRunRegistry({ repository, evidence: held.evidence, identity: async () => approvedIdentity() });
+      await stopped.create('gate2-interrupted', { identityRunId: 'identity-chain' });
 
       // A new process reads the same database and serves the review without measuring anything again.
-      const restarted = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource() });
+      const restarted = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), identity: async () => approvedIdentity() });
       await restarted.restore();
 
       const recovered = restarted.get('gate2-restart')!;
@@ -250,8 +268,8 @@ describe('Gate 2 API', () => {
     const db = openDatabase(join(dir, 'events.sqlite'));
     const repository = new ProjectRepository(db);
     try {
-      const registry = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), seed: createOffRhythmControlIR });
-      await registry.create('gate2-events');
+      const registry = new PrototypeRunRegistry({ repository, evidence: new DerivedEvidenceSource(), identity: async () => approvedIdentity({ ir: createOffRhythmControlIR() }) });
+      await registry.create('gate2-events', { identityRunId: 'identity-chain' });
       let snapshot = registry.get('gate2-events')!;
       for (let attempt = 0; attempt < 200 && snapshot.status === 'running'; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -266,5 +284,243 @@ describe('Gate 2 API', () => {
       expect(types).toContain('gate2.decided');
       expect(repository.dump()).not.toMatch(/(api[_-]?key|password|secret)["']?\s*[:=]/i);
     } finally { db.sqlite.close(); }
+  });
+});
+
+describe('Gate 2 runs on the identity Gate 1 approved', () => {
+  /** A Gate 1 execution over one ledger, with whatever raster provider the host has. */
+  async function decidedIdentity(repository: ProjectRepository, runId: string, raster: HiggsfieldMcpProvider): Promise<IdentityRun> {
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), raster });
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
+    return run;
+  }
+
+  /** The reading `startServer` wires: the handoff and the approved document as they stand now. */
+  function handoffSeed(run: IdentityRun, runId: string): () => Promise<IdentitySeed> {
+    return async () => {
+      const handoff = run.snapshot().handoff!;
+      const document = run.approvedVersion()!;
+      return { identityRunId: runId, projectId: run.projectId, versionId: handoff.versionId, identityHash: handoff.identityHash, approvedAt: handoff.approvedAt, stale: handoff.stale, ir: document.ir, assets: handoff.assets };
+    };
+  }
+
+  /** The captain's own wait: the identity snapshot is polled until the lane stops shooting. */
+  async function imagerySettled(run: IdentityRun): Promise<IdentityRunSnapshot['assets']> {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      const assets = run.snapshot().assets;
+      if (assets.every((asset) => asset.status !== 'generating')) return assets;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error('The raster lane never settled.');
+  }
+
+  it('starts on the default deployment, where no raster provider is configured', async () => {
+    // `PWB_HIGGSFIELD_MCP_COMMAND` unset is the normal case: the lane settles the
+    // approved imagery as a placeholder, which is a state no waiting resolves.
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-placeholder-'));
+    const db = openDatabase(join(dir, 'placeholder.sqlite'));
+    const repository = new ProjectRepository(db);
+    const identityRun = await decidedIdentity(repository, 'identity-unconfigured', new HiggsfieldMcpProvider({ configured: false }));
+    const settledAssets = await imagerySettled(identityRun);
+    expect(settledAssets.map((asset) => asset.status)).toEqual(['placeholder']);
+
+    const api = await harness({ repository, identity: handoffSeed(identityRun, 'identity-unconfigured') });
+    try {
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-placeholder', identityRunId: 'identity-unconfigured' });
+      expect(created.status).toBe(201);
+      // Gate 2 never waits on the lane: the placeholder travels into the document
+      // as what it is, and the review says so.
+      expect(created.payload.chain!.seededImagery).toEqual([{ id: settledAssets[0]!.id, status: 'placeholder', note: settledAssets[0]!.provenance.termsNote }]);
+
+      const result = (await settled(api.origin, 'gate2-placeholder')).result!;
+      await post(api.origin, '/api/prototype/runs/gate2-placeholder/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Protótipo aprovado.' });
+      const versions = await repository.listVersions(identityRun.projectId);
+      const reviewed = versions.find((version) => version.id === result.after.versionId)!;
+      expect(reviewed.ir.assets.items.find((asset) => asset.id === settledAssets[0]!.id)).toMatchObject({ status: 'placeholder' });
+    } finally { await api.close(); db.sqlite.close(); }
+  });
+
+  it('records the image a slow lane delivered in the revision ledger, on a version of its own', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-imagery-'));
+    const db = openDatabase(join(dir, 'imagery.sqlite'));
+    const repository = new ProjectRepository(db);
+    let release = (): void => {};
+    const shooting = new Promise<void>((resolve) => { release = resolve; });
+    const raster = new HiggsfieldMcpProvider({
+      configured: true,
+      transport: { callTool: async () => { await shooting; return { uri: 'data:image/png;base64,aGVybw==', license: 'provider terms 2026', termsNote: 'Owner review required.' }; } },
+    });
+    const identityRun = await decidedIdentity(repository, 'identity-imagery', raster);
+    expect(identityRun.snapshot().assets.map((asset) => asset.status)).toEqual(['generating']);
+
+    const api = await harness({ repository, identity: handoffSeed(identityRun, 'identity-imagery') });
+    try {
+      // The lane finishes on its own; nothing cancels it and nothing waits on it
+      // to start Gate 2.
+      release();
+      const shot = await imagerySettled(identityRun);
+      expect(shot.map((asset) => asset.status)).toEqual(['ready']);
+
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-imagery', identityRunId: 'identity-imagery' });
+      expect(created.status).toBe(201);
+      const result = (await settled(api.origin, 'gate2-imagery')).result!;
+      await post(api.origin, '/api/prototype/runs/gate2-imagery/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Protótipo aprovado.' });
+
+      const versions = await repository.listVersions(identityRun.projectId);
+      const byId = new Map(versions.map((version) => [version.id, version]));
+      const reviewed = byId.get(result.after.versionId)!;
+      const delivered = shot[0]!;
+      expect(delivered.id).toMatch(/^asset-modular-technical-/);
+      // The revision the captain reviewed records the delivered image once, with
+      // its provenance and licence.
+      expect(reviewed.ir.assets.items.filter((asset) => asset.id === delivered.id)).toMatchObject([{ uri: delivered.uri, status: 'ready', provenance: { license: delivered.provenance.license } }]);
+      // And nothing places it in a page: this build has no way to point a node at
+      // an asset, so an approved image is licensed and recorded, never rendered.
+      expect(reviewed.ir.pages.routes.flatMap((page) => page.nodes).some((node) => node.assetId !== undefined)).toBe(false);
+      // The document the fixture declares keeps its own asset beside it.
+      expect(reviewed.ir.assets.items.map((asset) => asset.id).sort()).toEqual([delivered.id, 'fixture-mark']);
+
+      // The root is a version of its own, so the ledger row describes the very
+      // document Gate 2 measured instead of two documents sharing one id.
+      const lineage: string[] = [];
+      for (let current = reviewed; current; current = current.parentId ? byId.get(current.parentId)! : undefined!) {
+        lineage.push(current.id);
+        if (!current.parentId) break;
+      }
+      const identityVersionId = identityRun.snapshot().handoff!.versionId;
+      expect(lineage).toContain(identityVersionId);
+      const root = byId.get(lineage[lineage.indexOf(identityVersionId) - 1]!)!;
+      expect(root.id).not.toBe(identityVersionId);
+      expect(root.parentId).toBe(identityVersionId);
+      expect(root.ir.assets.items.find((asset) => asset.id === shot[0]!.id)).toMatchObject({ uri: shot[0]!.uri });
+      // And the identity's own row is untouched: it never carried the imagery.
+      expect(byId.get(identityVersionId)!.ir.assets.items.some((asset) => asset.id === shot[0]!.id)).toBe(false);
+    } finally { await api.close(); db.sqlite.close(); }
+  });
+
+  it('claims the run id before it reads the seed, so a retry cannot start a second execution', async () => {
+    // Reading the seed yields — after a restart it restores a whole Gate 1 from
+    // SQLite — and a retry that arrives in that window must not open a run.
+    let admit = (): void => {};
+    const reading = new Promise<void>((resolve) => { admit = resolve; });
+    let reads = 0;
+    const api = await harness({
+      identity: async () => { reads += 1; await reading; return approvedIdentity(); },
+    });
+    try {
+      const first = post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-retried', identityRunId: 'identity-chain' });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const retry = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-retried', identityRunId: 'identity-chain' });
+      expect(retry.status).toBe(409);
+      admit();
+      expect((await first).status).toBe(201);
+      expect(reads).toBe(1);
+      expect((await settled(api.origin, 'gate2-retried')).result).toBeDefined();
+    } finally { admit(); await api.close(); }
+  });
+
+  it('starts from a chain whose imagery the ended process left in flight', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-restart-imagery-'));
+    const db = openDatabase(join(dir, 'restart.sqlite'));
+    const repository = new ProjectRepository(db);
+    let release = (): void => {};
+    const shooting = new Promise<void>((resolve) => { release = resolve; });
+    const raster = new HiggsfieldMcpProvider({
+      configured: true,
+      transport: { callTool: async () => { await shooting; return { uri: 'data:image/png;base64,aGVybw==', license: 'provider terms 2026' }; } },
+    });
+    const identityRun = await decidedIdentity(repository, 'identity-restart', raster);
+    expect(identityRun.snapshot().assets.map((asset) => asset.status)).toEqual(['generating']);
+
+    // Another process reads the same ledger: what was in flight is settled as
+    // what became of it, so no revision is ever seeded from an image in limbo.
+    const restored = new IdentityRun({ runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+    expect(restored.snapshot().assets.map((asset) => asset.status)).toEqual(['failed']);
+
+    const api = await harness({ repository, identity: handoffSeed(restored, 'identity-restart') });
+    try {
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-restart-imagery', identityRunId: 'identity-restart' });
+      expect(created.status).toBe(201);
+      expect(created.payload.chain!.seededImagery?.map((asset) => asset.status)).toEqual(['failed']);
+      expect((await settled(api.origin, 'gate2-restart-imagery')).result).toBeDefined();
+    } finally { release(); await api.close(); db.sqlite.close(); }
+  });
+
+  it('refuses to measure anything the captain has not approved in Gate 1', async () => {
+    const api = await harness({ identity: async () => undefined });
+    try {
+      // No identity named at all: the stage has nothing to prototype, and answering
+      // with the built-in fixture would be measuring work the captain never asked for.
+      const unnamed = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-unnamed' });
+      expect(unnamed.status).toBe(409);
+      expect(unnamed.payload.error).toMatch(/identidade aprovada/i);
+
+      const undecided = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-undecided', identityRunId: 'identity-chain' });
+      expect(undecided.status).toBe(409);
+      expect(undecided.payload.error).toMatch(/Gate 1/);
+      expect(api.registry.has('gate2-undecided')).toBe(false);
+    } finally { await api.close(); }
+  });
+
+  it('refuses an identity that moved after the gate closed, and one the gate did not close on', async () => {
+    const api = await harness({ identity: async () => approvedIdentity({ stale: true }) });
+    try {
+      const stale = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-stale', identityRunId: 'identity-chain' });
+      expect(stale.status).toBe(409);
+      expect(stale.payload.error).toMatch(/mudou depois do Gate 1/i);
+    } finally { await api.close(); }
+
+    const fresh = await harness({ identity: async () => approvedIdentity() });
+    try {
+      const other = await post(fresh.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-other', identityRunId: 'identity-chain', versionId: 'v-nao-aprovada' });
+      expect(other.status).toBe(409);
+      expect(other.payload.error).toMatch(/aprovou a versão/i);
+    } finally { await fresh.close(); }
+  });
+
+  it('seeds the run from the approved version and records Gate 2 in the chain ledger', async () => {
+    const seed = approvedIdentity();
+    const asked: PrototypeRunRequest[] = [];
+    const api = await harness({ identity: async (request) => { asked.push(request); return seed; } });
+    try {
+      // The approved version is named by the Gate 1 execution; asking by the
+      // version alone reaches the same run.
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-chain', identityRunId: 'identity-chain' });
+      expect(created.status).toBe(201);
+      expect(created.payload.chain).toEqual({ identityRunId: 'identity-chain', identityVersionId: seed.versionId, identityHash: seed.identityHash, projectId: seed.projectId });
+      expect(asked).toEqual([{ identityRunId: 'identity-chain' }]);
+
+      const snapshot = await settled(api.origin, 'gate2-chain');
+      const result = snapshot.result!;
+      // Measured from the document under review, never copied from the request:
+      // the prototype stage may not write `/identity`, and this proves it did not.
+      expect(result.identityHash).toBe(seed.identityHash);
+
+      const approved = await post(api.origin, '/api/prototype/runs/gate2-chain/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Protótipo aprovado sobre a identidade aprovada.' });
+      expect(approved.status).toBe(200);
+
+      // The approval lands in the table Gate 3 reads, under the chain's own run id.
+      const approvals = await api.repository.listApprovals('identity-chain');
+      expect(approvals.map((entry) => [entry.stage, entry.decision, entry.versionId])).toEqual([['prototype', 'approved', result.after.versionId]]);
+
+      // A second tab still holding the pre-decision snapshot cannot overwrite the
+      // row the release gate reads: the decision stands and the tab is told so.
+      const again = await post(api.origin, '/api/prototype/runs/gate2-chain/gate', { approverRole: 'captain', decision: 'rejected', rationale: 'Devolver para revisão.' });
+      expect(again.status).toBe(409);
+      expect(again.payload.error).toMatch(/já foi aprovado/i);
+      expect((await api.repository.listApprovals('identity-chain')).map((entry) => [entry.stage, entry.decision])).toEqual([['prototype', 'approved']]);
+      expect((await settled(api.origin, 'gate2-chain')).result!.approval).toMatchObject({ decision: 'approved' });
+
+      // And so does the lineage between the two, so Gate 3 can walk it.
+      const versions = await api.repository.listVersions(seed.projectId);
+      const byId = new Map(versions.map((version) => [version.id, version]));
+      expect(byId.has(seed.versionId)).toBe(true);
+      const lineage: string[] = [];
+      for (let current = byId.get(result.after.versionId); current; current = current.parentId ? byId.get(current.parentId) : undefined) lineage.push(current.id);
+      expect(lineage.at(-1)).toBe(seed.versionId);
+    } finally { await api.close(); }
   });
 });

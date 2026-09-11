@@ -10,7 +10,7 @@ import { HiggsfieldMcpProvider } from '@pwb/providers';
 import { fakeIdentityFor, FakeIdentityProvider } from '@pwb/stage-identity';
 import { startServer } from './index.js';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
-import { IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
+import { Gate1AlreadyDecidedError, IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
 import { STUDIO_ORIGIN } from './security.js';
 
 let directory: string;
@@ -864,6 +864,56 @@ describe('identity run', () => {
     await run.start();
     await expect(run.reject({ directionId: 'editorial-material', approverRole: 'designer', rationale: 'não' })).rejects.toThrow(/Only the captain/);
   });
+
+  it('finds the Gate 1 that approved a version the identity moved on from', async () => {
+    // A token change after the gate closed writes a descendant and leaves the
+    // approval on the version it was decided upon; the identity the run hands on
+    // is that descendant, and it is the only version id a client is ever shown.
+    const repository = new ProjectRepository(database);
+    const decided = createFixtureIR();
+    const moved = createFixtureIR();
+    moved.identity.decisions[0]!.rationale = 'Token ajustado depois do gate.';
+    await repository.createProject({ id: decided.meta.projectId, name: 'Identity stage project' });
+    await repository.createRun({ id: 'identity-moved', projectId: decided.meta.projectId });
+    await repository.saveVersion({ id: decided.meta.versionId, projectId: decided.meta.projectId, hash: 'h-decided', ir: decided });
+    await repository.saveVersion({ id: 'v-moved', projectId: decided.meta.projectId, parentId: decided.meta.versionId, hash: 'h-moved', ir: moved });
+    await repository.createApproval({ id: 'identity-moved-identity-approval-0', runId: 'identity-moved', projectId: decided.meta.projectId, stage: 'identity', approverRole: 'captain', versionId: decided.meta.versionId, versionHash: 'h-decided', decision: 'approved', rationale: 'Gate 1 decidido.' });
+
+    expect(repository.identityApprovalRuns(decided.meta.versionId)).toEqual(['identity-moved']);
+    expect(repository.identityApprovalRuns('v-moved')).toEqual(['identity-moved']);
+    expect(repository.identityApprovalRuns('v-que-ninguem-decidiu')).toEqual([]);
+  });
+
+  it('names every Gate 1 that approved a version, because two executions of one briefing share it', async () => {
+    // Version ids are derived from the document, so the same briefing decided
+    // twice approves the same id: the version alone no longer names one chain.
+    const repository = new ProjectRepository(database);
+    const shared = createFixtureIR();
+    await repository.createProject({ id: shared.meta.projectId, name: 'Identity stage project' });
+    await repository.saveVersion({ id: shared.meta.versionId, projectId: shared.meta.projectId, hash: 'h-shared', ir: shared });
+    for (const runId of ['identity-a', 'identity-b']) {
+      await repository.createRun({ id: runId, projectId: shared.meta.projectId });
+      await repository.createApproval({ id: `${runId}-identity-approval-0`, runId, projectId: shared.meta.projectId, stage: 'identity', approverRole: 'captain', versionId: shared.meta.versionId, versionHash: 'h-shared', decision: 'approved', rationale: 'Gate 1 decidido.' });
+    }
+
+    expect(repository.identityApprovalRuns(shared.meta.versionId).sort()).toEqual(['identity-a', 'identity-b']);
+  });
+
+  it('refuses to return a direction once the gate is decided', async () => {
+    const run = newRun('identity-decided-once');
+    await run.initialize();
+    await run.start();
+    await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Esta é a identidade.' });
+
+    // A second screen still holding the pre-decision snapshot presses "Devolver":
+    // the row it would write is newer than the approval the chain hangs on.
+    await expect(run.reject({ directionId: 'editorial-material', approverRole: 'captain', rationale: 'Devolvida.' })).rejects.toBeInstanceOf(Gate1AlreadyDecidedError);
+    await expect(run.reject({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Devolvida.' })).rejects.toThrow(/já foi decidido/);
+
+    const decisions = await new ProjectRepository(database).listApprovals('identity-decided-once');
+    expect(decisions.map((entry) => entry.decision)).toEqual(['approved']);
+    expect(run.snapshot().gate.state).toBe('closed');
+  });
 });
 
 describe('identity api', () => {
@@ -875,6 +925,33 @@ describe('identity api', () => {
   }
 
   const post = (origin: string, path: string, payload: unknown) => fetch(`${origin}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: STUDIO_ORIGIN }, body: JSON.stringify(payload) });
+
+  it('refuses to seed a prototype from a version two executions approved', async () => {
+    await withServer(async (origin) => {
+      const handoffs: string[] = [];
+      for (const runId of ['chain-a', 'chain-b']) {
+        await post(origin, '/api/identity/runs', { runId });
+        await post(origin, `/api/identity/runs/${runId}/start`, { approverRole: 'captain' });
+        const approved = await post(origin, `/api/identity/runs/${runId}/approve`, { approverRole: 'captain', directionId: 'typographic-low-chroma', rationale: 'Aprovada.' });
+        handoffs.push((await approved.json() as { handoff: { versionId: string } }).handoff.versionId);
+      }
+      // The same briefing decided twice approves the same document, so the same
+      // content-derived version id: it names two chains, and only the caller
+      // knows which one it means.
+      expect(handoffs[0]).toBe(handoffs[1]);
+
+      const seeded = await post(origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-ambiguous', versionId: handoffs[0] });
+      expect(seeded.status).toBe(409);
+      const error = (await seeded.json() as { error: string }).error;
+      expect(error).toContain('chain-a');
+      expect(error).toContain('chain-b');
+      expect(error).toMatch(/identityRunId/);
+
+      // Nothing was measured: an ambiguous request never opens a run.
+      const runs = await (await fetch(`${origin}/api/prototype/runs`, { headers: { origin: STUDIO_ORIGIN } })).json() as { runs: unknown[] };
+      expect(runs.runs).toEqual([]);
+    });
+  });
 
   it('drives one run from creation to an approved gate and back open', async () => {
     await withServer(async (origin) => {

@@ -1,5 +1,4 @@
 import { mkdir } from 'node:fs/promises';
-import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { RenderHub } from '@pwb/render-hub';
 import { renderDesign } from '@pwb/renderer';
@@ -11,7 +10,7 @@ import { FixtureRun } from './fixture-run.js';
 import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
 import { createIdentityProvider, createModelProvider, createRasterProvider } from './provider.js';
-import { PrototypeRunRegistry } from './prototype-api.js';
+import { Gate1NotApprovedError, PrototypeRunRegistry } from './prototype-api.js';
 import { identityDeadlinesFromEnvironment, identityProviderTimeoutMs } from './identity-deadlines.js';
 
 export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string; identityDeadlines?: Partial<IdentityStageDeadlines> } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
@@ -36,6 +35,37 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // moved on from.
   const identityLoading = new Map<string, Promise<IdentityRun | undefined>>();
   const newIdentityRun = (id: string, briefing?: string): IdentityRun => new IdentityRun({ runId: id, repository, provider: identityProvider, raster, renderCacheDir, ...(briefing !== undefined ? { briefing } : {}), ...(identityDeadlines ? { deadlines: identityDeadlines } : {}) });
+  /**
+   * One run object per id, for every reader: the prototype registry asks for the
+   * identity run it is seeded from through the same loader the API uses, so a
+   * Gate 1 the captain decided in an earlier process is read back rather than
+   * missed.
+   */
+  const loadIdentityRun = async (id: string): Promise<IdentityRun | undefined> => {
+    const existing = identityRuns.get(id);
+    if (existing) return existing;
+    const inFlight = identityLoading.get(id);
+    if (inFlight) return inFlight;
+    const loading = (async () => {
+      const run = newIdentityRun(id);
+      if (!await run.restore()) return undefined;
+      identityRuns.set(id, run);
+      return run;
+    })();
+    identityLoading.set(id, loading);
+    try { return await loading; } finally { identityLoading.delete(id); }
+  };
+  /**
+   * The one Gate 1 that approved a version, when a request names the version
+   * alone. Two executions of the same briefing produce the same document under
+   * the same content-derived id, and only the caller knows which of them it
+   * means, so an ambiguous version is refused rather than resolved by guess.
+   */
+  const namedByVersion = (versionId: string): string | undefined => {
+    const runs = repository.identityApprovalRuns(versionId);
+    if (runs.length > 1) throw new Gate1NotApprovedError(`A versão ${versionId} foi aprovada no Gate 1 de mais de uma execução (${runs.join(', ')}); informe a execução em identityRunId.`);
+    return runs[0];
+  };
   const previewPort = options.previewPort ?? Number(process.env.PWB_PREVIEW_PORT ?? 4311);
   let prototypes: PrototypeRunRegistry | undefined;
   const preview = createPreviewServer((versionId) => {
@@ -52,6 +82,21 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   // preview origin, so contrast, focus, axe, overflow and stability are observed rather than assumed.
   const registry = new PrototypeRunRegistry({
     repository,
+    // Gate 2 runs on what Gate 1 approved, and on nothing else: the seed is read
+    // from the identity run's own gate, so a request naming an undecided or a
+    // since-changed identity is refused instead of measuring a fixture.
+    identity: async ({ identityRunId, versionId }) => {
+      const runId = identityRunId ?? (versionId ? namedByVersion(versionId) : undefined);
+      if (!runId) return undefined;
+      const run = await loadIdentityRun(runId);
+      const handoff = run?.snapshot().handoff;
+      const approved = run?.approvedVersion();
+      if (!run || !handoff || !approved) return undefined;
+      // The imagery Gate 1 generated travels on the handoff, because the identity
+      // stage may not write `/assets`; the prototype starts from the document
+      // carrying it rather than from the placeholders it replaces.
+      return { identityRunId: runId, projectId: run.projectId, versionId: handoff.versionId, identityHash: handoff.identityHash, approvedAt: handoff.approvedAt, stale: handoff.stale, ir: approved.ir, assets: handoff.assets };
+    },
     modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
     evidence: new RenderHubEvidenceSource({
       hub: new RenderHub({ cacheDir: renderCacheDir }),
@@ -74,6 +119,27 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
     modelProvider: options.modelProvider ?? process.env.PWB_MODEL_PROVIDER ?? 'fake',
     previewFaces: () => preview.servedFaces(),
   };
+  /**
+   * One run object per id, here too: gates 1 and 2 close in their own runs, so a
+   * cached chain run can be behind the ledger it is judged by — but two requests
+   * that reread it together must land on the same object, or the stage one of
+   * them starts finishes on a run nothing can reach.
+   */
+  const loading = new Map<string, Promise<FixtureRun | undefined>>();
+  const loadRun = async (id: string): Promise<FixtureRun | undefined> => {
+    const inFlight = loading.get(id);
+    if (inFlight) return inFlight;
+    const load = (async () => {
+      const existing = runs.get(id);
+      if (existing && !existing.reloadableFromLedger(await repository.listApprovals(id))) return existing;
+      const run = new FixtureRun({ repository, provider, release });
+      if (!await run.restore(id)) return existing;
+      runs.set(id, run);
+      return run;
+    })();
+    loading.set(id, load);
+    try { return await load; } finally { loading.delete(id); }
+  };
   const api = createApiServer({
     runs,
     prototypes: registry,
@@ -81,20 +147,17 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
       if (runs.has(id) || claimed.has(id)) throw new RunConflictError(id);
       claimed.add(id);
       try {
+        // An id the ledger already holds belongs to the execution that took it —
+        // an identity chain among them — and a fixture run started over it would
+        // answer for that execution's gates with a document of its own.
+        if (await repository.getRun(id)) throw new RunConflictError(id);
         const run = new FixtureRun({ repository, provider, release });
         await run.initialize(id);
         runs.set(id, run);
         return run;
       } finally { claimed.delete(id); }
     },
-    loadRun: async (id) => {
-      const existing = runs.get(id);
-      if (existing) return existing;
-      const run = new FixtureRun({ repository, provider, release });
-      if (!await run.restore(id)) return undefined;
-      runs.set(id, run);
-      return run;
-    },
+    loadRun,
     identity: {
       runs: identityRuns,
       createRun: async (id, briefing) => {
@@ -107,27 +170,10 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
           return run;
         } finally { identityClaimed.delete(id); }
       },
-      loadRun: async (id) => {
-        const existing = identityRuns.get(id);
-        if (existing) return existing;
-        const inFlight = identityLoading.get(id);
-        if (inFlight) return inFlight;
-        const loading = (async () => {
-          const run = newIdentityRun(id);
-          if (!await run.restore()) return undefined;
-          identityRuns.set(id, run);
-          return run;
-        })();
-        identityLoading.set(id, loading);
-        try { return await loading; } finally { identityLoading.delete(id); }
-      },
+      loadRun: loadIdentityRun,
     },
   });
   const apiPort = options.apiPort ?? Number(process.env.PWB_PORT ?? 4310);
   await new Promise<void>((resolve) => api.listen(apiPort, '127.0.0.1', resolve));
   return { api, preview, close: async () => { await preview.close(); await new Promise<void>((resolve, reject) => api.close((error) => error ? reject(error) : resolve())); database.sqlite.close(); } };
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  startServer().then(({ api, preview }) => { const { port } = api.address() as AddressInfo; console.log(`pro-website-builder server listening on http://127.0.0.1:${port}; preview on ${preview.origin}`); }).catch((error: unknown) => { console.error(error instanceof Error ? error.message : 'Server failed.'); process.exitCode = 1; });
 }

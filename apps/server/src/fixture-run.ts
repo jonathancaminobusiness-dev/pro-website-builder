@@ -6,6 +6,7 @@ import { Applier, PatchGate, RunPlanner, Scheduler, type GateVerdict, type Sched
 import { ReleaseRun, type ReleaseApprover, type ReleaseContext, type ReleaseRunOptions, type ReleaseSnapshot } from './release-run.js';
 import type { ModelProvider } from '@pwb/providers';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
+import { ignoringDuplicate } from './db/duplicates.js';
 import type { ProjectRepository } from './db/repository.js';
 
 type Stage = 'identity' | 'prototype' | 'finalization';
@@ -13,12 +14,30 @@ type FixtureStatus = 'queued' | 'needs_review' | 'rejected' | 'cancelled' | 'suc
 
 const BRIEF = 'Fixture briefing: compile an original identity into a production site.';
 const STAGES: Stage[] = ['identity', 'prototype', 'finalization'];
-const duplicateCodes = new Set(['SQLITE_CONSTRAINT_PRIMARYKEY', 'SQLITE_CONSTRAINT_UNIQUE']);
-async function ignoringDuplicate(write: Promise<void>): Promise<void> {
-  try { await write; } catch (error) {
-    const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : '';
-    if (!duplicateCodes.has(code)) throw error;
+
+/**
+ * A gate of the identity → prototype chain was asked for through the fixture
+ * route. Gates 1 and 2 are measured and decided by the identity execution and by
+ * the prototype run seeded from it; this object only carries such a chain to
+ * Gate 3, so it neither runs nor closes the two stages that belong to them.
+ */
+export class ChainGateError extends Error {
+  constructor(stage: Stage) {
+    super(`A etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução pertence à cadeia dos gates 1 e 2: ela é medida e decidida no gate que a mede. Esta rota só executa e publica a finalização.`);
+    this.name = 'ChainGateError';
   }
+}
+
+/**
+ * What the release gate credits for the document this run holds, as a screen
+ * needs it. A client cannot answer this itself: which decisions count is decided
+ * by the version graph, and the snapshot carries one version, not the graph. Why
+ * the gate refuses stays with the refusal, in the release route's own answer, so
+ * one rule is serialized in one place.
+ */
+export interface ReleaseGateState {
+  /** The version whose approval closes Gate 2 for this document, when one does. */
+  prototypeVersionId?: string;
 }
 
 export interface FixtureSnapshot {
@@ -29,6 +48,7 @@ export interface FixtureSnapshot {
   currentVersion: VersionRecord;
   rendered: RenderedDocument;
   approvals: Approval[];
+  releaseGate: ReleaseGateState;
   exportManifest?: ReleaseManifest;
   lintErrorCount: number;
 }
@@ -57,6 +77,13 @@ export class FixtureRun {
   private waiters: Array<() => void> = [];
   private failure: unknown;
   private running = false;
+  /**
+   * Whether this run belongs to the identity chain rather than to this object.
+   * Such a run is read back here so Gate 3 can compile what the captain
+   * approved, never so the generic stages can produce an identity or a prototype
+   * behind the gates that measure them.
+   */
+  private chained = false;
   private readonly attempts = new Map<Stage, number>();
   private readonly reported = new Set<string>();
 
@@ -93,6 +120,9 @@ export class FixtureRun {
     const versions = await this.options.repository.listVersions(run.projectId);
     if (versions.length === 0) return false;
     this.runIdentifier = runId;
+    // A run read back from the ledger releases exactly like one this process
+    // created: Gate 3 belongs to the run, not to the object that first built it.
+    if (this.options.release) this.releaseRun = new ReleaseRun(runId, this.options.release);
     const byId = new Map(versions.map((version) => [version.id, version]));
     for (const version of versions) this.store.save({ id: version.id, ...(version.parentId ? { parentId: version.parentId } : {}), hash: version.hash, ir: version.ir });
     const approvals = await this.options.repository.listApprovals(runId);
@@ -103,10 +133,21 @@ export class FixtureRun {
     this.rendered = renderDesign(head.ir);
     this.lintErrorCount = lintDesign(head.ir).errorCount;
     this.approvals.push(...approvals);
-    this.stageIndex = Math.min(approved.length, STAGES.length);
+    // How far the chain got is how many leading gates are closed *for the
+    // document this run holds*: a gate decided twice is still one gate, what it
+    // stands at is its newest decision on this document's own history, and a
+    // decision on a revision this document does not descend from is not its.
+    const decided = this.ancestry(this.currentVersion);
+    this.stageIndex = STAGES.findIndex((stage) => this.decidedOn(stage, decided)?.decision !== 'approved');
+    if (this.stageIndex < 0) this.stageIndex = STAGES.length;
     this.status = this.stageIndex >= STAGES.length ? 'succeeded' : 'queued';
     this.currentStage = null;
     const events = await this.options.repository.listEvents(runId);
+    // A run this object did not create is not this object's to drive. The chain's
+    // Gate 1 execution takes its id before it runs anything, so what says the run
+    // is someone else's is the absence of the event `initialize` always writes —
+    // not a decision that gate has not reached yet.
+    this.chained = !events.some((event) => event.type === 'run.created');
     this.started = events.some((event) => event.type === 'run.started');
     for (const event of events) if (event.type === 'task.queued') this.attempts.set(event.payload.stage as Stage, Number(event.payload.attempt));
     this.initialized = true;
@@ -118,6 +159,7 @@ export class FixtureRun {
     if (this.status === 'succeeded' || this.status === 'cancelled' || this.status === 'needs_review') return this.snapshot();
     const stage = STAGES[this.stageIndex];
     if (!stage) return this.snapshot();
+    this.requireOwnStage(stage);
     this.failure = undefined;
     const parked = this.scheduled !== undefined && (this.running || this.gate !== undefined);
     if (this.status === 'rejected' && this.gate) this.openGate('rejected');
@@ -140,6 +182,7 @@ export class FixtureRun {
     this.requireInitialized();
     if (approverRole !== 'captain') throw new Error('Only the captain can approve v1 gates.');
     if (stage === 'finalization') throw new Error('O gate de finalização é o Gate 3: publicar o bundle aprova a etapa.');
+    this.requireOwnStage(stage);
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting approval.`);
     const approved = this.currentVersion;
     this.requireClean(stage, approved);
@@ -155,6 +198,24 @@ export class FixtureRun {
     this.currentStage = null;
     this.openGate('approved');
     return this.snapshot();
+  }
+
+  /**
+   * Whether this object may be replaced by a fresh read of the ledger. Gates 1
+   * and 2 close in their own runs — in this process or another — so a chain run
+   * held in memory can be behind the approvals table it is judged by. A run with
+   * nothing in flight, nothing prepared, and a decision in the ledger it has not
+   * seen has no state of its own to lose, so the ledger is the better answer;
+   * one that is measuring, awaiting a decision or holding a prepared release is
+   * not replaceable.
+   */
+  reloadableFromLedger(approvals: Approval[]): boolean {
+    if (this.running || this.status !== 'queued' || this.currentStage !== null || this.scheduled !== undefined) return false;
+    if (this.releaseRun?.snapshot() !== undefined) return false;
+    // Only a decision this object never saw is worth rereading for; a run whose
+    // ledger says exactly what it already holds answers from memory.
+    const known = new Set(this.approvals.map((entry) => entry.id));
+    return approvals.some((entry) => !known.has(entry.id));
   }
 
   releaseEnabled(): boolean { return this.releaseRun !== undefined; }
@@ -183,6 +244,14 @@ export class FixtureRun {
     catch (error) { if (this.status === 'queued') this.status = 'needs_review'; throw error; }
   }
 
+  /**
+   * A chain run carries gates 1 and 2 that were closed elsewhere; only its
+   * finalization stage is this object's to run and to decide.
+   */
+  private requireOwnStage(stage: Stage): void {
+    if (this.chained && stage !== 'finalization') throw new ChainGateError(stage);
+  }
+
   /** No gate closes over a document the linter rejects, Gate 3 included. */
   private requireClean(stage: Stage, version: VersionRecord): void {
     const lint = lintDesign(version.ir);
@@ -192,6 +261,7 @@ export class FixtureRun {
   async reject(stage: Stage, approverRole: 'captain' | string, rationale = 'Captain requested a revision.'): Promise<FixtureSnapshot> {
     this.requireInitialized();
     if (approverRole !== 'captain') throw new Error('Only the captain can reject v1 gates.');
+    this.requireOwnStage(stage);
     if (this.status !== 'needs_review' || this.currentStage !== stage) throw new Error(`Stage ${stage} is not awaiting review.`);
     const rejection: Approval = { id: `${this.runId()}-${stage}-rejection-${this.approvals.length}`, stage, approverRole: 'captain', versionId: this.currentVersion.id, versionHash: this.currentVersion.hash, decision: 'rejected', rationale, createdAt: new Date().toISOString() };
     this.approvals.push(rejection);
@@ -251,7 +321,13 @@ export class FixtureRun {
     return this.snapshot();
   }
 
-  snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
+  snapshot(): FixtureSnapshot { this.requireInitialized(); return { runId: this.runId(), projectId: this.projectId(), status: this.status, currentStage: this.currentStage, currentVersion: structuredClone(this.currentVersion), rendered: structuredClone(this.rendered), approvals: structuredClone(this.approvals), releaseGate: this.releaseGateState(), ...(this.exportManifest ? { exportManifest: structuredClone(this.exportManifest) } : {}), lintErrorCount: this.lintErrorCount }; }
+
+  /** The gate's own verdict on this document, so no reader has to re-derive it. */
+  private releaseGateState(): ReleaseGateState {
+    const decided = this.decidedOn('prototype', this.ancestry(this.currentVersion));
+    return decided?.decision === 'approved' ? { prototypeVersionId: decided.versionId } : {};
+  }
 
   /**
    * Why Gate 3 may not run yet, or nothing when it may.
@@ -264,8 +340,24 @@ export class FixtureRun {
    */
   releaseBlocker(): string | undefined {
     this.requireInitialized();
+    // A gate is asked about the document being compiled, never about the stage in
+    // the abstract: a decision on a revision this bundle does not descend from
+    // says nothing about this bundle, and neither closes nor reopens its gate.
+    const lineage = this.ancestry(this.currentVersion);
     for (const stage of ['identity', 'prototype'] as const) {
-      if (!this.approvedAt(stage)) return `O gate de release exige a aprovação do capitão na etapa de ${stage === 'identity' ? 'identidade' : 'protótipo'} desta execução.`;
+      const decided = this.decidedOn(stage, lineage);
+      if (decided?.decision === 'approved') continue;
+      const name = stage === 'identity' ? 'identidade' : 'protótipo';
+      if (decided) {
+        const approvedBefore = this.approvals.some((entry) => entry.stage === stage && entry.decision === 'approved' && entry.versionId === decided.versionId);
+        return approvedBefore
+          ? `A versão ${decided.versionId} foi devolvida para revisão depois de aprovada no gate de ${name}; o gate de release exige que a decisão mais recente sobre ela seja uma aprovação.`
+          : `A versão ${decided.versionId} foi devolvida para revisão no gate de ${name} desta execução; o gate de release exige uma aprovação.`;
+      }
+      const elsewhere = [...this.approvals].reverse().find((entry) => entry.stage === stage && entry.decision === 'approved');
+      return elsewhere
+        ? `O bundle não descende da versão ${elsewhere.versionId}, aprovada no gate de ${name} desta execução.`
+        : `O gate de release exige a aprovação do capitão na etapa de ${name} desta execução.`;
     }
     if (!this.finalizationVersion) return 'A etapa de finalização ainda não produziu a versão que o gate de release compila.';
     if (this.status !== 'needs_review' || this.currentStage !== 'finalization') return 'O gate de finalização não está aberto: o release só é preparado e publicado enquanto a etapa aguarda a decisão do capitão.';
@@ -320,8 +412,22 @@ export class FixtureRun {
     if (this.options.release) this.releaseRun = new ReleaseRun(this.runIdentifier, this.options.release);
   }
 
-  private approvedAt(stage: Stage): Approval | undefined {
-    return [...this.approvals].reverse().find((entry) => entry.stage === stage && entry.decision === 'approved');
+  /** The compiled version and every ancestor of it this run holds, by id. */
+  private ancestry(version: VersionRecord): Set<string> {
+    const seen = new Set<string>();
+    for (let current: VersionRecord | undefined = version; current && !seen.has(current.id); current = current.parentId ? this.store.get(current.parentId) : undefined) seen.add(current.id);
+    return seen;
+  }
+
+  /**
+   * Where a gate stands for one document: the newest decision, approval or
+   * rejection alike, recorded on a version that document descends from. Gates 1
+   * and 2 are decided in their own runs and write into this ledger, so a
+   * decision that came after an approval is what the gate says now — and a
+   * decision on a sibling revision is a fact about that revision, not this one.
+   */
+  private decidedOn(stage: Stage, lineage: Set<string>): Approval | undefined {
+    return [...this.approvals].reverse().find((entry) => entry.stage === stage && lineage.has(entry.versionId));
   }
 
   private launch(stage: Stage): Promise<void> {

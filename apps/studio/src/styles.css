@@ -114,3 +114,7 @@ footer { max-width: 1220px; margin: 28px auto 0; color: #788388; font-size: .72r
 .briefing-meta span { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 @media (max-width: 780px) { .topbar { flex-wrap: wrap; } .view-tabs { order: 3; width: 100%; } }
 @media (max-width: 520px) { .axis-list div { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+
+.chain-panel { display: grid; gap: 12px; }
+.chain-line { margin: 0; color: #4a5559; font-size: .86rem; line-height: 1.6; }
+.chain-line code { font-size: .78rem; }

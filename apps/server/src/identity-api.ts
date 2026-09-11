@@ -3,18 +3,23 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tokenValueSchema } from '@pwb/domain';
 import { StageError } from '@pwb/stage-identity';
 import { RunConflictError } from './run-conflict.js';
-import type { IdentityRun, IdentityRunSnapshot } from './identity-run.js';
+import { Gate1AlreadyDecidedError, type IdentityRun, type IdentityRunSnapshot } from './identity-run.js';
 import { IDENTITY_BRIEFING_MAX_LENGTH } from './identity-briefing.js';
 
 export interface IdentityApiOptions {
   runs: Map<string, IdentityRun>;
   createRun: (id: string, briefing?: string) => Promise<IdentityRun>;
-  /** Rebuilds a run this process never held, so a restart does not lose an open Gate 1. */
+  /**
+   * The run as the ledger has it, rebuilding one this process never held so a
+   * restart does not lose an open Gate 1. The loader owns the choice between the
+   * object this process holds and a fresh read, and must answer with the cached
+   * run whenever that one is authoritative.
+   */
   loadRun?: (id: string) => Promise<IdentityRun | undefined>;
 }
 
 async function resolve(options: IdentityApiOptions, runId: string): Promise<IdentityRun | undefined> {
-  return options.runs.get(runId) ?? (options.loadRun ? await options.loadRun(runId) : undefined);
+  return options.loadRun ? await options.loadRun(runId) : options.runs.get(runId);
 }
 
 type Send = (status: number, body: unknown) => void;
@@ -114,6 +119,7 @@ export async function handleIdentityRequest(
         return true;
     }
   } catch (error) {
+    if (error instanceof Gate1AlreadyDecidedError) { send(409, { error: error.message }); return true; }
     if (!(error instanceof StageError)) throw error;
     send(400, { error: error.message });
     return true;

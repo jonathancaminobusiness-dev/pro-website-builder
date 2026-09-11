@@ -531,3 +531,161 @@ describe('phase 0 fixture run', () => {
     second.sqlite.close();
   });
 });
+
+describe('the release gate reads the gates this document actually passed', () => {
+  it('refuses a bundle that does not descend from the version a gate was decided on', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-ancestry-'));
+    const dbPath = join(dir, 'ancestry.sqlite');
+    const first = openDatabase(dbPath);
+    const repository = new ProjectRepository(first);
+    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    await run.initialize('run-ancestry');
+    const root = run.snapshot().currentVersion;
+    await run.runNext();
+    await run.approve('identity', 'captain');
+    const identityVersion = run.snapshot().currentVersion;
+
+    // A revision of the same project that shares only the root with what Gate 1
+    // approved — a second branch, the way an alternative candidate is — carrying
+    // a prototype approval of its own.
+    const sibling = { ...createFixtureIR(), meta: { ...createFixtureIR().meta, versionId: 'v-sibling' } };
+    sibling.pages.routes[0]!.title = 'Outro ramo';
+    await repository.saveVersion({ id: 'v-sibling', projectId: root.ir.meta.projectId, parentId: root.id, hash: 'h-sibling', ir: sibling });
+    await repository.createApproval({
+      id: 'run-ancestry-prototype-sibling', runId: 'run-ancestry', projectId: root.ir.meta.projectId, stage: 'prototype',
+      approverRole: 'captain', versionId: 'v-sibling', versionHash: 'h-sibling', decision: 'approved', rationale: 'Aprovado em outro ramo.',
+    });
+    first.sqlite.close();
+
+    const second = openDatabase(dbPath);
+    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    expect(await restored.restore('run-ancestry')).toBe(true);
+    // The run stands on the branch the prototype gate was decided on, and that
+    // branch descends from no approved identity, so the chain is open at the
+    // first gate and nothing it produces can reach a release.
+    const finalized = await restored.runNext();
+    expect(finalized.currentStage).toBe('identity');
+    const blocker = restored.releaseBlocker();
+    expect(blocker).toMatch(/não descende/);
+    expect(blocker).toContain(identityVersion.id);
+    await expect(restored.prepareRelease()).rejects.toThrow(/não descende/);
+    second.sqlite.close();
+  });
+
+  it('opens the gate for a bundle that descends from both decided versions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-ancestry-ok-'));
+    const db = openDatabase(join(dir, 'ancestry.sqlite'));
+    const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    await run.initialize('run-ancestry-ok');
+    await atFinalizationGate(run);
+    const approved = run.snapshot().approvals.map((entry) => entry.versionId);
+    expect(run.releaseBlocker()).toBeUndefined();
+    const prepared = await run.prepareRelease();
+    expect(approved).toHaveLength(2);
+    expect(prepared.report.approvedVersionId).toBeTruthy();
+    db.sqlite.close();
+  });
+});
+
+describe('a run of the identity chain', () => {
+  /** The ledger an approved Gate 1 and an approved Gate 2 leave under the chain's own run id. */
+  async function seedChain(repository: ProjectRepository): Promise<{ identityVersionId: string; prototypeVersionId: string }> {
+    const identity = createFixtureIR();
+    const prototype = createFixtureIR();
+    prototype.pages.routes[0]!.title = 'Protótipo aprovado no Gate 2';
+    await repository.createProject({ id: identity.meta.projectId, name: 'Identity stage project' });
+    await repository.createRun({ id: 'identity-chain', projectId: identity.meta.projectId });
+    await repository.saveVersion({ id: identity.meta.versionId, projectId: identity.meta.projectId, hash: 'h-identity', ir: identity });
+    await repository.appendEvent({ id: 'event-gate1', runId: 'identity-chain', type: 'identity.gate.approved', payload: { versionId: identity.meta.versionId } });
+    await repository.createApproval({ id: 'identity-chain-identity-approval-0', runId: 'identity-chain', projectId: identity.meta.projectId, stage: 'identity', approverRole: 'captain', versionId: identity.meta.versionId, versionHash: 'h-identity', decision: 'approved', rationale: 'Gate 1 decidido.' });
+    await repository.saveVersion({ id: 'v-prototype', projectId: identity.meta.projectId, parentId: identity.meta.versionId, hash: 'h-prototype', ir: prototype });
+    await repository.createApproval({ id: 'gate2-run-prototype-0-approved', runId: 'identity-chain', projectId: identity.meta.projectId, stage: 'prototype', approverRole: 'captain', versionId: 'v-prototype', versionHash: 'h-prototype', decision: 'approved', rationale: 'Gate 2 decidido.' });
+    return { identityVersionId: identity.meta.versionId, prototypeVersionId: 'v-prototype' };
+  }
+
+  it('refuses to produce or close the gates that belong to Gate 1 and Gate 2', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-chain-'));
+    const db = openDatabase(join(dir, 'chain.sqlite'));
+    const repository = new ProjectRepository(db);
+    const identity = createFixtureIR();
+    await repository.createProject({ id: identity.meta.projectId, name: 'Identity stage project' });
+    await repository.createRun({ id: 'identity-chain', projectId: identity.meta.projectId });
+    await repository.saveVersion({ id: identity.meta.versionId, projectId: identity.meta.projectId, hash: 'h-identity', ir: identity });
+    await repository.appendEvent({ id: 'event-gate1', runId: 'identity-chain', type: 'identity.gate.approved', payload: { versionId: identity.meta.versionId } });
+    await repository.createApproval({ id: 'identity-chain-identity-approval-0', runId: 'identity-chain', projectId: identity.meta.projectId, stage: 'identity', approverRole: 'captain', versionId: identity.meta.versionId, versionHash: 'h-identity', decision: 'approved', rationale: 'Gate 1 decidido.' });
+
+    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    expect(await run.restore('identity-chain')).toBe(true);
+    // The prototype is measured by the run seeded from this identity, so the
+    // generic stage neither produces it nor closes its gate here.
+    await expect(run.runNext()).rejects.toThrow(/pertence à cadeia/);
+    await expect(run.approve('prototype', 'captain')).rejects.toThrow(/pertence à cadeia/);
+    expect(run.snapshot().approvals.map((entry) => entry.stage)).toEqual(['identity']);
+    expect(run.releaseBlocker()).toMatch(/protótipo desta execução/);
+    db.sqlite.close();
+  });
+
+  it('reopens Gate 2 when the newest decision on it is a return for revision', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-chain-revoked-'));
+    const db = openDatabase(join(dir, 'chain.sqlite'));
+    const repository = new ProjectRepository(db);
+    const { prototypeVersionId } = await seedChain(repository);
+    // The captain returned the revision after approving it, from a screen that
+    // was still holding the pre-decision snapshot.
+    await repository.createApproval({ id: 'gate2-run-prototype-1-rejected', runId: 'identity-chain', projectId: createFixtureIR().meta.projectId, stage: 'prototype', approverRole: 'captain', versionId: prototypeVersionId, versionHash: 'h-prototype', decision: 'rejected', rationale: 'Devolvido para revisão.' });
+
+    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    expect(await run.restore('identity-chain')).toBe(true);
+    expect(run.releaseBlocker()).toMatch(/devolvida para revisão/);
+    // And the screen reads the same verdict: nothing credits Gate 2 here.
+    expect(run.snapshot().releaseGate.prototypeVersionId).toBeUndefined();
+    // The gate is open again, and it is not this route's to close.
+    await expect(run.runNext()).rejects.toThrow(/pertence à cadeia/);
+    db.sqlite.close();
+  });
+
+  it('keeps the release of an approved revision when a later run returns a different one', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-chain-sibling-'));
+    const db = openDatabase(join(dir, 'chain.sqlite'));
+    const repository = new ProjectRepository(db);
+    const { identityVersionId, prototypeVersionId } = await seedChain(repository);
+    // A second Gate 2 run measured another revision of the same identity and the
+    // captain returned it. It is a sibling of the approved one, not its ancestor.
+    const sibling = createFixtureIR();
+    sibling.pages.routes[0]!.title = 'Segunda revisão, devolvida';
+    await repository.saveVersion({ id: 'v-prototype-b', projectId: sibling.meta.projectId, parentId: identityVersionId, hash: 'h-prototype-b', ir: sibling });
+    await repository.createApproval({ id: 'gate2-run-b-prototype-0-rejected', runId: 'identity-chain', projectId: sibling.meta.projectId, stage: 'prototype', approverRole: 'captain', versionId: 'v-prototype-b', versionHash: 'h-prototype-b', decision: 'rejected', rationale: 'Esta revisão volta para o protótipo.' });
+
+    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    expect(await run.restore('identity-chain')).toBe(true);
+    // The verdict the screen reads credits the approved revision and says nothing
+    // about the sibling, so the finalization stage is offered rather than locked.
+    expect(run.snapshot().releaseGate.prototypeVersionId).toBe(prototypeVersionId);
+    expect(run.releaseBlocker()).toMatch(/finalização ainda não produziu/);
+    // The chain still stands on the revision the captain approved, so the gate it
+    // hands to Gate 3 is open and the bundle descends from that revision.
+    const finalized = await run.runNext();
+    expect(finalized.currentStage).toBe('finalization');
+    expect(finalized.currentVersion.parentId).toBe(prototypeVersionId);
+    expect(run.releaseBlocker()).toBeUndefined();
+    db.sqlite.close();
+  });
+
+  it('still runs and releases the finalization stage the chain hands to it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'pwb-chain-ok-'));
+    const db = openDatabase(join(dir, 'chain.sqlite'));
+    const repository = new ProjectRepository(db);
+    const { identityVersionId, prototypeVersionId } = await seedChain(repository);
+
+    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    expect(await run.restore('identity-chain')).toBe(true);
+    const finalized = await run.runNext();
+    expect(finalized.currentStage).toBe('finalization');
+    expect(finalized.currentVersion.parentId).toBe(prototypeVersionId);
+    // The gate opens because what it compiles descends from both versions the
+    // captain decided on; it would name either of them otherwise.
+    expect(run.releaseBlocker()).toBeUndefined();
+    expect(run.snapshot().approvals.map((entry) => entry.versionId)).toEqual([identityVersionId, prototypeVersionId]);
+    db.sqlite.close();
+  });
+});

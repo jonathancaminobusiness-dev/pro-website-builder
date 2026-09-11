@@ -166,6 +166,8 @@ The server measures that verdict rather than assuming it. `startServer` hands th
 
 Both deterministic tiers measure every declared route, state and colour scheme at the three representative widths — 390, 768 and 1440 — because a revision under review is not worth six widths of browser time. The full `RENDER_VIEWPORTS` sweep (320/360/390/768/1024/1440) is for a finalist and is asked for explicitly: `corepack pnpm run:prototype -- --render --full-matrix`.
 
+**Gate 2 runs on what Gate 1 approved.** `POST /api/prototype/runs` names the identity execution (`identityRunId`) or the version that gate closed on (`versionId`), and the run is seeded from that approved document, whose own version id becomes its root — so every revision it produces descends from what the captain decided. A request that names neither, names a Gate 1 the captain never decided, or names one whose identity moved after the decision is answered `409`, never with the built-in fixture. The seeded document carries every image Gate 1 approved with the status it has — Gate 2 never waits on the raster lane, and a host with no image provider configured settles them as placeholders that no waiting resolves — and the run reports each one on `chain.seededImagery`, which the Gate 2 screen states — including that they are recorded and licensed in the revision rather than placed in its sections, because no contract in this build points a node at an asset. When that imagery changes the document, the run's root is a version of its own whose parent is the approved identity, so the ledger row describes what Gate 2 actually measured. The review reports the identity hash *measured* from the revision under review, so the screen states that the identity Gate 1 recorded is the one that was measured rather than assuming it. Approving the gate writes an `approvals` row under the chain's own run id — the identity execution's — together with the lineage between the two versions, which is what opens Gate 3. A review is decided exactly once: a second decision on a settled run is answered `409`, so a screen still holding the pre-decision snapshot cannot overwrite the row the release gate reads, and a revision the captain wants to revisit is measured in a new run. Gate 1 answers the same `409` to a direction returned after it closed, for the same reason.
+
 Measuring takes minutes, so a run is asynchronous and recoverable. `POST /api/prototype/runs` records the run and answers at once with its id and a `queued` status; the stage then executes as one `Scheduler` task on the raster lane, which gives it the stage deadline and the abort signal that enforces it. Only one browser matrix runs at a time — a second request queues behind the first and says so — and the Studio's start button stays disabled while any run is queued or measuring. `GET /api/prototype/runs/<id>` returns that progress and, once the stage settles, the whole review; `GET /api/prototype/runs` lists every run this server holds.
 
 Each transition is written to a `prototype_runs` row together with the outcome and the two revisions the review compares, and `startServer` reads them back, so a settled review survives a restart and can be reopened without measuring anything again; a run that was still measuring when the process stopped comes back marked `interrupted` instead of disappearing. The Studio keeps the id in the address (`#/gate-2/<runId>`) and polls it, so a reload, a closed tab or a restart all find the same review.
@@ -198,7 +200,8 @@ the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and ever
 runner reads it back from there. With no run to read, the fixture stands in.
 
 **One document, one publish, gates in order.** Gate 3 refuses to prepare or
-publish until the captain has approved identity and prototype on that run and the
+publish until the captain has approved identity and prototype on that run, on
+versions the compiled document actually descends from, and the
 finalization stage has produced the version they are looking at — rejecting that
 proposal closes Gate 3 again until the stage runs anew, and rewinds to what the
 prototype gate approved whether or not Gate 3 refined it. That version, plus the
@@ -206,6 +209,24 @@ review record the refiner writes onto it, is the run's release. A prepared
 release belongs to that one proposal: rejecting it, or running the stage again,
 discards it, and publishing a bundle prepared for another proposal is refused
 rather than writing bytes the captain never approved.
+
+The run Gate 3 compiles is the chain the captain walked: the identity execution's
+own id, whose ledger holds Gate 1's approval and the Gate 2 approval recorded on a
+descendant of it. The studio's finalization line names that chain — or says
+plainly that nothing but the fixed briefing has been loaded — and the panel below
+it prepares and publishes that run. A run held in memory is reread from the ledger
+whenever it carries a decision it has not seen, because gates 1 and 2 close in
+their own runs and possibly in another process — and what a gate stands at is its
+newest decision *on the document being compiled*, so returning that revision for
+review reopens the gate while a decision on a sibling revision leaves it alone —
+and the version that verdict credits is what the run snapshot carries as
+`releaseGate`, so the studio names it instead of guessing it from the decision
+list, while why the gate refuses stays in the release route's own answer; two requests that reread it
+together land on the same object, so a stage one of them starts is never orphaned
+by the other. Only the finalization stage of such a chain is this route's to run:
+`POST /api/runs/<identityRunId>/stage` and `/approve` answer `409` for the
+identity and prototype stages, and `POST /api/runs` refuses an id the ledger
+already holds, so no bundle is ever published behind the gates that measure them.
 
 Publishing the bundle *is* the finalization approval: there is no second action
 that could close the gate, so nothing can write a release with a veto standing or

@@ -109,6 +109,26 @@ export class ProjectRepository {
     });
   }
 
+  /**
+   * Every run whose Gate 1 approved this version, so a prototype run can be
+   * asked for by the approved version alone. The question is asked about the
+   * version's own history, not about the row alone: a token change after the
+   * gate closed moves the identity a run hands on forward while its approval
+   * stays on the version it was decided upon, and that descendant is still what
+   * that gate approved. Two executions of the same briefing produce the same
+   * document and so the same version id, so this answers with all of them: a
+   * version alone names a chain only when exactly one run approved it.
+   */
+  identityApprovalRuns(versionId: string): string[] {
+    const rows = this.db.sqlite.prepare(`WITH RECURSIVE lineage(id, parentId) AS (
+      SELECT id, parent_id FROM versions WHERE id = ?
+      UNION ALL SELECT versions.id, versions.parent_id FROM versions JOIN lineage ON versions.id = lineage.parentId
+    )
+    SELECT DISTINCT approvals.run_id AS runId FROM approvals JOIN lineage ON approvals.version_id = lineage.id
+    WHERE approvals.stage = 'identity' AND approvals.decision = 'approved'`).all(versionId) as Array<{ runId: string }>;
+    return rows.map((row) => row.runId);
+  }
+
   async getRun(runId: string): Promise<{ id: string; projectId: string; briefing: string } | undefined> {
     const row = this.db.sqlite.prepare('SELECT id, project_id AS projectId, briefing FROM runs WHERE id = ?').get(runId) as { id: string; projectId: string; briefing: string } | undefined;
     return row;

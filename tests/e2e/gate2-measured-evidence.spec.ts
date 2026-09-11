@@ -6,6 +6,7 @@ import { expect, test } from '@playwright/test';
 import { createFixtureIR, type DesignIR } from '../../packages/domain/src/index.js';
 import { RenderHub } from '../../packages/render-hub/src/index.js';
 import { RenderHubEvidenceSource } from '../../packages/stage-prototype/src/index.js';
+import { identityHash } from '../../packages/stage-identity/src/index.js';
 import { createApiServer } from '../../apps/server/src/api.js';
 import { openDatabase, ProjectRepository } from '../../apps/server/src/db/repository.js';
 import { createPreviewServer } from '../../apps/server/src/preview.js';
@@ -26,7 +27,7 @@ interface Harness { origin: string; cacheDir: string; close: () => Promise<void>
  * The same wiring `startServer` uses: the registry's evidence is measured by the RenderHub against the
  * isolated preview origin, so the verdict the Gate 2 API reports was observed rather than synthesized.
  */
-async function harness(seed?: () => DesignIR): Promise<Harness> {
+async function harness(approvedIdentity: () => DesignIR = createFixtureIR): Promise<Harness> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-measured-'));
   const cacheDir = join(dir, 'cache');
   const database = openDatabase(join(dir, 'gate2.sqlite'));
@@ -41,7 +42,8 @@ async function harness(seed?: () => DesignIR): Promise<Harness> {
       baseUrl: `http://127.0.0.1:${previewPort}`,
       previewPrefix: (versionId) => `/preview/${versionId}`,
     }),
-    ...(seed ? { seed } : {}),
+    // The stage starts from what Gate 1 approved, here the identity this test measures.
+    identity: async () => { const ir = approvedIdentity(); return { identityRunId: 'gate1-measured', projectId: ir.meta.projectId, versionId: ir.meta.versionId, identityHash: identityHash(ir), approvedAt: new Date().toISOString(), stale: false, ir, assets: [] }; },
   });
   const api = createApiServer({
     runs: new Map(), prototypes: holder.registry,
@@ -87,7 +89,7 @@ test.describe('Gate 2 runs on measured evidence', () => {
   test('takes the three-route prototype through Tier 0 without a veto, at the representative widths', async () => {
     const api = await harness();
     try {
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'measured-clean' });
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'measured-clean', identityRunId: 'gate1-measured' });
       expect(created.status).toBe(201);
       expect(created.payload.status).toBe('queued');
 
@@ -108,7 +110,7 @@ test.describe('Gate 2 runs on measured evidence', () => {
   test('vetoes a contrast pair the browser measured below AA, and refuses to approve it', async () => {
     const api = await harness(createLowContrastIR);
     try {
-      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'measured-contrast' });
+      const created = await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'measured-contrast', identityRunId: 'gate1-measured' });
       expect(created.status).toBe(201);
       const result = (await settled(api.origin, 'measured-contrast')).result!;
 

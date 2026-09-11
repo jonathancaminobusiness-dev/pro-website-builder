@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import type { FixtureRun } from './fixture-run.js';
+import { ChainGateError, type FixtureRun } from './fixture-run.js';
 import { handleIdentityRequest, type IdentityApiOptions } from './identity-api.js';
 import type { PrototypeRunRegistry } from './prototype-api.js';
 import { handlePrototypeRequest } from './prototype-routes.js';
@@ -12,6 +12,12 @@ export { RunConflictError };
 interface ApiOptions {
   runs: Map<string, FixtureRun>;
   createRun: (id: string) => Promise<FixtureRun>;
+  /**
+   * The run as the ledger has it. The loader owns the choice between the object
+   * this process holds and a fresh read, so it must answer with the cached run
+   * whenever that one is authoritative: a run that is measuring, awaiting a
+   * decision or holding a prepared release is not rebuildable from rows.
+   */
   loadRun?: (id: string) => Promise<FixtureRun | undefined>;
   identity?: IdentityApiOptions;
   prototypes?: PrototypeRunRegistry;
@@ -25,6 +31,13 @@ function send(response: ServerResponse, status: number, body: unknown): void { r
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> { const chunks: Buffer[] = []; for await (const chunk of request) { chunks.push(Buffer.from(chunk)); if (Buffer.concat(chunks).length > 64 * 1024) throw new Error('Request body too large.'); } const text = Buffer.concat(chunks).toString('utf8'); return text ? JSON.parse(text) as Record<string, unknown> : {}; }
 
 export function createApiServer(options: ApiOptions): Server {
+  /**
+   * The run as the ledger has it: gates 1 and 2 close in their own runs, so a
+   * cached chain run with nothing in flight would otherwise answer for an
+   * approvals table it has never seen.
+   */
+  const resolveRun = async (runId: string): Promise<FixtureRun | undefined> =>
+    options.loadRun ? await options.loadRun(runId) : options.runs.get(runId);
   return createServer(async (request, response) => {
     response.setHeader('Access-Control-Allow-Origin', allowedOrigin(request.headers.origin));
     if (request.method === 'OPTIONS') { response.writeHead(204, corsHeaders).end(); return; }
@@ -55,7 +68,7 @@ export function createApiServer(options: ApiOptions): Server {
       const release = /^\/api\/runs\/([^/]+)\/release(?:\/(publish))?$/.exec(pathname);
       if (release) {
         const runId = decodeURIComponent(release[1]!);
-        const run = options.runs.get(runId) ?? (options.loadRun ? await options.loadRun(runId) : undefined);
+        const run = await resolveRun(runId);
         if (!run) { send(response, 404, { error: 'Run not found.' }); return; }
         if (!run.releaseEnabled()) { send(response, 404, { error: 'A finalização não está habilitada neste servidor.' }); return; }
         if (request.method === 'GET' && !release[2]) {
@@ -81,7 +94,7 @@ export function createApiServer(options: ApiOptions): Server {
       const match = /^\/api\/runs\/([^/]+)(?:\/(stage|approve|reject|cancel|restart))?$/.exec(pathname);
       if (match) {
         const runId = decodeURIComponent(match[1]!);
-        const run = options.runs.get(runId) ?? (options.loadRun ? await options.loadRun(runId) : undefined);
+        const run = await resolveRun(runId);
         if (!run) { send(response, 404, { error: 'Run not found.' }); return; }
         const action = match[2];
         if (request.method === 'GET' && !action) { send(response, 200, run.snapshot()); return; }
@@ -108,6 +121,11 @@ export function createApiServer(options: ApiOptions): Server {
         }
       }
       send(response, 404, { error: 'Not found.' });
-    } catch (error) { send(response, 500, { error: error instanceof Error ? error.message : 'Internal error.' }); }
+    } catch (error) {
+      // A gate this route does not own is a conflict, not a server fault: the
+      // chain's gates 1 and 2 are decided where they are measured.
+      if (error instanceof ChainGateError) { send(response, 409, { error: error.message }); return; }
+      send(response, 500, { error: error instanceof Error ? error.message : 'Internal error.' });
+    }
   });
 }
