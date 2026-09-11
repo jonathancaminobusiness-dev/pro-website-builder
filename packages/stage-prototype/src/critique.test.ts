@@ -171,6 +171,31 @@ describe('critique providers', () => {
     }
   });
 
+  it('still critiques when a browserless run names captures no file backs', async () => {
+    let entries: string[] = [];
+    let prompt = '';
+    // What DerivedEvidenceSource and createCleanEvidence hand a browserless `run:prototype`.
+    const captures = [
+      { context: { route: '/', viewport: 390, state: 'default', colorScheme: 'light', reducedMotion: false }, screenshotPath: 'derived://cli-prototype/#390-default' },
+      { context: { route: '/', viewport: 768, state: 'default', colorScheme: 'light', reducedMotion: false }, screenshotPath: 'memory:///' },
+    ] as CritiqueTask['captures'];
+    const runner = new ClaudeCritiqueRunner({
+      session: new CodexSession({
+        execute: async (_executable, args) => {
+          const workspace = args[args.indexOf('-C') + 1]!;
+          prompt = args[args.length - 1]!;
+          entries = (await readdir(workspace)).sort();
+          return { stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(report()) } })}\n`, stderr: '' };
+        },
+      }),
+    });
+
+    await expect(runner.critique(task({ captures }))).resolves.toMatchObject({ dimension: 'coherence' });
+    // Nothing was copied in, and the prompt names the pseudo-paths exactly as it always did.
+    expect(entries).toEqual(['schema.json']);
+    for (const capture of captures) expect(prompt).toContain(capture.screenshotPath);
+  });
+
   it('escalates instead of inventing a verdict when the critic cannot answer its contract', async () => {
     const invalid = new ClaudeCritiqueRunner({ execute: async () => JSON.stringify({ structured_output: { schemaVersion: '1' } }) });
     await expect(invalid.critique(task())).rejects.toThrow(CritiqueUnavailableError);

@@ -23,6 +23,15 @@ function evidenceOf(task: CritiqueTask, check: QaCheck): EvidenceRef {
   return { route: context.route, viewport: context.viewport, state: context.state, colorScheme: context.colorScheme, reducedMotion: context.reducedMotion, nodeIds: check.nodeIds.length > 0 ? check.nodeIds : ['document'] };
 }
 
+/**
+ * A capture a run never wrote to disk carries a pseudo-URI instead of a path — `derived://…` from
+ * `DerivedEvidenceSource`, `memory://…` from `createCleanEvidence`. It is named in the prompt like
+ * any other capture, but there is no file to hand a sandboxed session.
+ */
+function isCaptureFile(screenshotPath: string): boolean {
+  return !/^[a-z][a-z0-9+.-]*:\/\//i.test(screenshotPath);
+}
+
 function copyFor(task: CritiqueTask, nodeId: string): string | undefined {
   for (const slice of task.routeSlices) for (const node of slice.nodes) {
     if (node.id === nodeId && typeof node.props.text === 'string') return node.props.text;
@@ -140,7 +149,7 @@ export class ClaudeCritiqueRunner implements CritiqueProvider {
         schema: critiqueSchemaJson.CritiqueReport,
         parse: (value) => critiqueReportSchema.parse(value),
         deadlineMs: task.deadlineMs,
-        allowlist: task.captures.map((capture) => capture.screenshotPath),
+        allowlist: task.captures.map((capture) => capture.screenshotPath).filter(isCaptureFile),
         ...(signal ? { signal } : {}),
       });
       if (report.dimension !== task.dimension) throw new CritiqueUnavailableError(task.id, 'DIMENSION_MISMATCH', `The ${task.dimension} critic answered as ${report.dimension}.`);

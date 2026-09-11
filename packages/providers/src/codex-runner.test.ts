@@ -160,6 +160,25 @@ describe('Codex provider', () => {
     }
   });
 
+  it.skipIf(process.getuid?.() === 0)('surfaces a copy failure by its own cause instead of calling the entry malformed', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'pwb-codex-unreadable-file-'));
+    const unreadable = join(source, 'capture.png');
+    await writeFile(unreadable, 'bytes', 'utf8');
+    await chmod(unreadable, 0o000);
+    let invoked = false;
+    const runner = new CodexJsonRunner({ execute: async () => { invoked = true; return { stdout: '', stderr: '' }; } });
+    try {
+      // A file the runner can stat but not read is a copy failure, not a malformed allowlist.
+      const failure = await runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1_000, allowlist: [unreadable] }).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'CODEX_PROCESS_FAILED' });
+      expect((failure as Error).message).toContain('EACCES');
+      expect(invoked).toBe(false);
+    } finally {
+      await chmod(unreadable, 0o600).catch(() => undefined);
+      await rm(source, { recursive: true, force: true });
+    }
+  });
+
   it('reports an actionable error when the Codex CLI is unavailable', async () => {
     const runner = new CodexJsonRunner({ execute: async () => { throw Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }); } });
     await expect(runner.run({ prompt: 'fixture', schema: { type: 'object' }, deadlineMs: 1000 })).rejects.toMatchObject({ code: 'CODEX_UNAVAILABLE' });

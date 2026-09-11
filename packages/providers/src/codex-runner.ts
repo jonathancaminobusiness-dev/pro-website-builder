@@ -182,13 +182,10 @@ async function withWorkspace<T>(allowlist: readonly string[], operation: (worksp
       if (copies.has(entry)) continue;
       const source = resolve(entry);
       const destination = join(workspace, CODEX_ALLOWLIST_DIRECTORY, String(copies.size), basename(source));
-      try {
-        if (!(await stat(source)).isFile()) throw new Error(`${entry} is not a regular file.`);
-        await mkdir(dirname(destination), { recursive: true });
-        await cp(source, destination, { errorOnExist: true, force: false });
-      } catch {
-        throw new CodexCliError('CODEX_ALLOWLIST_UNREADABLE', `A Codex session could not be given ${entry}; an allowlisted path must be a readable regular file.`);
-      }
+      const readable = await stat(source).then((info) => info.isFile(), () => false);
+      if (!readable) throw new CodexCliError('CODEX_ALLOWLIST_UNREADABLE', `A Codex session could not be given ${entry}; an allowlisted path must be a readable regular file.`);
+      await mkdir(dirname(destination), { recursive: true });
+      await cp(source, destination, { errorOnExist: true, force: false });
       copies.set(entry, destination);
     }
     // Longest first: one allowlisted path can be a string prefix of another.
