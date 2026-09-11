@@ -79,6 +79,22 @@ describe('identity run', () => {
     expect(restored.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
   });
 
+  it('still serves a restored run when the canonicalizing briefing write fails', async () => {
+    const repository = new ProjectRepository(database);
+    const runId = 'identity-readonly-restore';
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), briefing: 'Nicho de cerâmica autoral.' });
+    await run.initialize();
+    database.sqlite.prepare('UPDATE runs SET briefing = ? WHERE id = ?').run('  Nicho de cerâmica autoral.  ', runId);
+    repository.updateRunBriefing = async (): Promise<void> => { throw new Error('database is locked'); };
+
+    const restored = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider() });
+    expect(await restored.restore()).toBe(true);
+
+    expect(restored.snapshot().status).not.toBe('unrecoverable');
+    expect(restored.snapshot().briefing).toBe('Nicho de cerâmica autoral.');
+    expect((await repository.getRun(runId))?.briefing).toBe('  Nicho de cerâmica autoral.  ');
+  });
+
   it('passes per-critic deadlines through to the identity stage', async () => {
     const repository = new ProjectRepository(database);
     const run = new IdentityRun({

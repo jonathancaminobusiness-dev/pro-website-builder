@@ -170,10 +170,9 @@ export class IdentityRun {
   async restore(): Promise<boolean> {
     const run = await this.options.repository.getRun(this.options.runId);
     if (!run) return false;
+    let briefing: string;
     try {
-      const briefing = normalizeIdentityBriefing(run.briefing);
-      if (briefing !== run.briefing) await this.options.repository.updateRunBriefing(this.options.runId, briefing);
-      this.briefing = briefing;
+      briefing = normalizeIdentityBriefing(run.briefing);
     } catch (error) {
       if (!(error instanceof BriefingValidationError)) throw error;
       this.status = 'unrecoverable';
@@ -182,6 +181,11 @@ export class IdentityRun {
       this.failure = LEGACY_INVALID_BRIEFING_MESSAGE;
       return true;
     }
+    this.briefing = briefing;
+    // Canonicalizing the stored row is a convenience, not a precondition for
+    // reading the run: the normalized briefing is already the one in memory, so
+    // a write this process cannot do now is left to a later restore.
+    if (briefing !== run.briefing) await this.options.repository.updateRunBriefing(this.options.runId, briefing).catch(() => undefined);
     this.stage = this.newStage();
     for (const version of await this.options.repository.listVersions(run.projectId)) {
       if (this.store.get(version.id)) continue;

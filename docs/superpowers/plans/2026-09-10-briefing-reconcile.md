@@ -15,6 +15,9 @@
 - Omitted briefing is the only compatibility path and returns `IDENTITY_BRIEFING`.
 - Supplied briefing is a string, trimmed, non-empty, and at most `IDENTITY_BRIEFING_MAX_LENGTH` characters.
 - The maximum is defined once and reused by server validation and the Studio contract.
+- Restart restoration canonicalizes a valid persisted briefing back into `runs.briefing`, best effort: a failed write still serves the run.
+- A persisted briefing that cannot be normalized makes the execution `unrecoverable` with an explicit placeholder; the row is preserved and no fallback is migrated in.
+- A replacement run's briefing is always written from scratch in the confirmation; no run is created from text the captain did not type.
 - No provider, deadline, failure-reconstruction, prototype, or security changes.
 - Tests use ephemeral ports and preserve the existing project test commands.
 
@@ -35,11 +38,11 @@
 import { BriefingValidationError, normalizeIdentityBriefing } from './identity-briefing.js';
 
 it('normalizes supplied values and rejects invalid server-layer input', () => {
-  expect(normalizeIdentityBriefing('  Nicho editorial.  ', true)).toBe('Nicho editorial.');
-  expect(normalizeIdentityBriefing(undefined, false)).toBe(IDENTITY_BRIEFING);
-  expect(() => normalizeIdentityBriefing(' \n\t ', true)).toThrow(BriefingValidationError);
-  expect(() => normalizeIdentityBriefing('a'.repeat(IDENTITY_BRIEFING_MAX_LENGTH + 1), true)).toThrow(BriefingValidationError);
-  expect(() => normalizeIdentityBriefing(42, true)).toThrow(BriefingValidationError);
+  expect(normalizeIdentityBriefing('  Nicho editorial.  ')).toBe('Nicho editorial.');
+  expect(normalizeIdentityBriefing(undefined)).toBe(IDENTITY_BRIEFING);
+  expect(() => normalizeIdentityBriefing(' \n\t ')).toThrow(BriefingValidationError);
+  expect(() => normalizeIdentityBriefing('a'.repeat(IDENTITY_BRIEFING_MAX_LENGTH + 1))).toThrow(BriefingValidationError);
+  expect(() => normalizeIdentityBriefing(42)).toThrow(BriefingValidationError);
 });
 ```
 
@@ -63,6 +66,8 @@ git commit -m "test(server): define briefing normalization contract"
 - Modify: `apps/server/src/identity-api.ts`
 - Modify: `apps/server/src/identity-run.ts`
 - Modify: `apps/server/src/db/repository.ts`
+- Modify: `apps/studio/src/gate1/IdentityGate.tsx`
+- Modify: `packages/renderer/src/briefing-editor.ts`
 - Modify: `apps/server/src/identity-api.test.ts`
 - Modify: `apps/server/src/identity-run.test.ts`
 
@@ -97,7 +102,7 @@ Expected: FAIL because direct construction currently stores the surrounding whit
 
 - [ ] **Step 3: Write minimal implementation**
 
-Use `normalizeIdentityBriefing(options.briefing, options.briefing !== undefined)` in `IdentityRun` construction, call the same normalizer for the HTTP `briefing` property-presence branch, and pass the normalized value to `createRun`. Keep the omitted-field fallback explicit and keep the existing Portuguese error payloads.
+Use `normalizeIdentityBriefing(options.briefing)` in `IdentityRun` construction, call the same normalizer for the HTTP `briefing` property-presence branch, and pass the normalized value to `createRun`. `restore()` normalizes the persisted row too: a value that only needed trimming is written back to `runs.briefing` as a best-effort convenience, and a row that cannot be normalized ends the execution as `unrecoverable` with the `INVALID_IDENTITY_BRIEFING` placeholder instead of throwing. `updateRunBriefing` persists the string it is given; only `createRun` normalizes, because it still maps an omitted briefing to `IDENTITY_BRIEFING`. Keep the omitted-field fallback explicit and keep the existing Portuguese error payloads.
 
 - [ ] **Step 4: Run focused tests to verify it passes**
 
@@ -137,7 +142,7 @@ Expected: PASS for API, persistence/restart, curator, Studio, and renderer cover
 
 Run: `PWB_E2E_PORT_BASE=4890 corepack pnpm exec playwright test tests/e2e/identity-briefing.spec.ts --reporter=line`
 
-Expected: PASS for initial input, replacement reuse, reload hydration, and max-length behavior.
+Expected: PASS for initial input, the from-scratch replacement briefing (the confirmation opens an empty editor and refuses creation while it is empty), reload hydration, and max-length behavior.
 
 - [ ] **Step 4: Commit any test-only cleanup**
 

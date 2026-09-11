@@ -122,7 +122,7 @@ export default function IdentityGate(props: IdentityGateProps): ReactElement {
         disabled: props.busy,
         createDisabled: replacementBriefing.trim() === '',
         onKeep: () => setConfirming(''),
-        onCreate: () => { setConfirming(''); props.onCreate(replacementBriefing.trim()); setReplacementBriefing(''); },
+        onCreate: () => props.onCreate(replacementBriefing.trim()),
       })
     : renderBriefingReplacementOffer(briefingElementFactory, { label: offer, disabled: props.busy || actionsBlocked, onOpen: () => { setReplacementBriefing(''); setConfirming(asking); } });
 
