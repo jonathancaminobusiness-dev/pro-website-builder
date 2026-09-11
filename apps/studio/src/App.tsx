@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Gate2 from './Gate2.js';
 import Gate3Panel from './Gate3Panel.js';
 import IdentityGate, { type IdentityGateSnapshot } from './gate1/IdentityGate.js';
-import { failureMessage, isMissing, RequestError, requestJson } from './request.js';
+import { failureMessage, isMissing, POLL_MAX_FAILURES, RequestError, requestJson } from './request.js';
+import { forgetRun, rememberedRun, rememberRun } from './rememberedRun.js';
 
 interface Snapshot {
   runId: string;
@@ -29,24 +30,21 @@ type ViewId = (typeof views)[number]['id'];
  * from the ledger instead of starting an expensive fan-out again.
  */
 const IDENTITY_RUN_KEY = 'pwb.gate1.runId';
-function rememberedIdentityRun(): string {
-  try { return window.localStorage.getItem(IDENTITY_RUN_KEY) ?? ''; } catch { return ''; }
-}
-function rememberIdentityRun(runId: string): void {
-  try { window.localStorage.setItem(IDENTITY_RUN_KEY, runId); } catch { /* a browser that refuses storage still decides the gate in this session */ }
-}
-function forgetIdentityRun(): void {
-  try { window.localStorage.removeItem(IDENTITY_RUN_KEY); } catch { /* nothing to forget */ }
-}
+/**
+ * The pipeline execution this browser last worked on, remembered the way Gate 1
+ * remembers its own. Reloading the tab used to lose the execution forever: the
+ * screen started empty and the only way forward was paying for a new run.
+ */
+const PIPELINE_RUN_KEY = 'pwb.pipeline.runId';
+const rememberedIdentityRun = (): string => rememberedRun(IDENTITY_RUN_KEY);
+const rememberIdentityRun = (runId: string): void => rememberRun(IDENTITY_RUN_KEY, runId);
+const forgetIdentityRun = (): void => forgetRun(IDENTITY_RUN_KEY);
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return requestJson<T>(`${API_ORIGIN}${path}`, init);
 }
 
 const GATE2_ROUTE = '#/gate-2';
-
-/** How many consecutive reads may fail before the screen stops following a queued, recovering, or working run. */
-const POLL_MAX_FAILURES = 10;
 
 interface IdentityReadSource {
   generation: number;
@@ -99,10 +97,33 @@ export default function App() {
 
   async function act(action: () => Promise<Snapshot>): Promise<void> {
     setBusy(true); setError('');
-    try { setSnapshot(await action()); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); } finally { setBusy(false); }
+    try { setSnapshot(await action()); } catch (cause) { setError(failureMessage(cause)); } finally { setBusy(false); }
   }
 
-  const create = () => act(async () => (await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) })).snapshot);
+  const create = () => act(async () => {
+    const created = await request<{ snapshot: Snapshot; runId: string }>('/api/runs', { method: 'POST', body: JSON.stringify({ runId: `studio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }) });
+    rememberRun(PIPELINE_RUN_KEY, created.runId);
+    return created.snapshot;
+  });
+
+  // The remembered execution is re-read on load, so a reload finds the pipeline
+  // where it was left. Only a run the server no longer knows — a 404 — drops the
+  // pointer; a server that is not listening yet says nothing about whether the
+  // run exists, so the id is kept and the failure is shown.
+  const readRememberedPipelineRun = useCallback((): void => {
+    const remembered = rememberedRun(PIPELINE_RUN_KEY);
+    if (!remembered) return;
+    void request<Snapshot>(`/api/runs/${encodeURIComponent(remembered)}`).then(
+      // A run the captain started in the meantime is the one on screen.
+      (next) => { setSnapshot((current) => current ?? next); },
+      (cause: unknown) => {
+        if (isMissing(cause)) { forgetRun(PIPELINE_RUN_KEY); return; }
+        setError(failureMessage(cause));
+      },
+    );
+  }, []);
+
+  useEffect(() => { readRememberedPipelineRun(); }, [readRememberedPipelineRun]);
 
   const acceptIdentityRun = useCallback((next: IdentityGateSnapshot, source: IdentityReadSource = { generation: identityGeneration.current, epoch: startEpoch.current, kind: 'action' }): boolean => {
     if (source.generation !== identityGeneration.current) return false;

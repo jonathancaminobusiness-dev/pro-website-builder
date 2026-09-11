@@ -109,3 +109,28 @@ describe('Gate 1 execution progress', () => {
     expect(markup).toContain('Aprovar esta direção');
   });
 });
+
+/**
+ * The captain compares whole documents, not token cards: the decision is only
+ * offered beside the rendered page of the very version each card would approve,
+ * served from the isolated preview origin and before anything is decided.
+ */
+describe('Gate 1 direction previews', () => {
+  const second: IdentityDirectionView = { ...direction, directionId: 'editorial-material', label: 'Editorial material', versionId: 'version-editorial' };
+
+  it('opens the isolated preview of each direction version before the decision', () => {
+    const open = snapshot('needs_review', true);
+    open.directions = [direction, second];
+    const markup = renderGate(open);
+
+    for (const view of open.directions) {
+      expect(markup).toContain(`src="http://127.0.0.1:4311/preview/${view.versionId}/"`);
+      expect(markup).toContain(`title="Preview de ${view.label}"`);
+    }
+    // The preview origin runs the page, so the frame stays sandboxed and the
+    // decision is still open beside it.
+    expect(markup).toContain('direction-preview');
+    expect(markup).toContain('sandbox=""');
+    expect(markup).toContain('Aprovar esta direção');
+  });
+});
