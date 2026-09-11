@@ -122,6 +122,27 @@ describe('briefing conversation API', () => {
     expect(conversation.state).toBe('final');
   });
 
+  it('freezes the briefing once the identity stage has started, instead of recording a revision nobody applies', async () => {
+    const server = await conversationServer();
+    await createRun(server.origin, 'conversa-congelada', FIRST_TEXT);
+    await post(server.origin, briefingConversationPath('conversa-congelada'), { idempotencyKey: 'turn-1' });
+    await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'A prevenção é o centro.', idempotencyKey: 'turn-2' });
+    await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'Segurança clínica com carinho.', idempotencyKey: 'turn-3' });
+    await post(server.origin, briefingConversationPath('conversa-congelada'), { message: 'Acompanhamento é a promessa.', idempotencyKey: 'turn-4' });
+    await post(server.origin, briefingConversationConfirmPath('conversa-congelada'), { briefing: 'Clínica de bairro preventiva, com acompanhamento contínuo.', idempotencyKey: 'confirm-1' });
+    const started = await post(server.origin, '/api/identity/runs/conversa-congelada/start', { approverRole: 'captain' });
+    expect(started.status).toBe(200);
+
+    const late = await post(server.origin, briefingConversationConfirmPath('conversa-congelada'), { briefing: 'Outro briefing, escrito depois da largada.', idempotencyKey: 'confirm-2' });
+
+    expect(late.status).toBe(409);
+    expect((await late.json() as { error: string }).error).toMatch(/congelado/);
+    const run = await (await fetch(`${server.origin}/api/identity/runs/conversa-congelada`, { headers: { origin: STUDIO_ORIGIN } })).json() as { briefing: string };
+    expect(run.briefing).toBe('Clínica de bairro preventiva, com acompanhamento contínuo.');
+    const conversation = await snapshotOf(await fetch(`${server.origin}${briefingConversationPath('conversa-congelada')}`, { headers: { origin: STUDIO_ORIGIN } }));
+    expect(conversation.confirmations).toHaveLength(1);
+  });
+
   it('never duplicates a turn when the same idempotency key is retried', async () => {
     const server = await conversationServer();
     await createRun(server.origin, 'conversa-idempotente', FIRST_TEXT);

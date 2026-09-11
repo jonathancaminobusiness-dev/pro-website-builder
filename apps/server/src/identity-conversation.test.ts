@@ -40,8 +40,9 @@ function direction(id: string, label: string): ConceptualDirection {
 
 const FINAL = turn({ intent: 'final', nextState: 'final', message: 'Briefing fechado, três direções conceituais.', summary: 'Clínica de bairro preventiva.', directions: [direction('dir-um', 'Um'), direction('dir-dois', 'Dois'), direction('dir-tres', 'Três')] });
 
-function succeeded(artifact: Record<string, unknown>): AgentResult {
-  return { taskId: 'identity-briefing-conversation-1', status: 'succeeded', summary: 'ok', artifact };
+/** A clean answer, bound to the turn that asked for it as a real provider's answer is. */
+function succeeded(artifact: Record<string, unknown>): Answer {
+  return (task) => ({ taskId: task.id, status: 'succeeded', summary: 'ok', artifact });
 }
 
 function harness(answers: Answer[], options: { maxQuestions?: number; initialText?: () => string | undefined; persist?: (snapshot: BriefingConversationSnapshot) => Promise<void>; onConfirmed?: (briefing: string, revision: number) => void } = {}): Harness {
@@ -245,7 +246,7 @@ describe('briefing conversation state machine', () => {
 
 describe('briefing conversation safe answers', () => {
   it('spends exactly one correction on an invalid answer and then falls back', async () => {
-    const invalid: AgentResult = { taskId: 'identity-briefing-conversation-1', status: 'succeeded', summary: 'ok', artifact: { message: '', intent: 'recommendation', nextState: 'recommendation' } };
+    const invalid: Answer = (task) => ({ taskId: task.id, status: 'succeeded', summary: 'ok', artifact: { message: '', intent: 'recommendation', nextState: 'recommendation' } });
     const { conversation, tasks } = harness([invalid, invalid]);
 
     const snapshot = await conversation.send({ message: 'Clínica veterinária de bairro que atende cães e gatos.', action: 'answer', idempotencyKey: nextKey() });
@@ -261,7 +262,7 @@ describe('briefing conversation safe answers', () => {
   });
 
   it('recovers on the correction when the second answer is valid', async () => {
-    const invalid: AgentResult = { taskId: 'identity-briefing-conversation-1', status: 'succeeded', summary: 'ok', artifact: { intent: 'nonsense' } };
+    const invalid: Answer = (task) => ({ taskId: task.id, status: 'succeeded', summary: 'ok', artifact: { intent: 'nonsense' } });
     const { conversation, tasks } = harness([invalid, succeeded(RECOMMENDATION)]);
 
     const snapshot = await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
@@ -273,7 +274,7 @@ describe('briefing conversation safe answers', () => {
   });
 
   it('does not retry a transport failure, because the second call would fail the same way', async () => {
-    const failed: AgentResult = { taskId: 'identity-briefing-conversation-1', status: 'failed', summary: 'Codex CLI não está autenticado.', errorCode: 'CODEX_AUTH_REQUIRED' };
+    const failed: Answer = (task) => ({ taskId: task.id, status: 'failed', summary: 'Codex CLI não está autenticado.', errorCode: 'CODEX_AUTH_REQUIRED' });
     const { conversation, tasks } = harness([failed]);
 
     const snapshot = await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
@@ -285,7 +286,7 @@ describe('briefing conversation safe answers', () => {
   });
 
   it('ends the conversation in safe mode when the fallback itself is not enough', async () => {
-    const failed: AgentResult = { taskId: 'identity-briefing-conversation-1', status: 'failed', summary: 'O modelo caiu.', errorCode: 'CONVERSATION_PROVIDER_FAILED' };
+    const failed: Answer = (task) => ({ taskId: task.id, status: 'failed', summary: 'O modelo caiu.', errorCode: 'CONVERSATION_PROVIDER_FAILED' });
     const { conversation } = harness([failed, failed]);
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
 
@@ -319,6 +320,33 @@ describe('briefing conversation safe answers', () => {
     expect(closed.directions).toHaveLength(3);
     expect(closed.summary).toContain('#2E7D32');
     expect(tasks).toHaveLength(2);
+  });
+
+  it('accepts a reply and a declared gap that give back the site and the colour the captain typed, even ending a sentence', async () => {
+    const echoed = succeeded(turn({
+      intent: 'recommendation',
+      nextState: 'recommendation',
+      message: 'Entendi: vocês já têm o site https://clinicax.com.br e querem partir do verde #2E7D32.',
+      unknowns: [{ gap: 'O que fica de https://clinicax.com.br.', impact: 'Muda o que a identidade precisa substituir.' }],
+    }));
+    const { conversation, tasks } = harness([echoed]);
+
+    const snapshot = await conversation.send({ message: 'Somos a Clínica X, nosso site hoje é https://clinicax.com.br e queremos manter o verde #2E7D32', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(snapshot.state).toBe('recommendation');
+    expect(snapshot.fallback).toBe(false);
+    expect(tasks).toHaveLength(1);
+  });
+
+  it('still refuses a link the model invented in its reply', async () => {
+    const invented = succeeded(turn({ intent: 'recommendation', nextState: 'recommendation', message: 'Montei um preview em https://mockup-exemplo.com para vocês verem.' }));
+    const { conversation, tasks } = harness([invented, invented]);
+
+    const snapshot = await conversation.send({ message: 'Somos uma clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(tasks[1]?.brief).toContain('Saída visual recusada (link)');
+    expect(snapshot.fallback).toBe(true);
+    expect(snapshot.messages.every((message) => !message.text.includes('mockup-exemplo'))).toBe(true);
   });
 
   it('still refuses a hex value the model wrote into a conceptual direction it authored', async () => {
@@ -373,7 +401,7 @@ describe('briefing conversation idempotency', () => {
   it('keeps a cancel sent during an in-flight turn, instead of letting that turn resurrect the conversation', async () => {
     let release = (): void => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const { conversation } = harness([async () => { await gate; return succeeded(RECOMMENDATION); }]);
+    const { conversation } = harness([async (task: AgentTask) => { await gate; return { taskId: task.id, status: 'succeeded' as const, summary: 'ok', artifact: RECOMMENDATION }; }]);
 
     const slow = conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
     const cancelled = conversation.send({ action: 'cancel', idempotencyKey: nextKey() });
@@ -390,7 +418,7 @@ describe('briefing conversation idempotency', () => {
   it('joins an in-flight turn instead of starting a parallel one', async () => {
     let release = (): void => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const { conversation, tasks } = harness([async () => { await gate; return succeeded(RECOMMENDATION); }]);
+    const { conversation, tasks } = harness([async (task: AgentTask) => { await gate; return { taskId: task.id, status: 'succeeded' as const, summary: 'ok', artifact: RECOMMENDATION }; }]);
 
     const first = conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: 'same' });
     const second = conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: 'same' });
@@ -446,7 +474,7 @@ describe('briefing confirmation', () => {
   });
 
   it('keeps the confirmation when the closing turn fails and only loses the directions', async () => {
-    const failed: AgentResult = { taskId: 'identity-briefing-conversation-3', status: 'failed', summary: 'O modelo caiu.', errorCode: 'CONVERSATION_PROVIDER_FAILED' };
+    const failed: Answer = (task) => ({ taskId: task.id, status: 'failed', summary: 'O modelo caiu.', errorCode: 'CONVERSATION_PROVIDER_FAILED' });
     const { conversation } = harness([succeeded(CONFIRMATION), failed]);
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
 
@@ -528,32 +556,66 @@ describe('briefing conversation durability', () => {
     expect(tasks).toHaveLength(2);
   });
 
-  it('moves the execution briefing only after the conversation is written, never before', async () => {
+  it('signs nothing when the conversation write fails, and closes on the same key once it succeeds', async () => {
     const confirmed: Array<{ briefing: string; revision: number }> = [];
-    const { conversation } = harness([succeeded(CONFIRMATION), succeeded(FINAL)], {
-      persist: async (snapshot) => { if (snapshot.confirmations.length > 0) throw new Error('SQLITE_BUSY'); },
+    let writes = 0;
+    const { conversation } = harness([succeeded(CONFIRMATION), succeeded(FINAL), succeeded(FINAL)], {
+      persist: async (snapshot) => { if (snapshot.confirmations.length > 0 && (writes += 1) === 1) throw new Error('SQLITE_BUSY'); },
       onConfirmed: (briefing, revision) => { confirmed.push({ briefing, revision }); },
     });
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    const retried = nextKey();
 
-    await expect(conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: nextKey() })).rejects.toThrow(/SQLITE_BUSY/);
+    await expect(conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried })).rejects.toThrow(/SQLITE_BUSY/);
 
-    expect(confirmed).toEqual([]);
     expect(conversation.state).toBe('confirmation');
     expect(conversation.confirmedBriefing).toBeUndefined();
     expect(conversation.snapshot().confirmations).toEqual([]);
+
+    const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried });
+
+    expect(closed.state).toBe('final');
+    expect(closed.confirmations.map((entry) => entry.revision)).toEqual([1]);
+    expect(confirmed).toEqual([{ briefing: 'Clínica de bairro preventiva.', revision: 1 }, { briefing: 'Clínica de bairro preventiva.', revision: 1 }]);
   });
 
-  it('keeps the turn the execution already recorded when the briefing write fails afterwards', async () => {
-    const { conversation, persisted } = harness([succeeded(CONFIRMATION), succeeded(FINAL)], {
-      onConfirmed: () => { throw new Error('updateRunBriefing falhou'); },
+  it('re-drives the whole confirmation on the same key when the briefing write failed', async () => {
+    let writes = 0;
+    const { conversation, persisted } = harness([succeeded(CONFIRMATION), succeeded(FINAL), succeeded(FINAL)], {
+      onConfirmed: () => { writes += 1; if (writes === 1) throw new Error('updateRunBriefing falhou'); },
     });
     await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+    const retried = nextKey();
 
-    await expect(conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: nextKey() })).rejects.toThrow(/updateRunBriefing/);
+    await expect(conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried })).rejects.toThrow(/updateRunBriefing/);
 
-    expect(conversation.state).toBe('final');
+    // The write is what the confirmation is for, so a failed one leaves nothing
+    // signed: the conversation is still offering its summary and the key is free.
+    expect(conversation.state).toBe('confirmation');
+    expect(conversation.confirmedBriefing).toBeUndefined();
+    expect(conversation.snapshot().confirmations).toEqual([]);
+    expect(persisted.at(-1)?.confirmations).toEqual([]);
+
+    const closed = await conversation.confirm({ briefing: 'Clínica de bairro preventiva.', idempotencyKey: retried });
+
+    expect(writes).toBe(2);
+    expect(closed.state).toBe('final');
+    expect(closed.confirmations).toHaveLength(1);
     expect(conversation.snapshot()).toEqual(persisted.at(-1));
+  });
+
+  it('refuses an answer bound to another turn and corrects rather than writing it into this one', async () => {
+    const stale: Answer = { taskId: 'identity-briefing-conversation-1', status: 'succeeded', summary: 'ok', artifact: QUESTION };
+    const { conversation, tasks } = harness([succeeded(RECOMMENDATION), stale, succeeded(QUESTION)]);
+    await conversation.send({ message: 'Clínica veterinária de bairro.', action: 'answer', idempotencyKey: nextKey() });
+
+    const asked = await conversation.send({ message: 'Prevenção é o centro.', action: 'answer', idempotencyKey: nextKey() });
+
+    expect(tasks).toHaveLength(3);
+    expect(tasks[2]?.brief).toContain('A resposta anterior foi recusada.');
+    expect(asked.state).toBe('question');
+    expect(asked.fallback).toBe(false);
+    expect(asked.messages.filter((message) => message.author === 'studio')).toHaveLength(2);
   });
 
   it('offers a safe-mode summary the captain can confirm, even from an entry text that fills the briefing limit', async () => {
@@ -592,6 +654,11 @@ describe('briefing conversation contract', () => {
     expect(BRIEFING_CONVERSATION_TRANSITIONS.cancelled).toEqual([]);
     expect(canBriefingConversationTransition('question', 'recommendation')).toBe(true);
     expect(canBriefingConversationTransition('confirmation', 'question')).toBe(true);
+    // A summary answers a corrected summary only where the machine has nothing
+    // else to offer: below the cap the correction path is a question.
+    expect(canBriefingConversationTransition('confirmation', 'confirmation')).toBe(false);
+    expect(briefingTurnNextStates('confirmation', { closing: false, mustConclude: false })).toEqual(['question']);
+    expect(briefingTurnNextStates('confirmation', { closing: false, mustConclude: true })).toEqual(['confirmation']);
     expect(canBriefingConversationTransition('final', 'question')).toBe(false);
     expect(canBriefingConversationTransition('final', 'final')).toBe(true);
     expect(BRIEFING_CONVERSATION_MAX_QUESTIONS).toBe(6);

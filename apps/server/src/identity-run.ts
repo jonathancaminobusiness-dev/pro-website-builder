@@ -135,10 +135,11 @@ export class IdentityRun {
       provider: options.provider,
       persist: async (snapshot) => { await options.repository.saveConversation(options.runId, JSON.stringify(snapshot)); },
       // The conversation produces the execution's briefing, so a confirmation
-      // moves the run onto it. A stage that has already run keeps the briefing
-      // it ran with: the revision is recorded, not applied retroactively.
+      // moves the run onto it. Once the stage has started the briefing is
+      // frozen and the confirmation is refused, so every confirmation that gets
+      // here is one the execution applies.
+      briefingFrozen: () => this.started,
       onConfirmed: async (briefing) => {
-        if (this.started) return;
         this.briefing = briefing;
         this.stage = this.newStage();
         await options.repository.updateRunBriefing(options.runId, briefing);
