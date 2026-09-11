@@ -1,5 +1,5 @@
 import type { ParityReport } from '@pwb/domain';
-import { scanTags, type CompiledSite, type FontDecision } from '@pwb/export';
+import { scanTags, type CompiledSite, type FontDecision, type ServedFace } from '@pwb/export';
 import type { RenderedDocument } from '@pwb/renderer';
 
 interface DocumentView {
@@ -76,20 +76,23 @@ function documentView(html: string, stylesheet: string, pageId: string): Documen
   return { ...documentSkeleton(html), styles: nodeDeclarations(stylesheet, pageId) };
 }
 
-function faceName(decision: FontDecision): string {
+function faceName(decision: FontDecision | ServedFace): string {
   return `${decision.family} ${decision.weight} ${decision.style}`;
 }
 
 /**
  * The faces the captain reviewed against the faces the release ships.
  *
- * A face file is content-addressed, so re-exporting one changes the path the
- * two sides name and this comparison says which face moved. It belongs to every
- * route because every route loads the same faces, and the stylesheet parsing
- * above never sees an `@font-face` rule: without this, a release rendered in a
- * typeface the captain never looked at still reports every route as identical.
+ * The preview side is read back out of the `@font-face` rules the origin really
+ * served, never from the plan a fonts directory would produce, so the comparison
+ * has two independent sides. A face file is content-addressed, so re-exporting
+ * one changes the path the two sides name and this says which face moved. It
+ * belongs to every route because every route loads the same faces, and the
+ * stylesheet parsing above never sees an `@font-face` rule: without this, a
+ * release rendered in a typeface the captain never looked at still reports every
+ * route as identical.
  */
-function compareFonts(preview: FontDecision[], release: FontDecision[]): string[] {
+function compareFonts(preview: ServedFace[], release: FontDecision[]): string[] {
   const differences: string[] = [];
   const shipped = new Map(release.map((decision) => [faceName(decision), decision]));
   for (const decision of preview) {
@@ -113,7 +116,7 @@ function compareFonts(preview: FontDecision[], release: FontDecision[]): string[
  * looked at. Naming those faces is what keeps that silence from reading as
  * parity: the gate raises them as an open point instead.
  */
-export function unreviewedFaces(compiled: CompiledSite, previewFaces?: FontDecision[]): string[] {
+export function unreviewedFaces(compiled: CompiledSite, previewFaces?: ServedFace[]): string[] {
   if (previewFaces !== undefined) return [];
   return compiled.fonts.filter((decision) => decision.selfHosted).map(faceName);
 }
@@ -145,7 +148,7 @@ function compare(route: string, preview: DocumentView, release: DocumentView): s
  * absent only when no preview served this document — a command line run — and
  * then the faces are the one thing this check cannot speak for.
  */
-export function checkPreviewReleaseParity(rendered: RenderedDocument, compiled: CompiledSite, pageIdByRoute: Map<string, string>, previewFaces?: FontDecision[]): ParityReport {
+export function checkPreviewReleaseParity(rendered: RenderedDocument, compiled: CompiledSite, pageIdByRoute: Map<string, string>, previewFaces?: ServedFace[]): ParityReport {
   const stylesheet = compiled.files.find((file) => file.path === compiled.stylesheetPath);
   const css = typeof stylesheet?.contents === 'string' ? stylesheet.contents : '';
   const faces = previewFaces === undefined ? [] : compareFonts(previewFaces, compiled.fonts);

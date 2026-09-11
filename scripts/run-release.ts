@@ -20,7 +20,7 @@
  */
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { startServedPreview, type PreviewServer } from '../apps/server/src/preview.js';
+import { startServedPreview } from '../apps/server/src/preview.js';
 import { ReleaseRun, type ReleaseSnapshot } from '../apps/server/src/release-run.js';
 import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { Applier, PatchGate, VersionStore } from '../packages/orchestrator/src/index.js';
@@ -42,19 +42,19 @@ async function main(): Promise<void> {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
 
   // Gate 3 can only speak for faces a preview served, so this run serves the
-  // document it is about to release and hands the gate what that origin
+  // very version the gate is about to compile — asked for by `previewFaces`
+  // while the release is prepared — and hands the gate the faces that origin
   // delivered. Port 0 keeps the CLI off the developer ports.
-  let preview: PreviewServer | undefined;
+  const preview = await startServedPreview(fontsDir);
   const release = new ReleaseRun('cli-release', {
     releaseRoot,
     evidenceDir,
     fontsDir,
     siteUrl,
     siteName,
-    previewFaces: () => preview?.servedFaces(),
+    previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)),
     ...(process.env.PWB_MODEL_PROVIDER ? { modelProvider: process.env.PWB_MODEL_PROVIDER } : {}),
   });
-  preview = await startServedPreview((requested) => requested === approved.id ? renderDesign(approved.ir) : undefined, approved.id, fontsDir);
   // A command line run has no durable log of its own, so its events are printed
   // beside the report instead of being dropped.
   let prepared: ReleaseSnapshot;
