@@ -125,6 +125,28 @@ describe('conversation ui state', () => {
     expect(can.canConfirm).toBe(true);
   });
 
+  it('keeps a summary the captain edited when another request settles', () => {
+    const edited = reduce(
+      opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
+      { type: 'summaryDraft', value: 'Clínica de bairro com acompanhamento como prova.' },
+      { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-cancel', intent: 'cancel', message: '' } } },
+    );
+    const settled = conversationReducer(edited, { type: 'settled', snapshot: conversationSnapshot({ state: 'cancelled', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
+
+    expect(settled.summaryDraft).toBe('Clínica de bairro com acompanhamento como prova.');
+    expect(affordances(settled, NOW).canConfirm).toBe(true);
+  });
+
+  it('takes the server summary when the captain never touched the field', () => {
+    const sending = reduce(
+      opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 }),
+      { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } },
+    );
+    const settled = conversationReducer(sending, { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
+
+    expect(settled.summaryDraft).toBe(CONSOLIDATED_SUMMARY);
+  });
+
   it('locks the field a failed request came from until the captain replays or discards it', () => {
     const failed = reduce(
       opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
