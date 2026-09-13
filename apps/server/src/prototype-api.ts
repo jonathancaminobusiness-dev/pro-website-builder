@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { agentTaskSchema, createFixtureIR, hashJson, stageRoles, type Approval, type DesignIR } from '@pwb/domain';
 import { Applier, DEFAULT_MAX_ACTIVE_CLAUDE, PatchGate, Scheduler, VersionStore, type VersionRecord } from '@pwb/orchestrator';
+import { lintDesign } from '@pwb/linter';
 import { renderDesign, type RenderedDocument } from '@pwb/renderer';
 import { declaresDarkScheme } from '@pwb/domain';
 import { readStateConditions } from '@pwb/render-hub';
@@ -66,6 +67,12 @@ export interface Gate2Result {
   colorSchemes: Array<'light' | 'dark'>;
   qa: Array<{ id: string; tier: number; severity: string; title: string; message: string; nodeIds: string[] }>;
   lint: Array<{ id: string; severity: string; path: string; message: string }>;
+  /**
+   * The sections no composer filled. Their windows still hold the architect's
+   * placeholders, so the review is partial and says which parts of it are a gap
+   * rather than a decision.
+   */
+  failedSections: PrototypeStageOutcome['failedSections'];
   cycles: PrototypeStageOutcome['cycles'];
   reports: PrototypeStageOutcome['reports'];
   issues: Array<Finding & { applied: boolean; refusal?: string }>;
@@ -99,7 +106,11 @@ interface PersistedRun {
 function describeStep(type: string, payload: Record<string, unknown>): string {
   const list = (value: unknown): string => Array.isArray(value) ? value.join(', ') : '';
   if (type === 'prototype.manifest.applied') return `Arquitetura de informação pronta: ${list(payload.routes)}.`;
-  if (type === 'prototype.sections.applied') return `Seções compostas em paralelo: ${list(payload.sections)}.`;
+  if (type === 'prototype.sections.applied') {
+    const failed = Array.isArray(payload.failedSections) ? payload.failedSections : [];
+    return `Seções compostas em paralelo: ${list(payload.sections)}.${failed.length > 0 ? ` Sem composição: ${failed.join(', ')}.` : ''}`;
+  }
+  if (type === 'prototype.section.unavailable') return `A seção ${String(payload.sectionId)} não foi composta: ${String(payload.reason)}.`;
   if (type === 'prototype.qa.gate') return `QA determinístico medido no navegador: ${Array.isArray(payload.vetoes) ? payload.vetoes.length : 0} veto(s).`;
   if (type === 'prototype.cycle.decided') return `Ciclo ${String(payload.cycle)}: ${String(payload.reason)}.`;
   if (type === 'prototype.refine.applied') return `Ciclo ${String(payload.cycle)}: reparo causal aplicado.`;
@@ -162,7 +173,12 @@ export class PrototypeRunRegistry {
     this.runs.set(runId, record);
     await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'prototype.run.queued', payload: { runId, baseVersionId: base.id } });
     await this.persist(record);
-    this.lane = this.lane.then(() => this.execute(record, applier, base.id));
+    // The lane has to survive whatever this run does to it. `execute` handles its own failures, but
+    // anything it cannot - a repository that will not write, a bug above the scheduler - would
+    // otherwise reject the chain itself: an unhandled rejection, and every run queued behind this one
+    // waiting forever on a promise that already settled. So the run is failed here and the lane is
+    // handed on resolved.
+    this.lane = this.lane.then(() => this.execute(record, applier, base.id)).catch((error: unknown) => this.abandon(record, error));
     return this.snapshot(record);
   }
 
@@ -277,6 +293,17 @@ export class PrototypeRunRegistry {
     await this.persist(record).catch(() => undefined);
   }
 
+  /**
+   * The last resort for a run whose execution threw where nothing else could catch it. It records the
+   * failure on the run that caused it and swallows nothing else, so the lane keeps serving.
+   */
+  private async abandon(record: PrototypeRunRecord, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : 'A execução da etapa de protótipo falhou antes de produzir uma revisão.';
+    record.progress = { ...record.progress, status: 'failed', step: 'prototype.run.failed', detail: message, error: message, updatedAt: new Date().toISOString() };
+    await this.options.repository.appendEvent({ id: randomUUID(), runId: record.runId, type: 'prototype.run.failed', payload: { error: message } }).catch(() => undefined);
+    await this.persist(record).catch(() => undefined);
+  }
+
   /** The whole run, so the next process can serve this review without measuring anything again. */
   private async persist(record: PrototypeRunRecord): Promise<void> {
     const reviewed = record.outcome ? [record.outcome.compositionVersionId, record.outcome.versionId] : [];
@@ -318,6 +345,7 @@ export class PrototypeRunRegistry {
     if (record.outcome.gate === 'vetoed' && input.decision === 'approved') throw new Error('A vetoed revision cannot be approved; the deterministic gate has to pass first.');
     const version = record.store.get(record.outcome.versionId);
     if (!version) throw new Error(`Run ${runId} has lost its reviewed revision.`);
+    if (input.decision === 'approved') this.requireClean(version);
     const approval: Approval = {
       id: `${runId}-prototype-${record.decisions.length}-${input.decision}`,
       stage: 'prototype', approverRole: 'captain', versionId: version.id, versionHash: version.hash,
@@ -327,6 +355,22 @@ export class PrototypeRunRegistry {
     await this.options.repository.appendEvent({ id: randomUUID(), runId, type: 'gate2.decided', payload: { decision: approval.decision, versionId: approval.versionId, rationale: approval.rationale } });
     await this.persist(record);
     return this.snapshot(record);
+  }
+
+  /**
+   * No gate closes over a document the linter rejects, and Gate 2 is not the exception it used to be.
+   * `A11Y-090` and `COPY-110` are severity `error` - a route with no `h1`, a heading level skipped,
+   * placeholder copy still in the page - and nothing blocked on them here while every other gate
+   * blocked on its own. It is measured from the reviewed revision rather than read off the outcome,
+   * so what refuses the approval is the document being approved.
+   *
+   * Only the prototype stage's own rules block: an identity-stage error is Gate 1's to refuse and
+   * this stage may not write `/identity`, so blocking on one here would be a gate no captain could pass.
+   */
+  private requireClean(version: VersionRecord): void {
+    const errors = lintDesign(version.ir).findings.filter((finding) => finding.severity === 'error' && finding.stage === 'prototype');
+    if (errors.length === 0) return;
+    throw new Error(`O Gate 2 não aprova a revisão ${version.id} com ${errors.length} erro(s) de lint do protótipo: ${errors.map((finding) => `${finding.id} ${finding.path}`).join('; ')}`);
   }
 
   private require(runId: string): PrototypeRunRecord & { outcome: PrototypeStageOutcome } {
@@ -367,6 +411,7 @@ export class PrototypeRunRegistry {
       colorSchemes: declaresDarkScheme(ir.identity) ? ['light', 'dark'] : ['light'],
       qa: outcome.qa.checks.map((check) => ({ id: check.id, tier: check.tier, severity: check.severity, title: check.title, message: check.message, nodeIds: check.nodeIds })),
       lint: outcome.lint.findings.map((finding) => ({ id: finding.id, severity: finding.severity, path: finding.path, message: finding.message })),
+      failedSections: outcome.failedSections ?? [],
       cycles: outcome.cycles,
       reports: outcome.reports,
       issues: this.issues(record),

@@ -5,7 +5,7 @@ export interface HiggsfieldMcpTransport { callTool(name: string, arguments_: Rec
 export type HiggsfieldMcpOptions = { configured: false } | { configured: true; transport: HiggsfieldMcpTransport };
 
 export class HiggsfieldMcpProvider implements RasterProvider {
-  constructor(private readonly options: HiggsfieldMcpOptions = { configured: false }) {}
+  constructor(readonly options: HiggsfieldMcpOptions = { configured: false }) {}
 
   async submit(request: RasterRequest, signal?: AbortSignal): Promise<RasterJob> {
     const provenance = (status: RasterJob['status'], license: string, termsNote: string): RasterJob['provenance'] =>

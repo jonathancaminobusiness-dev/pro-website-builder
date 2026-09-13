@@ -144,7 +144,6 @@ export class ClaudeCritiqueRunner implements CritiqueProvider {
   async critique(task: CritiqueTask, signal?: AbortSignal): Promise<CritiqueReport> {
     try {
       const report = await this.session.ask({
-        sessionId: task.criticSessionId,
         prompt: renderCritiquePrompt(task),
         schema: critiqueSchemaJson.CritiqueReport,
         parse: (value) => critiqueReportSchema.parse(value),
