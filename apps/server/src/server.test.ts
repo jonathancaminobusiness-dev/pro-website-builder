@@ -22,7 +22,7 @@ async function rawRequestStatus(port: number, requestLine: string): Promise<stri
 }
 
 function releaseOptions(root: string) {
-  return { releaseRoot: root, evidenceDir: join(root, '..', 'evidence') };
+  return { releaseRoot: root, evidenceDir: join(root, '..', 'evidence'), siteUrl: 'https://site.invalid', siteName: 'pro-website-builder' };
 }
 
 describe('local API', () => {

@@ -10,9 +10,11 @@ import { writeEvidenceArtifact } from '@pwb/stage-finalization';
 import { openDatabase, ProjectRepository, type LocalDatabase } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
 
+const SITE = { siteUrl: 'https://site.invalid', siteName: 'pro-website-builder' };
+
 /** One bundle root per run, with the evidence directory Gate 3 reads beside it. */
 function releaseOptions(root: string) {
-  return { releaseRoot: root, evidenceDir: join(root, '..', 'evidence') };
+  return { releaseRoot: root, evidenceDir: join(root, '..', 'evidence'), ...SITE };
 }
 
 /**
@@ -22,7 +24,7 @@ function releaseOptions(root: string) {
  */
 async function completeEvidence(run: FixtureRun, evidenceDir: string): Promise<void> {
   const { current } = run.releaseContext();
-  const compiled = compileRelease(renderDesign(current.ir), current.ir, { siteUrl: 'https://site.invalid', siteName: 'pro-website-builder' });
+  const compiled = compileRelease(renderDesign(current.ir), current.ir, SITE);
   const base = { releaseDigest: compiled.digest, irHash: compiled.irHash, route: '/', status: 'passed' as const, path: 'p', hash: 'h', metrics: {}, notes: [] };
   const artifacts: EvidenceArtifact[] = [
     { ...base, id: 'vitest', runner: 'vitest', engine: 'node', state: 'unit' },
@@ -169,7 +171,7 @@ describe('phase 0 fixture run', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-license-'));
     const blocked = join(dir, 'not-a-directory');
     await writeFile(blocked, 'the release root cannot be created under a regular file', 'utf8');
-    const run = new FixtureRun({ modelProvider: 'fake', repository, release: { releaseRoot: join(blocked, 'releases'), evidenceDir: join(dir, 'evidence') }, provider: new FakeModelProvider() });
+    const run = new FixtureRun({ modelProvider: 'fake', repository, release: { releaseRoot: join(blocked, 'releases'), evidenceDir: join(dir, 'evidence'), ...SITE }, provider: new FakeModelProvider() });
     await run.initialize('run-license');
     await atFinalizationGate(run);
     expect(run.snapshot().currentStage).toBe('finalization');
@@ -215,7 +217,7 @@ describe('phase 0 fixture run', () => {
           },
         },
     };
-    const run = new FixtureRun({ modelProvider: 'fake', repository, release: { releaseRoot, evidenceDir: join(dir, 'evidence') }, provider: leaking });
+    const run = new FixtureRun({ modelProvider: 'fake', repository, release: { releaseRoot, evidenceDir: join(dir, 'evidence'), ...SITE }, provider: leaking });
     await run.initialize('run-secret');
     await atFinalizationGate(run);
     const prepared = await run.prepareRelease();

@@ -4,7 +4,6 @@ import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeRelea
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
 import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
-import { siteFromEnvironment } from './site-environment.js';
 import {
   ClaudeReleaseCriticProvider, ClaudeReleaseRefiner, ClaudeReleaseSummarizer, DeterministicReleaseSummarizer,
   FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage, PatchRefiner, readEvidence, writeReleaseDocument,
@@ -14,8 +13,9 @@ import {
 export interface ReleaseRunOptions {
   releaseRoot: string;
   evidenceDir: string;
-  siteUrl?: string;
-  siteName?: string;
+  /** The origin the bundle is compiled for; it enters the canonical URLs, so every caller states it. */
+  siteUrl: string;
+  siteName: string;
   modelProvider?: ModelProviderName;
   /** Where the project keeps the faces it may self-host; no manifest means none. */
   fontsDir?: string;
@@ -121,7 +121,6 @@ export class ReleaseRun {
   private async prepareClaimed(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
     const name = modelProviderName(this.options.modelProvider);
     const chosen = providers(name);
-    const site = siteFromEnvironment();
     const fonts = await loadFontSources(this.options.fontsDir);
     const stage = new FinalizationStage({
       criticProvider: chosen.critic,
@@ -130,7 +129,7 @@ export class ReleaseRun {
       // The critics and the refiner record the provider that actually answered;
       // `idempotencyKey` hashes the alias, so it may not name Claude under Codex.
       modelAlias: modelAlias(name),
-      compilerOptions: { siteUrl: this.options.siteUrl ?? site.siteUrl, siteName: this.options.siteName ?? site.siteName, ...(fonts.length > 0 ? { fonts } : {}) },
+      compilerOptions: { siteUrl: this.options.siteUrl, siteName: this.options.siteName, ...(fonts.length > 0 ? { fonts } : {}) },
     });
     // The evidence runners compile the document the gate compiles, so they can
     // stamp their artifacts with the release they actually measured.

@@ -42,6 +42,7 @@ async function main(): Promise<void> {
   const approved = applier.createRoot(await loadReleaseDocument(evidenceDir));
   const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
 
+  const modelProvider = modelProviderName(process.env.PWB_MODEL_PROVIDER);
   // Gate 3 can only speak for faces a preview served, so this run serves the
   // version the stage hands the gate — asked for by `previewFaces` while the
   // release is prepared, before any refinement cycle — and hands the gate the
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
     siteUrl,
     siteName,
     previewFaces: (version) => preview.serve(version.id, renderDesign(version.ir)),
-    modelProvider: modelProviderName(process.env.PWB_MODEL_PROVIDER),
+    modelProvider,
   });
   // A command line run has no durable log of its own, so its events are printed
   // beside the report instead of being dropped.
