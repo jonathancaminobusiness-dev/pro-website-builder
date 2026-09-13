@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import type { Gate2Snapshot, IssueDecision, PrototypeRunRegistry } from './prototype-api.js';
+import { Gate1NotApprovedError, type Gate2Snapshot, type IssueDecision, type PrototypeRunRegistry } from './prototype-api.js';
 
 export interface PrototypeResponse { status: number; payload: unknown; }
 type ReadBody = (request: IncomingMessage) => Promise<Record<string, unknown>>;
@@ -22,7 +22,14 @@ export async function handlePrototypeRequest(registry: PrototypeRunRegistry, req
     const runId = text(input, 'runId') || `prototype-${randomUUID()}`;
     if (input.approverRole !== 'captain') return { status: 403, payload: { error: 'Only the captain can start a prototype run.' } };
     if (registry.has(runId)) return { status: 409, payload: { error: `Run ${runId} already exists.` } };
-    return { status: 201, payload: await registry.create(runId) };
+    // The prototype stage starts from the identity the captain approved, named
+    // either by the Gate 1 execution or by the version that gate closed on.
+    const seed = { identityRunId: text(input, 'identityRunId'), versionId: text(input, 'versionId') };
+    try { return { status: 201, payload: await registry.create(runId, seed) }; }
+    catch (error) {
+      if (error instanceof Gate1NotApprovedError) return { status: 409, payload: { error: error.message } };
+      throw error;
+    }
   }
 
   // Every run this server holds, so a review whose tab was closed mid-measurement is reachable again.
