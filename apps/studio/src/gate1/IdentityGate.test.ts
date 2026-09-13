@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { INVALID_IDENTITY_BRIEFING } from '@pwb/domain/briefing';
 import { briefingClosed, type ConversationSnapshot } from '../briefing/contract.js';
-import { CONSOLIDATED_SUMMARY, conversationSnapshot } from '../briefing/conversation-fixture.js';
+import { CONSOLIDATED_SUMMARY, conversationSnapshot, withOpenQuestion } from '../briefing/conversation-fixture.js';
 import { conversationReducer, initialConversationState } from '../briefing/machine.js';
 import type { BriefingConversationController } from '../briefing/useBriefingConversation.js';
 import IdentityGate, { type IdentityGateSnapshot, type IdentityDirectionView } from './IdentityGate.js';
@@ -133,7 +133,7 @@ describe('Gate 1 execution progress', () => {
   });
 
   it('refuses to spend the identity stage while the briefing conversation is still open', () => {
-    const markup = renderGate(snapshot('queued'), false, false, controllerFor(conversationSnapshot({ state: 'question', messageCount: 2 })));
+    const markup = renderGate(snapshot('queued'), false, false, controllerFor(conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 })));
 
     expect(markup).toContain('Feche o briefing para executar');
     expect(markup).toContain('disabled="">Feche o briefing para executar');
@@ -165,7 +165,7 @@ describe('Gate 1 execution progress', () => {
   });
 
   it('enables the identity stage once the captain closed the briefing', () => {
-    const markup = renderGate(snapshot('queued'), false, false, controllerFor(conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T09:00:00.000Z', messageCount: 4 })));
+    const markup = renderGate(snapshot('queued'), false, false, controllerFor(conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, briefing: CONSOLIDATED_SUMMARY, confirmations: [{ revision: 1, briefing: CONSOLIDATED_SUMMARY, openGaps: [], confirmedAt: '2026-09-11T09:00:00.000Z', messageCount: 5 }] })));
 
     expect(markup).toContain('>Executar etapa de identidade<');
     expect(markup).not.toContain('Feche o briefing para executar');

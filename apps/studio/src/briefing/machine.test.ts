@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest';
+import { BRIEFING_CONVERSATION_MAX_QUESTIONS, type BriefingConversationSnapshot } from '@pwb/domain/conversation';
 import { RequestError } from '../request.js';
 import { ConversationContractError } from './contract.js';
-import { clarifyingQuestion, CONSOLIDATED_SUMMARY, answerTurn, confirmationTurn, conversationSnapshot, entryTurn, followUpQuestion, followUpQuestionTurn, questionTurn, recommendationTurn } from './conversation-fixture.js';
+import {
+  afterFirstReading,
+  clarifyingQuestion,
+  confirmationTurn,
+  CONSOLIDATED_SUMMARY,
+  conversationSnapshot,
+  FIRST_TEXT,
+  followUpQuestion,
+  message,
+  questionTurn,
+  withOpenQuestion,
+} from './conversation-fixture.js';
 import {
   affordances,
   classifyFailure,
   correctableTurnId,
-  limitRefreshDelayMs,
   conversationReducer,
   initialConversationState,
   pendingMessage,
@@ -15,21 +26,30 @@ import {
   type ConversationUiState,
 } from './machine.js';
 
-const NOW = new Date('2026-09-11T10:00:00.000Z');
-
 function reduce(state: ConversationUiState, ...actions: ConversationAction[]): ConversationUiState {
   return actions.reduce(conversationReducer, state);
 }
 
-function opened(overrides = {}): ConversationUiState {
+function opened(overrides: Partial<BriefingConversationSnapshot> = {}): ConversationUiState {
   return reduce(initialConversationState(), { type: 'begin', intent: { kind: 'resume' } }, { type: 'settled', snapshot: conversationSnapshot(overrides) });
 }
 
+/** A conversation with one question open, which is the state most of these cases are about. */
+function asking(overrides: Partial<BriefingConversationSnapshot> = {}): ConversationUiState {
+  return opened({ state: 'question', originalText: FIRST_TEXT, messages: withOpenQuestion(), questionCount: 1, ...overrides });
+}
+
+/** The transcript of an answer already given to the open question, so a correction has something to load. */
+function answered(): BriefingConversationSnapshot['messages'] {
+  return [...withOpenQuestion(), message(3, { author: 'captain', text: 'Carinho no atendimento.', state: 'question' })];
+}
+
 const entryIntent = { kind: 'send', request: { idempotencyKey: 'key-entry', intent: 'entry', message: 'Somos uma clínica veterinária de bairro.' } } as const;
+const skipIntent = { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } as const;
 
 describe('conversation ui state', () => {
   it('opens a run at the point the server persisted, never at a default', () => {
-    const state = opened({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 });
+    const state = asking();
 
     expect(state.availability).toBe('available');
     expect(state.snapshot?.state).toBe('question');
@@ -41,13 +61,13 @@ describe('conversation ui state', () => {
 
     expect(state.availability).toBe('absent');
     expect(state.snapshot).toBeNull();
-    expect(affordances(state, NOW).ready).toBe(false);
+    expect(affordances(state).ready).toBe(false);
   });
 
   it('treats a 404 after a conversation was read as a failed read, keeping the history and the gate closed', () => {
-    const read = opened({ state: 'recommendation', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 });
+    const read = opened({ state: 'recommendation', originalText: FIRST_TEXT, messages: afterFirstReading() });
     const state = reduce(read, { type: 'begin', intent: { kind: 'resume' } }, { type: 'resumed', snapshot: null });
-    const can = affordances(state, NOW);
+    const can = affordances(state);
 
     expect(state.availability).toBe('available');
     expect(state.snapshot?.turns).toHaveLength(2);
@@ -57,12 +77,12 @@ describe('conversation ui state', () => {
   });
 
   it('leaves every exit live after a read failed, since a read holds no field back', () => {
-    const read = opened({ state: 'recommendation', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 });
+    const read = opened({ state: 'recommendation', originalText: FIRST_TEXT, messages: afterFirstReading() });
     const lost = reduce(read, { type: 'begin', intent: { kind: 'resume' } }, { type: 'resumed', snapshot: null });
     const unreadable = reduce(read, { type: 'begin', intent: { kind: 'resume' } }, { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) });
 
     for (const state of [lost, unreadable]) {
-      const can = affordances(state, NOW);
+      const can = affordances(state);
       expect(can.locked).toBe(false);
       expect(can.canCancel).toBe(true);
       expect(can.canRetry).toBe(true);
@@ -71,9 +91,8 @@ describe('conversation ui state', () => {
   });
 
   it('unlocks the question again when a skip fails, since a skip held no field back', () => {
-    const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
-    const failed = reduce(asking, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
-    const can = affordances(failed, NOW);
+    const failed = reduce(asking(), { type: 'begin', intent: skipIntent }, { type: 'failed', failure: classifyFailure(new ConversationContractError('messages')) });
+    const can = affordances(failed);
 
     expect(can.locked).toBe(false);
     expect(can.canSkip).toBe(true);
@@ -83,34 +102,41 @@ describe('conversation ui state', () => {
   });
 
   it('withdraws the replay of a failed skip once the captain answers the question instead', () => {
-    const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
-    const failed = reduce(asking, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
+    const failed = reduce(asking(), { type: 'begin', intent: skipIntent }, { type: 'failed', failure: classifyFailure(new ConversationContractError('messages')) });
     const typed = conversationReducer(failed, { type: 'draft', value: 'Segurança clínica.' });
 
-    expect(affordances(failed, NOW).canRetry).toBe(true);
-    expect(affordances(typed, NOW).canRetry).toBe(false);
-    expect(affordances(typed, NOW).canAnswer).toBe(true);
-    expect(affordances(conversationReducer(typed, { type: 'draft', value: '' }), NOW).canRetry).toBe(true);
+    expect(affordances(failed).canRetry).toBe(true);
+    expect(affordances(typed).canRetry).toBe(false);
+    expect(affordances(typed).canSend).toBe(true);
+    expect(affordances(conversationReducer(typed, { type: 'draft', value: '' })).canRetry).toBe(true);
   });
 
   it('keeps replaying a failed read while the captain types, since typing answers nothing it sent', () => {
-    const failed = reduce(initialConversationState(), { type: 'begin', intent: { kind: 'resume' } }, { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) }, { type: 'draft', value: 'Somos uma clínica de bairro.' });
+    const failed = reduce(initialConversationState(), { type: 'begin', intent: { kind: 'resume' } }, { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) }, { type: 'draft', value: FIRST_TEXT });
 
-    expect(affordances(failed, NOW).canRetry).toBe(true);
+    expect(affordances(failed).canRetry).toBe(true);
   });
 
   it('holds the field a failed answer came from until the captain decides what to do with it', () => {
-    const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
-    const failed = reduce(asking, { type: 'draft', value: 'Segurança clínica.' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
-    const can = affordances(failed, NOW);
+    const failed = reduce(asking(), { type: 'draft', value: 'Segurança clínica.' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('messages')) });
+    const can = affordances(failed);
 
     expect(can.locked).toBe(true);
     expect(can.canDiscard).toBe(true);
   });
 
+  it('holds the field a failed correction came from, exactly as it holds a failed answer', () => {
+    const failed = reduce(asking(), { type: 'correct', value: 'Carinho no atendimento.' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-correct', intent: 'correct', message: 'Carinho no atendimento.' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('messages')) });
+
+    expect(failed.correcting).toBe(true);
+    expect(affordances(failed).locked).toBe(true);
+    expect(affordances(failed).canDiscard).toBe(true);
+    expect(progressLabel(conversationReducer(failed, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-correct', intent: 'correct', message: 'Carinho no atendimento.' } } }))).toBe('Registrando a correção…');
+  });
+
   it('offers no edit-and-resend for a failed read, which carried no field', () => {
-    const failed = reduce(opened({ state: 'recommendation', messageCount: 1 }), { type: 'begin', intent: { kind: 'resume' } }, { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) });
-    const can = affordances(failed, NOW);
+    const failed = reduce(opened({ state: 'recommendation', messages: afterFirstReading() }), { type: 'begin', intent: { kind: 'resume' } }, { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) });
+    const can = affordances(failed);
 
     expect(can.canRetry).toBe(true);
     expect(can.canDiscard).toBe(false);
@@ -119,16 +145,16 @@ describe('conversation ui state', () => {
   it('offers edit-and-resend for a failed send, which came from a field on screen', () => {
     const failed = reduce(opened(), { type: 'draft', value: 'Somos uma clínica veterinária de bairro.' }, { type: 'begin', intent: entryIntent }, { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) });
 
-    expect(affordances(failed, NOW).canDiscard).toBe(true);
+    expect(affordances(failed).canDiscard).toBe(true);
   });
 
   it('keeps the history and the draft while a send is in flight and refuses a duplicate send', () => {
-    const state = reduce(opened({ turns: [entryTurn('Somos uma clínica de bairro.')] }), { type: 'draft', value: 'Somos uma clínica veterinária de bairro.' }, { type: 'begin', intent: entryIntent });
+    const state = reduce(opened({ messages: [message(0, { author: 'captain', text: FIRST_TEXT, state: 'entry' })] }), { type: 'draft', value: 'Somos uma clínica veterinária de bairro.' }, { type: 'begin', intent: entryIntent });
 
     expect(state.snapshot?.turns).toHaveLength(1);
     expect(state.draft).toBe('Somos uma clínica veterinária de bairro.');
     expect(progressLabel(state)).toBe('Lendo o texto do briefing…');
-    expect(affordances(state, NOW).canSendEntry).toBe(false);
+    expect(affordances(state).canSend).toBe(false);
   });
 
   it('preserves the draft through a network failure and offers a retry', () => {
@@ -136,11 +162,11 @@ describe('conversation ui state', () => {
 
     expect(state.draft).toBe('Somos uma clínica veterinária de bairro.');
     expect(state.failure?.message).toContain('Nada foi fechado');
-    expect(affordances(state, NOW).canRetry).toBe(true);
+    expect(affordances(state).canRetry).toBe(true);
   });
 
   it('explains an off-contract response and does not advance the conversation', () => {
-    const state = reduce(opened(), { type: 'begin', intent: entryIntent }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
+    const state = reduce(opened(), { type: 'begin', intent: entryIntent }, { type: 'failed', failure: classifyFailure(new ConversationContractError('messages')) });
 
     expect(state.failure?.message).toContain('não seguiu o contrato');
     expect(state.snapshot?.state).toBe('entry');
@@ -164,17 +190,17 @@ describe('conversation ui state', () => {
   });
 
   it('stops announcing a failed skip as being sent', () => {
-    const asking = opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 });
-    const sending = reduce(asking, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } });
-    const failed = conversationReducer(sending, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) });
+    const sending = reduce(asking(), { type: 'begin', intent: skipIntent });
+    const failed = conversationReducer(sending, { type: 'failed', failure: classifyFailure(new ConversationContractError('messages')) });
 
     expect(pendingMessage(sending)).toBe('Pular esta pergunta');
     expect(pendingMessage(failed)).toBeNull();
   });
 
   it('clears the answer field only when the server accepted the turn', () => {
-    const sending = reduce(opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 }), { type: 'draft', value: 'Segurança clínica sem perder o carinho.' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica sem perder o carinho.' } } });
-    const settled = conversationReducer(sending, { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', turns: [answerTurn('Segurança clínica sem perder o carinho.'), confirmationTurn()], summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
+    const sending = reduce(asking(), { type: 'draft', value: 'Segurança clínica sem perder o carinho.' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica sem perder o carinho.' } } });
+    const confirmation = confirmationTurn();
+    const settled = conversationReducer(sending, { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', messages: [...answered(), message(4, { author: 'studio', text: confirmation.message, state: 'confirmation', turn: confirmation })], summary: CONSOLIDATED_SUMMARY, questionCount: 1 }) });
 
     expect(sending.draft).not.toBe('');
     expect(settled.draft).toBe('');
@@ -183,81 +209,80 @@ describe('conversation ui state', () => {
   });
 
   it('leaves the next question an empty field after a skip, never the text written for the last one', () => {
-    const skipping = reduce(opened({ state: 'question', question: clarifyingQuestion() }), { type: 'draft', value: 'rascunho pela metade' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } });
-    const nextQuestion = conversationSnapshot({ state: 'question', question: { id: 'question-second', prompt: 'Que prova o público pede primeiro?', why: 'Ela decide o que a home mostra antes de tudo.' }, messageCount: 3 });
+    const skipping = reduce(asking(), { type: 'draft', value: 'rascunho pela metade' }, { type: 'begin', intent: skipIntent });
+    const follow = questionTurn(followUpQuestion());
+    const nextQuestion = conversationSnapshot({ state: 'question', messages: [...answered(), message(4, { author: 'studio', text: follow.message, state: 'question', turn: follow })], questionCount: 2 });
     const settled = conversationReducer(skipping, { type: 'settled', snapshot: nextQuestion });
-    const can = affordances(settled, NOW);
+    const can = affordances(settled);
 
     expect(pendingMessage(skipping)).toBe('Pular esta pergunta');
     expect(settled.draft).toBe('');
     expect(can.asking).toBe(true);
-    expect(can.canAnswer).toBe(false);
+    expect(can.canSend).toBe(false);
   });
 
   it('holds an edited summary across a failed close so the retry closes what the captain wrote', () => {
     const closeIntent = { kind: 'confirm', request: { idempotencyKey: 'key-confirm', summary: 'Clínica de bairro com acompanhamento como prova.' } } as const;
-    const edited = reduce(opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }), { type: 'summaryDraft', value: 'Clínica de bairro com acompanhamento como prova.' }, { type: 'begin', intent: closeIntent }, { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) });
+    const edited = reduce(opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY }), { type: 'summaryDraft', value: 'Clínica de bairro com acompanhamento como prova.' }, { type: 'begin', intent: closeIntent }, { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) });
 
     expect(edited.summaryDraft).toBe('Clínica de bairro com acompanhamento como prova.');
     expect(edited.pending).toEqual(closeIntent);
     expect(progressLabel(conversationReducer(edited, { type: 'begin', intent: closeIntent }))).toBe('Fechando o briefing…');
   });
 
-  it('offers the editable summary and a manual close once the message ceiling is reached', () => {
-    const state = reduce(opened({ state: 'question', question: clarifyingQuestion(), summary: CONSOLIDATED_SUMMARY, messageCount: 6 }), { type: 'summaryDraft', value: CONSOLIDATED_SUMMARY });
-    const can = affordances(state, NOW);
+  it('offers the editable summary and a manual close once the question ceiling is reached', () => {
+    const state = reduce(opened({ state: 'confirmation', messages: withOpenQuestion(), summary: CONSOLIDATED_SUMMARY, questionCount: BRIEFING_CONVERSATION_MAX_QUESTIONS, limitReached: true }), { type: 'summaryDraft', value: CONSOLIDATED_SUMMARY });
+    const can = affordances(state);
 
     expect(can.atLimit).toBe(true);
-    expect(can.canAnswer).toBe(false);
+    expect(can.canSend).toBe(false);
     expect(can.canSkip).toBe(false);
     expect(can.canConfirm).toBe(true);
   });
 
-  it('stops asking for the initial text once a ceiling was reached', () => {
-    const state = reduce(opened({ state: 'entry', briefing: 'Somos uma clínica veterinária de bairro.', messageCount: 6 }), { type: 'draft', value: 'Somos uma clínica veterinária de bairro.' });
-    const can = affordances(state, NOW);
+  it('stops asking for more text once a ceiling was reached', () => {
+    const state = reduce(opened({ state: 'confirmation', originalText: FIRST_TEXT, summary: CONSOLIDATED_SUMMARY, questionCount: BRIEFING_CONVERSATION_MAX_QUESTIONS }), { type: 'draft', value: 'mais contexto' });
+    const can = affordances(state);
 
     expect(can.atLimit).toBe(true);
-    expect(can.canSendEntry).toBe(false);
+    expect(can.composerOpen).toBe(false);
+    expect(can.canSend).toBe(false);
     expect(can.canConfirm).toBe(true);
   });
 
   it('keeps a summary the captain edited when another request settles', () => {
     const edited = reduce(
-      opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
+      opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY }),
       { type: 'summaryDraft', value: 'Clínica de bairro com acompanhamento como prova.' },
       { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-cancel', intent: 'cancel', message: '' } } },
     );
-    const settled = conversationReducer(edited, { type: 'settled', snapshot: conversationSnapshot({ state: 'cancelled', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
+    const settled = conversationReducer(edited, { type: 'settled', snapshot: conversationSnapshot({ state: 'failed', summary: CONSOLIDATED_SUMMARY, error: { code: 'CONVERSATION_NO_ANSWER', message: 'o modelo não respondeu' } }) });
 
     expect(settled.summaryDraft).toBe('Clínica de bairro com acompanhamento como prova.');
-    expect(affordances(settled, NOW).canConfirm).toBe(true);
+    expect(affordances(settled).canConfirm).toBe(true);
   });
 
   it('takes the server summary when the captain never touched the field', () => {
-    const sending = reduce(
-      opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 }),
-      { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } },
-    );
-    const settled = conversationReducer(sending, { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
+    const sending = reduce(asking(), { type: 'begin', intent: skipIntent });
+    const settled = conversationReducer(sending, { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, questionCount: 1 }) });
 
     expect(settled.summaryDraft).toBe(CONSOLIDATED_SUMMARY);
   });
 
   it('locks the field a failed request came from until the captain replays or discards it', () => {
     const failed = reduce(
-      opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
+      opened({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY }),
       { type: 'begin', intent: { kind: 'confirm', request: { idempotencyKey: 'key-confirm', summary: CONSOLIDATED_SUMMARY } } },
       { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
     );
-    const can = affordances(failed, NOW);
+    const can = affordances(failed);
 
     expect(can.locked).toBe(true);
     expect(can.canConfirm).toBe(false);
     expect(can.canRetry).toBe(true);
 
     const discarded = conversationReducer(failed, { type: 'discard' });
-    const after = affordances(discarded, NOW);
+    const after = affordances(discarded);
 
     expect(discarded.pending).toBeNull();
     expect(discarded.failure).toBeNull();
@@ -275,20 +300,20 @@ describe('conversation ui state', () => {
     );
 
     expect(failed.availability).toBe('unreachable');
-    expect(affordances(failed, NOW).ready).toBe(false);
-    expect(affordances(failed, NOW).canRetry).toBe(true);
+    expect(affordances(failed).ready).toBe(false);
+    expect(affordances(failed).canRetry).toBe(true);
   });
 
-  it('offers no empty close for a cancelled conversation that persisted no text', () => {
-    const can = affordances(opened({ state: 'cancelled', messageCount: 0 }), NOW);
+  it('offers no empty close for a conversation that persisted no text', () => {
+    const can = affordances(opened({ state: 'failed', error: { code: 'CONVERSATION_NO_ANSWER', message: 'o modelo não respondeu' } }));
 
     expect(can.summaryOpen).toBe(false);
     expect(can.canConfirm).toBe(false);
   });
 
   it('closes a consolidated summary the server left unconfirmed', () => {
-    const state = opened({ state: 'final', briefing: 'texto original', summary: CONSOLIDATED_SUMMARY, messageCount: 4 });
-    const can = affordances(state, NOW);
+    const state = opened({ state: 'final', originalText: FIRST_TEXT, summary: CONSOLIDATED_SUMMARY });
+    const can = affordances(state);
 
     expect(can.closed).toBe(false);
     expect(state.summaryDraft).toBe(CONSOLIDATED_SUMMARY);
@@ -297,40 +322,46 @@ describe('conversation ui state', () => {
   });
 
   it('closes nothing further once the briefing is closed', () => {
-    const can = affordances(opened({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T09:00:00.000Z', messageCount: 4 }), NOW);
+    const can = affordances(opened({
+      state: 'final',
+      summary: CONSOLIDATED_SUMMARY,
+      briefing: CONSOLIDATED_SUMMARY,
+      confirmations: [{ revision: 1, briefing: CONSOLIDATED_SUMMARY, openGaps: [], confirmedAt: '2026-09-11T09:00:00.000Z', messageCount: 5 }],
+    }));
 
     expect(can.closed).toBe(true);
     expect(can.canConfirm).toBe(false);
     expect(can.canCancel).toBe(false);
   });
 
-  it('leaves a cancelled conversation with nothing to send, but still closable', () => {
-    const state = opened({ state: 'cancelled', briefing: 'Somos uma clínica veterinária de bairro.', messageCount: 2 });
-    const can = affordances(state, NOW);
+  it('leaves a cancelled conversation with nothing to send and nothing to close, since the contract gives it no exit', () => {
+    const state = opened({ state: 'cancelled', originalText: FIRST_TEXT, messages: afterFirstReading() });
+    const can = affordances(state);
 
     expect(can.canCancel).toBe(false);
-    expect(can.canSendEntry).toBe(false);
+    expect(can.composerOpen).toBe(false);
     expect(can.asking).toBe(false);
     expect(can.atLimit).toBe(false);
-    expect(can.summaryOpen).toBe(true);
-    expect(state.summaryDraft).toBe('Somos uma clínica veterinária de bairro.');
-    expect(can.canConfirm).toBe(true);
+    expect(can.summaryOpen).toBe(false);
+    expect(can.canConfirm).toBe(false);
   });
 
-  it('keeps a failed conversation closable from its editable summary', () => {
-    const can = affordances(opened({ state: 'failed', briefing: 'Somos uma clínica veterinária de bairro.', error: 'o modelo não respondeu', messageCount: 2 }), NOW);
+  it('keeps a conversation the model could not finish closable from its editable summary', () => {
+    const state = opened({ state: 'failed', originalText: FIRST_TEXT, messages: afterFirstReading(), error: { code: 'CONVERSATION_NO_ANSWER', message: 'o modelo não respondeu' }, fallback: true });
+    const can = affordances(state);
 
     expect(can.canCancel).toBe(false);
     expect(can.summaryOpen).toBe(true);
+    expect(state.summaryDraft).toBe(FIRST_TEXT);
     expect(can.canConfirm).toBe(true);
   });
 
   it('calls no question open while the conversation is not asking one', () => {
-    const can = affordances(opened({ state: 'recommendation', question: clarifyingQuestion(), messageCount: 1 }), NOW);
+    const can = affordances(opened({ state: 'recommendation', messages: withOpenQuestion(), questionCount: 1 }));
 
     expect(can.asking).toBe(false);
-    expect(can.canAnswer).toBe(false);
     expect(can.canSkip).toBe(false);
+    expect(can.composerOpen).toBe(true);
   });
 
   it('starts a reopened run from nothing, so a stale draft never leaks between executions', () => {
@@ -343,14 +374,14 @@ describe('conversation ui state', () => {
 
 describe('summary seeding', () => {
   it('falls back to the captain’s own text when a ceiling arrives before a summary', () => {
-    const state = conversationReducer(initialConversationState(), { type: 'settled', snapshot: conversationSnapshot({ state: 'question', briefing: 'Somos uma clínica veterinária de bairro.', question: clarifyingQuestion(), messageCount: 6 }) });
+    const state = conversationReducer(initialConversationState(), { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', originalText: FIRST_TEXT, questionCount: BRIEFING_CONVERSATION_MAX_QUESTIONS }) });
 
-    expect(state.summaryDraft).toBe('Somos uma clínica veterinária de bairro.');
-    expect(affordances(state, NOW).canConfirm).toBe(true);
+    expect(state.summaryDraft).toBe(FIRST_TEXT);
+    expect(affordances(state).canConfirm).toBe(true);
   });
 
   it('prefers the consolidated summary whenever the server produced one', () => {
-    const state = conversationReducer(initialConversationState(), { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', briefing: 'texto original', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }) });
+    const state = conversationReducer(initialConversationState(), { type: 'settled', snapshot: conversationSnapshot({ state: 'confirmation', originalText: FIRST_TEXT, summary: CONSOLIDATED_SUMMARY }) });
 
     expect(state.summaryDraft).toBe(CONSOLIDATED_SUMMARY);
   });
@@ -358,69 +389,40 @@ describe('summary seeding', () => {
 
 describe('correctable turn', () => {
   it('names the answer to the open question, never the entry text', () => {
-    const state = opened({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion())], question: clarifyingQuestion(), messageCount: 3 });
+    const state = opened({ state: 'question', originalText: FIRST_TEXT, messages: answered(), questionCount: 1 });
 
-    expect(correctableTurnId(state, affordances(state, NOW))).toBe('turn-answer');
-  });
-
-  it('never corrects an answer to a question the conversation has already moved past', () => {
-    const state = opened({
-      state: 'question',
-      turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion()), followUpQuestionTurn()],
-      question: followUpQuestion(),
-      messageCount: 4,
-    });
-
-    expect(correctableTurnId(state, affordances(state, NOW))).toBeNull();
+    expect(correctableTurnId(state, affordances(state))).toBe('msg-3');
   });
 
   it('names nothing while a question the captain never answered is the only field on screen', () => {
-    const state = opened({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 });
+    const state = asking();
 
-    expect(correctableTurnId(state, affordances(state, NOW))).toBeNull();
+    expect(correctableTurnId(state, affordances(state))).toBeNull();
   });
 
-  it('names the entry turn while the entry composer is the field on screen', () => {
-    const state = opened({ state: 'entry', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 });
+  it('names the last text the composer sent while the composer is the field on screen', () => {
+    const state = opened({ state: 'recommendation', originalText: FIRST_TEXT, messages: afterFirstReading() });
 
-    expect(correctableTurnId(state, affordances(state, NOW))).toBe('turn-entry');
+    expect(correctableTurnId(state, affordances(state))).toBe('msg-0');
   });
 
   it('names nothing where no field would receive the corrected text', () => {
-    const state = opened({ state: 'confirmation', turns: [entryTurn('Somos uma clínica de bairro.'), confirmationTurn()], summary: CONSOLIDATED_SUMMARY, messageCount: 3 });
+    const state = opened({
+      state: 'final',
+      originalText: FIRST_TEXT,
+      summary: CONSOLIDATED_SUMMARY,
+      briefing: CONSOLIDATED_SUMMARY,
+      messages: afterFirstReading(),
+      confirmations: [{ revision: 1, briefing: CONSOLIDATED_SUMMARY, openGaps: [], confirmedAt: '2026-09-11T09:00:00.000Z', messageCount: 2 }],
+    });
 
-    expect(correctableTurnId(state, affordances(state, NOW))).toBeNull();
-  });
-});
-
-describe('time ceiling refresh', () => {
-  it('measures the wait to a ceiling that has not arrived yet', () => {
-    const state = opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T10:10:00.000Z' }, messageCount: 2 });
-
-    expect(limitRefreshDelayMs(state, NOW)).toBe(600_000);
-    // The panel is still asking, which is exactly why the wait has to be kept.
-    expect(affordances(state, NOW).canSkip).toBe(true);
-    expect(affordances(state, new Date('2026-09-11T10:10:00.000Z')).canSkip).toBe(false);
+    expect(correctableTurnId(state, affordances(state))).toBeNull();
   });
 
-  it('waits for nothing once the ceiling has passed, or when there is none', () => {
-    const passed = opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T09:00:00.000Z' }, messageCount: 2 });
+  it('loads the corrected text back and sends it as a correction, not as a new answer', () => {
+    const state = reduce(opened({ state: 'question', originalText: FIRST_TEXT, messages: answered(), questionCount: 1 }), { type: 'correct', value: 'Carinho no atendimento.' }, { type: 'draft', value: 'Carinho no atendimento, com segurança clínica.' });
 
-    expect(limitRefreshDelayMs(passed, NOW)).toBeNull();
-    expect(limitRefreshDelayMs(opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: NOW.toISOString() }, messageCount: 2 }), NOW)).toBeNull();
-    expect(limitRefreshDelayMs(opened({ state: 'question', question: clarifyingQuestion(), messageCount: 2 }), NOW)).toBeNull();
-    expect(limitRefreshDelayMs(initialConversationState(), NOW)).toBeNull();
-  });
-});
-
-describe('a ceiling further away than a timer can hold', () => {
-  it('waits in a step the platform can actually schedule', () => {
-    const distant = opened({ state: 'question', question: clarifyingQuestion(), limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2027-09-11T10:00:00.000Z' }, messageCount: 2 });
-
-    const delay = limitRefreshDelayMs(distant, NOW);
-
-    expect(delay).toBe(2_147_483_647);
-    expect(delay).toBeLessThanOrEqual(2_147_483_647);
-    expect(affordances(distant, NOW).atLimit).toBe(false);
+    expect(state.correcting).toBe(true);
+    expect(state.draft).toBe('Carinho no atendimento, com segurança clínica.');
   });
 });

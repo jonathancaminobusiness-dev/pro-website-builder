@@ -1,6 +1,6 @@
-import { useEffect, useReducer, useRef, type ReactElement } from 'react';
-import { type ConversationTurn } from './contract.js';
-import { affordances, correctableTurnId, limitRefreshDelayMs, pendingMessage, progressLabel, type ConversationUiState } from './machine.js';
+import { useEffect, useRef, type ReactElement } from 'react';
+import { type ConversationState, type ConversationTurn } from './contract.js';
+import { affordances, correctableTurnId, pendingMessage, progressLabel, type ConversationUiState } from './machine.js';
 
 /**
  * The short conversation that happens before the identity stage. It reads a
@@ -11,16 +11,15 @@ import { affordances, correctableTurnId, limitRefreshDelayMs, pendingMessage, pr
  * “abrir preview”, and no control in this panel opens one. The only way out is
  * “Fechar briefing”; the visual stage owns the rest.
  *
- * Known limitation, to be picked up by the integration slice: a cancelled or
- * failed conversation cannot be reopened on the same execution, because the
- * core slice exposes no server capability to restart one. The panel therefore
- * says so and offers the editable summary, or a new execution when there is no
- * persisted text to close.
+ * Known limitation, to be picked up by the integration slice: a cancelled
+ * conversation cannot be reopened on the same execution, because the contract
+ * gives `cancelled` no exit. The panel therefore says so and points at the one
+ * way forward, a new execution. A conversation the model could not finish is
+ * different: the contract keeps the captain's right to close it, so the
+ * editable summary and “Fechar briefing” stay on screen.
  */
 export interface BriefingConversationProps {
   state: ConversationUiState;
-  /** Injected so the time ceiling is decidable in a test. */
-  now?: Date;
   onDraftChange: (value: string) => void;
   onSummaryChange: (value: string) => void;
   onSendEntry: () => void;
@@ -36,16 +35,28 @@ export interface BriefingConversationProps {
   onCorrect: (turn: ConversationTurn) => void;
 }
 
-const intentLabels: Record<ConversationTurn['intent'], string> = {
-  entry: 'Você · entrada',
-  recommendation: 'Studio · recomendação',
-  question: 'Studio · pergunta de esclarecimento',
-  answer: 'Você · resposta',
-  skip: 'Você · pulou a pergunta',
-  confirmation: 'Studio · confirmação',
-  final: 'Studio · resumo',
-  cancel: 'Você · cancelou',
-};
+/**
+ * Who is speaking and about what. A captain bubble is named by the state it was
+ * written in — the field it came from — and a Studio bubble by the move the
+ * model made; a turn with no move is the server's own note.
+ */
+function turnLabel(turn: ConversationTurn): string {
+  if (turn.role === 'captain') {
+    switch (turn.state) {
+      case 'entry': return 'Você · entrada';
+      case 'question': return 'Você · resposta';
+      case 'confirmation': return 'Você · briefing fechado';
+      default: return 'Você';
+    }
+  }
+  switch (turn.intent) {
+    case 'recommendation': return 'Studio · recomendação';
+    case 'question': return 'Studio · pergunta de esclarecimento';
+    case 'confirmation': return 'Studio · confirmação';
+    case 'final': return 'Studio · resumo';
+    default: return 'Studio · aviso';
+  }
+}
 
 function readingList(title: string, items: string[], className: string): ReactElement | null {
   if (items.length === 0) return null;
@@ -57,26 +68,14 @@ function readingList(title: string, items: string[], className: string): ReactEl
 
 export default function BriefingConversation(props: BriefingConversationProps): ReactElement | null {
   const { state } = props;
-  const now = props.now ?? new Date();
-  const can = affordances(state, now);
+  const can = affordances(state);
   const snapshot = state.snapshot;
   const answerRef = useRef<HTMLTextAreaElement>(null);
   const questionId = snapshot?.question?.id;
-  const [, wake] = useReducer((count: number) => count + 1, 0);
-  const ceilingDelay = limitRefreshDelayMs(state, now);
 
   // The one question on screen takes focus when it arrives, so a captain on the
   // keyboard lands in the field that is being asked for.
   useEffect(() => { if (questionId) answerRef.current?.focus(); }, [questionId]);
-
-  // The time ceiling is a fact about the clock, not about the server: an idle
-  // panel wakes itself at `expiresAt` so the limit state is on screen the moment
-  // it applies, instead of waiting for a re-render that may never come.
-  useEffect(() => {
-    if (ceilingDelay === null) return;
-    const timer = setTimeout(wake, ceilingDelay);
-    return () => { clearTimeout(timer); };
-  }, [ceilingDelay]);
 
   // A server with no conversation for this run says nothing about the briefing
   // flow that already exists: the panel disappears and the old field decides.
@@ -97,16 +96,18 @@ export default function BriefingConversation(props: BriefingConversationProps): 
     </section>;
   }
 
-  const counter = `${snapshot.messageCount}/${snapshot.limits.messageLimit} mensagens`;
+  // The ceiling is the shared contract's, read from the snapshot the server
+  // sent: the interface keeps no number of its own for it.
+  const counter = `${snapshot.questionCount}/${snapshot.limits.questionLimit} perguntas`;
   // What is on screen is decided by the same affordances that decide what can be
   // sent, so no control renders that could never act.
   const showSummary = can.summaryOpen;
-  const showEntry = can.entryOpen;
+  const showComposer = can.composerOpen;
   const showQuestion = can.asking;
   // Correcting a turn loads it back into the draft, so it is offered only on the
-  // turn the field on screen would receive: the entry while the entry composer
-  // is up, the latest answer while a question is open.
-  const draftVisible = showEntry || showQuestion;
+  // turn the field on screen would receive: the last text the composer sent
+  // while the composer is up, the latest answer while a question is open.
+  const draftVisible = showComposer || showQuestion;
   const correctable = correctableTurnId(state, can);
   const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
   const newExecutionExit = 'Não há texto salvo para fechar um briefing, então o caminho daqui é criar uma nova execução.';
@@ -131,7 +132,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
 
     <ol className="chat-log" role="log" aria-live="polite" aria-label="Histórico da conversa de briefing">
       {snapshot.turns.map((turn) => <li key={turn.id} className={`chat-turn chat-${turn.role}`}>
-        <p className="chat-role">{intentLabels[turn.intent]}</p>
+        <p className="chat-role">{turnLabel(turn)}</p>
         <p className="chat-message">{turn.message}</p>
         {readingList('Fatos que você disse', turn.facts, 'facts')}
         {readingList('Hipóteses do Studio', turn.hypotheses, 'hypotheses')}
@@ -149,11 +150,13 @@ export default function BriefingConversation(props: BriefingConversationProps): 
 
     {state.failure && <ChatFailure failure={state.failure} canRetry={can.canRetry} discardLabel={can.canDiscard ? 'Editar e reenviar' : 'Dispensar aviso'} onRetry={props.onRetry} onDiscard={props.onDiscard} />}
 
-    {showEntry && <div className="chat-compose">
-      <label htmlFor="briefing-chat-entry">Conte sobre o negócio: nicho, promessa, provas e o que a identidade deve evitar</label>
+    {showComposer && <div className="chat-compose">
+      <label htmlFor="briefing-chat-entry">{can.entryOpen
+        ? 'Conte sobre o negócio: nicho, promessa, provas e o que a identidade deve evitar'
+        : 'Acrescente o que faltou: cada mensagem é relida antes da próxima pergunta'}</label>
       <textarea
         id="briefing-chat-entry"
-        rows={5}
+        rows={can.entryOpen ? 5 : 3}
         value={state.draft}
         maxLength={snapshot.limits.briefingMaxLength}
         readOnly={can.locked}
@@ -165,14 +168,14 @@ export default function BriefingConversation(props: BriefingConversationProps): 
         <span aria-live="polite">{state.draft.length}/{snapshot.limits.briefingMaxLength} caracteres</span>
       </div>
       <div className="actions">
-        <button className="primary" onClick={props.onSendEntry} disabled={!can.canSendEntry}>Enviar para leitura</button>
+        <button className="primary" onClick={props.onSendEntry} disabled={!can.canSend}>{can.entryOpen ? 'Enviar para leitura' : 'Enviar mensagem'}</button>
       </div>
     </div>}
 
     {showQuestion && snapshot.question && <div className="chat-question">
       <p className="chat-question-prompt" id="briefing-chat-question">{snapshot.question.prompt}</p>
       <p className="chat-why"><strong>Por que isso muda a identidade.</strong> {snapshot.question.why}</p>
-      {snapshot.question.options && snapshot.question.options.length > 0 && <ul className="chat-options" aria-label="Respostas sugeridas">
+      {snapshot.question.options.length > 0 && <ul className="chat-options" aria-label="Respostas sugeridas">
         {snapshot.question.options.map((option) => <li key={option}>
           <button className="secondary" onClick={() => props.onDraftChange(option)} disabled={can.locked}>{option}</button>
         </li>)}
@@ -190,7 +193,7 @@ export default function BriefingConversation(props: BriefingConversationProps): 
       />
       <div className="actions">
         <button className="secondary" onClick={props.onSkip} disabled={!can.canSkip}>Pular esta pergunta</button>
-        <button className="primary" onClick={props.onAnswer} disabled={!can.canAnswer}>Responder</button>
+        <button className="primary" onClick={props.onAnswer} disabled={!can.canSend}>Responder</button>
       </div>
     </div>}
 
@@ -245,12 +248,14 @@ export default function BriefingConversation(props: BriefingConversationProps): 
       <div className="chat-direction-grid">
         {snapshot.directions.map((direction) => <article key={direction.id} className="chat-direction" aria-labelledby={`chat-dir-${direction.id}`}>
           <h3 id={`chat-dir-${direction.id}`}>{direction.label}</h3>
-          <p className="chat-direction-thesis">{direction.thesis}</p>
+          <p className="chat-direction-thesis">{direction.positioning}</p>
           <dl>
-            <div><dt>Posicionamento</dt><dd>{direction.positioning}</dd></div>
             <div><dt>Tom e linguagem</dt><dd>{direction.tone}</dd></div>
-            <div><dt>Visual e composição</dt><dd>{direction.composition}</dd></div>
-            <div><dt>Tipografia e aplicações</dt><dd>{direction.typography}</dd></div>
+            <div><dt>Linguagem visual</dt><dd>{direction.visualLanguage}</dd></div>
+            <div><dt>Paleta descrita</dt><dd>{direction.palette}</dd></div>
+            <div><dt>Tipografia</dt><dd>{direction.typography}</dd></div>
+            <div><dt>Composição</dt><dd>{direction.composition}</dd></div>
+            <div><dt>Aplicações</dt><dd>{direction.applications.join(' · ')}</dd></div>
           </dl>
           <p className="chat-direction-note">conceito descrito · sem preview</p>
         </article>)}
@@ -275,7 +280,7 @@ function ChatFailure(props: { failure: { message: string }; canRetry: boolean; d
   </div>;
 }
 
-function stateLabel(state: string, closed: boolean): string {
+function stateLabel(state: ConversationState, closed: boolean): string {
   if (closed) return 'briefing fechado';
   switch (state) {
     case 'entry': return 'aguardando seu texto';
@@ -285,6 +290,5 @@ function stateLabel(state: string, closed: boolean): string {
     case 'final': return 'resumo pronto';
     case 'cancelled': return 'cancelada';
     case 'failed': return 'falhou';
-    default: return state;
   }
 }

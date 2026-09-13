@@ -1,88 +1,103 @@
 /**
- * Local mirror of the briefing conversation contract published by the server
- * slice (`fm/pwb-chat-core-k9`). Every name here — the endpoint paths, the
- * seven states and the shape of a turn — is the one that branch exposes. Every
- * other Studio module reads the wire shapes from here, so adopting the shared
- * package is a change to this module's own imports and to nothing else.
+ * The Studio's one door onto the briefing conversation contract.
  *
- * The counter and the limits are read from what the server sent. The Studio
- * never keeps a number of its own for them: a ceiling the API moved has to move
- * on screen in the same deploy.
+ * The wire shapes, the states, the limits and the endpoint paths all come from
+ * `@pwb/domain/conversation`, which is the single contract the server and the
+ * Studio share. Nothing here re-declares one of them: this module parses what
+ * the API answered with the shared schema and adapts it into the small view
+ * model the panel reads — one turn per transcript entry, the single open
+ * question, the consolidated summary, the counter and its ceiling.
+ *
+ * The adaptation is deliberately the only thing that lives here. A screen needs
+ * a stable key per bubble and an id for the question it is answering; the
+ * transcript numbers its entries instead, so those ids are derived from that
+ * number and from nothing the Studio invented.
  */
+import {
+  BRIEFING_CONVERSATION_MAX_QUESTIONS,
+  BRIEFING_SUMMARY_MAX_LENGTH,
+  briefingConversationConfirmPath,
+  briefingConversationPath,
+  briefingConversationSnapshotSchema,
+  type BriefingConfirmRequest,
+  type BriefingConversationIntent,
+  type BriefingConversationMessage,
+  type BriefingConversationRequest,
+  type BriefingConversationSnapshot,
+  type BriefingConversationState,
+  type ConceptualDirection,
+} from '@pwb/domain/conversation';
 
-export const CONVERSATION_STATES = ['entry', 'recommendation', 'question', 'confirmation', 'final', 'cancelled', 'failed'] as const;
-export type ConversationState = (typeof CONVERSATION_STATES)[number];
-
-export const CONVERSATION_INTENTS = ['entry', 'recommendation', 'question', 'answer', 'skip', 'confirmation', 'final', 'cancel'] as const;
-export type ConversationIntent = (typeof CONVERSATION_INTENTS)[number];
+export type ConversationState = BriefingConversationState;
+export type ConversationIntent = BriefingConversationIntent;
+export type ConversationDirection = ConceptualDirection;
 
 /** The one question on screen. `why` is required: a question that cannot say what it changes is not asked. */
 export interface ConversationQuestion {
   id: string;
   prompt: string;
   why: string;
-  options?: string[];
+  options: string[];
 }
 
+/**
+ * One entry of the transcript as the panel shows it. `role` is what the bubble
+ * is styled and labelled by, so the server's `system` notes — a cancellation, a
+ * failure the captain must read — are the Studio speaking.
+ */
 export interface ConversationTurn {
   id: string;
   role: 'captain' | 'studio';
+  /** The conversation state this entry left behind: what labels a captain bubble. */
+  state: ConversationState;
+  /** The move the model made, when a model made one. A system note carries none. */
+  intent?: ConversationIntent;
   message: string;
-  intent: ConversationIntent;
   question?: ConversationQuestion;
   facts: string[];
   hypotheses: string[];
+  /** A declared gap and what it would change, in one line the panel can list. */
   unknowns: string[];
   summary?: string;
-  nextState: ConversationState;
-}
-
-/** A conceptual direction: text the captain reads. It carries no image, token or preview reference by construction. */
-export interface ConversationDirection {
-  id: string;
-  label: string;
-  thesis: string;
-  positioning: string;
-  tone: string;
-  composition: string;
-  typography: string;
 }
 
 export interface ConversationLimits {
-  /** Message ceiling for the whole conversation, counted the way `messageCount` counts. */
-  messageLimit: number;
+  /** How many questions the conversation may ask, from the shared contract. */
+  questionLimit: number;
   /** The briefing length the API accepts, so the editor and the chat agree on one number. */
   briefingMaxLength: number;
-  /** When the conversation window closes, if the server set one. */
-  expiresAt?: string;
 }
 
 export interface ConversationSnapshot {
   runId: string;
   state: ConversationState;
-  /** The captain's text as persisted on the execution. */
+  /** The captain's first text exactly as it was typed, as the execution persisted it. */
   briefing: string;
   turns: ConversationTurn[];
   /** The single current question, present only while the conversation is asking one. */
   question?: ConversationQuestion;
   /** The consolidated summary the captain edits and confirms. */
   summary: string;
-  messageCount: number;
+  /** Questions asked so far, counted by the server against `limits.questionLimit`. */
+  questionCount: number;
   limits: ConversationLimits;
+  /** The server's own verdict that the conversation may no longer ask. */
+  limitReached: boolean;
   directions: ConversationDirection[];
-  /** Set once the captain closed the briefing. */
-  closedAt?: string;
-  /** Why the server put the conversation in `failed`, when it did. */
+  /** True once the captain signed a briefing: at least one confirmation is on record. */
+  closed: boolean;
+  /** Why the server put the conversation in `failed`, or what it could not finish. */
   error?: string;
 }
+
+/** What the captain can do with one message, in the Studio's words. */
+export type ConversationSendIntent = 'entry' | 'answer' | 'correct' | 'skip' | 'cancel';
 
 export interface ConversationSendRequest {
   /** Re-sent verbatim on a retry, so the server folds the repeat into the same turn. */
   idempotencyKey: string;
-  intent: Extract<ConversationIntent, 'entry' | 'answer' | 'skip' | 'cancel'>;
+  intent: ConversationSendIntent;
   message: string;
-  /** The question the message answers, when it answers one. */
-  questionId?: string;
 }
 
 export interface ConversationConfirmRequest {
@@ -99,96 +114,67 @@ export class ConversationContractError extends Error {
   }
 }
 
-export function conversationPath(runId: string): string {
-  return `/api/identity/runs/${encodeURIComponent(runId)}/conversation`;
+export const conversationPath = briefingConversationPath;
+export const conversationConfirmPath = briefingConversationConfirmPath;
+
+/**
+ * The captain's move as the request body the contract defines. `entry` is an
+ * answer like any other — it is the Studio that knows the field it came from —
+ * and a move that carries no text sends none rather than an empty string.
+ */
+export function conversationSendBody(request: ConversationSendRequest): BriefingConversationRequest {
+  const action = request.intent === 'entry' ? 'answer' : request.intent;
+  const message = request.message.trim();
+  return { action, idempotencyKey: request.idempotencyKey, ...(message === '' ? {} : { message }) };
 }
 
-export function conversationConfirmPath(runId: string): string {
-  return `${conversationPath(runId)}/confirm`;
+export function conversationConfirmBody(request: ConversationConfirmRequest): BriefingConfirmRequest {
+  return { briefing: request.summary, idempotencyKey: request.idempotencyKey };
 }
 
-function record(value: unknown, detail: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new ConversationContractError(detail);
-  return value as Record<string, unknown>;
+/** The transcript numbers its entries, so the question a bubble asks is named by that number. */
+function questionId(index: number): string {
+  return `pergunta-${index}`;
 }
 
-function text(value: unknown, detail: string): string {
-  if (typeof value !== 'string') throw new ConversationContractError(detail);
-  return value;
+function adaptQuestion(message: BriefingConversationMessage): ConversationQuestion | undefined {
+  const question = message.turn?.question;
+  if (!question) return undefined;
+  return { id: questionId(message.index), prompt: question.text, why: question.why, options: [...question.options] };
 }
 
-function optionalText(value: unknown, detail: string): string | undefined {
-  return value === undefined || value === null ? undefined : text(value, detail);
-}
-
-function textList(value: unknown, detail: string): string[] {
-  if (value === undefined || value === null) return [];
-  if (!Array.isArray(value)) throw new ConversationContractError(detail);
-  return value.map((item) => text(item, detail));
-}
-
-function count(value: unknown, detail: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new ConversationContractError(detail);
-  return value;
-}
-
-function member<T extends string>(value: unknown, allowed: readonly T[], detail: string): T {
-  const candidate = text(value, detail);
-  if (!(allowed as readonly string[]).includes(candidate)) throw new ConversationContractError(detail);
-  return candidate as T;
-}
-
-function parseQuestion(value: unknown, detail: string): ConversationQuestion {
-  const source = record(value, detail);
-  const options = source.options === undefined || source.options === null ? undefined : textList(source.options, detail);
+function adaptTurn(message: BriefingConversationMessage): ConversationTurn {
+  const turn = message.turn;
+  const question = adaptQuestion(message);
   return {
-    id: text(source.id, detail),
-    prompt: text(source.prompt, detail),
-    why: text(source.why, detail),
-    ...(options && options.length > 0 ? { options } : {}),
+    id: message.id,
+    role: message.author === 'captain' ? 'captain' : 'studio',
+    state: message.state,
+    ...(turn ? { intent: turn.intent } : {}),
+    message: message.text,
+    ...(question ? { question } : {}),
+    facts: turn ? [...turn.facts] : [],
+    hypotheses: turn ? [...turn.hypotheses] : [],
+    unknowns: turn ? turn.unknowns.map((gap) => `${gap.gap} — ${gap.impact}`) : [],
+    ...(turn?.summary === undefined ? {} : { summary: turn.summary }),
   };
 }
 
-function parseTurn(value: unknown, position: number): ConversationTurn {
-  const detail = `turns[${position}]`;
-  const source = record(value, detail);
-  return {
-    id: text(source.id, detail),
-    role: member(source.role, ['captain', 'studio'] as const, detail),
-    message: text(source.message, detail),
-    intent: member(source.intent, CONVERSATION_INTENTS, detail),
-    ...(source.question === undefined || source.question === null ? {} : { question: parseQuestion(source.question, detail) }),
-    facts: textList(source.facts, detail),
-    hypotheses: textList(source.hypotheses, detail),
-    unknowns: textList(source.unknowns, detail),
-    ...(source.summary === undefined || source.summary === null ? {} : { summary: text(source.summary, detail) }),
-    nextState: member(source.nextState, CONVERSATION_STATES, detail),
-  };
-}
-
-function parseDirection(value: unknown, position: number): ConversationDirection {
-  const detail = `directions[${position}]`;
-  const source = record(value, detail);
-  return {
-    id: text(source.id, detail),
-    label: text(source.label, detail),
-    thesis: text(source.thesis, detail),
-    positioning: text(source.positioning, detail),
-    tone: text(source.tone, detail),
-    composition: text(source.composition, detail),
-    typography: text(source.typography, detail),
-  };
-}
-
-function parseLimits(value: unknown): ConversationLimits {
-  const source = record(value, 'limits');
-  const expiresAt = optionalText(source.expiresAt, 'limits.expiresAt');
-  if (expiresAt && !Number.isFinite(Date.parse(expiresAt))) throw new ConversationContractError('limits.expiresAt');
-  return {
-    messageLimit: count(source.messageLimit, 'limits.messageLimit'),
-    briefingMaxLength: count(source.briefingMaxLength, 'limits.briefingMaxLength'),
-    ...(expiresAt ? { expiresAt } : {}),
-  };
+/**
+ * The question that is actually open: the last one the conversation asked,
+ * offered only while the conversation is still in `question`. A state that
+ * moved on has answered it, and the panel must not go on showing a field for a
+ * question the server no longer holds.
+ */
+function openQuestion(snapshot: BriefingConversationSnapshot): ConversationQuestion | undefined {
+  if (snapshot.state !== 'question') return undefined;
+  for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
+    const message = snapshot.messages[index];
+    if (message === undefined) continue;
+    const question = adaptQuestion(message);
+    if (question) return question;
+  }
+  return undefined;
 }
 
 /**
@@ -197,45 +183,47 @@ function parseLimits(value: unknown): ConversationLimits {
  * the captain is offered another attempt with the draft still in hand.
  */
 export function parseConversationSnapshot(value: unknown): ConversationSnapshot {
-  const source = record(value, 'conversation');
-  const turns = Array.isArray(source.turns) ? source.turns.map(parseTurn) : (() => { throw new ConversationContractError('turns'); })();
-  const directions = source.directions === undefined || source.directions === null
-    ? []
-    : Array.isArray(source.directions) ? source.directions.map(parseDirection) : (() => { throw new ConversationContractError('directions'); })();
-  const closedAt = optionalText(source.closedAt, 'closedAt');
-  const error = optionalText(source.error, 'error');
+  const parsed = briefingConversationSnapshotSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new ConversationContractError(issue ? `${issue.path.join('.') || 'conversation'}: ${issue.message}` : 'conversation');
+  }
+  const snapshot = parsed.data;
+  const question = openQuestion(snapshot);
   return {
-    runId: text(source.runId, 'runId'),
-    state: member(source.state, CONVERSATION_STATES, 'state'),
-    briefing: text(source.briefing, 'briefing'),
-    turns,
-    ...(source.question === undefined || source.question === null ? {} : { question: parseQuestion(source.question, 'question') }),
-    summary: optionalText(source.summary, 'summary') ?? '',
-    messageCount: count(source.messageCount, 'messageCount'),
-    limits: parseLimits(source.limits),
-    directions,
-    ...(closedAt ? { closedAt } : {}),
-    ...(error ? { error } : {}),
+    runId: snapshot.runId,
+    state: snapshot.state,
+    briefing: snapshot.originalText,
+    turns: snapshot.messages.map(adaptTurn),
+    ...(question ? { question } : {}),
+    summary: snapshot.summary ?? '',
+    questionCount: snapshot.questionCount,
+    limits: { questionLimit: BRIEFING_CONVERSATION_MAX_QUESTIONS, briefingMaxLength: BRIEFING_SUMMARY_MAX_LENGTH },
+    limitReached: snapshot.limitReached || snapshot.questionCount >= BRIEFING_CONVERSATION_MAX_QUESTIONS,
+    directions: snapshot.directions.map((direction) => ({ ...direction, applications: [...direction.applications] })),
+    closed: snapshot.confirmations.length > 0,
+    ...(snapshot.error ? { error: snapshot.error.message } : {}),
   };
 }
 
-/** The message ceiling, read from the contract the server sent rather than from a constant in the interface. */
-export function atMessageLimit(snapshot: ConversationSnapshot): boolean {
-  return snapshot.messageCount >= snapshot.limits.messageLimit;
+/** The ceiling, read from the contract the server answered with rather than from a constant in the interface. */
+export function atQuestionLimit(snapshot: ConversationSnapshot): boolean {
+  return snapshot.questionCount >= snapshot.limits.questionLimit;
 }
 
-/** The time ceiling. A conversation with no `expiresAt` has none; a ceiling that arrives unreadable was already refused by the parser. */
-export function pastTimeLimit(snapshot: ConversationSnapshot, now: Date): boolean {
-  if (!snapshot.limits.expiresAt) return false;
-  return now.getTime() >= Date.parse(snapshot.limits.expiresAt);
-}
-
-/** A conversation that reached either ceiling stops asking and offers the editable summary and a manual close. */
-export function limitReached(snapshot: ConversationSnapshot, now: Date): boolean {
-  return atMessageLimit(snapshot) || pastTimeLimit(snapshot, now);
+/** A conversation that reached the ceiling stops asking and offers the editable summary and a manual close. */
+export function limitReached(snapshot: ConversationSnapshot): boolean {
+  return snapshot.limitReached;
 }
 
 /** The briefing is closed: the identity stage may run and the directions are readable. */
 export function briefingClosed(snapshot: ConversationSnapshot): boolean {
-  return snapshot.state === 'final' && snapshot.closedAt !== undefined;
+  return snapshot.closed;
 }
+
+/**
+ * Which moves the conversation still admits, decided by the shared contract
+ * rather than by a list the panel keeps: a state that may take a message, and a
+ * state the captain may close the briefing from.
+ */
+export { canConfirmBriefing, canSendBriefingMessage } from '@pwb/domain/conversation';

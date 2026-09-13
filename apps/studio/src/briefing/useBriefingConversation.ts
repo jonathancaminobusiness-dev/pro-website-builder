@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
-import { briefingClosed, type ConversationTurn } from './contract.js';
+import { briefingClosed, type ConversationSendIntent, type ConversationTurn } from './contract.js';
 import { newIdempotencyKey, type ConversationClient } from './client.js';
 import { classifyFailure, conversationReducer, initialConversationState, type ConversationUiState, type PendingIntent } from './machine.js';
 
@@ -61,10 +61,9 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
     if (runId) void run({ kind: 'resume' }, runId);
   }, [run, runId]);
 
-  const send = useCallback((intent: 'entry' | 'answer' | 'skip' | 'cancel', message: string): void => {
+  const send = useCallback((intent: ConversationSendIntent, message: string): void => {
     if (!runId) return;
-    const questionId = latest.current.snapshot?.question?.id;
-    void run({ kind: 'send', request: { idempotencyKey: newIdempotencyKey(), intent, message, ...(questionId && (intent === 'answer' || intent === 'skip') ? { questionId } : {}) } }, runId);
+    void run({ kind: 'send', request: { idempotencyKey: newIdempotencyKey(), intent, message } }, runId);
   }, [run, runId]);
 
   return useMemo<BriefingConversationController>(() => ({
@@ -78,7 +77,10 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
     },
     discard: () => dispatch({ type: 'discard' }),
     sendEntry: () => send('entry', latest.current.draft.trim()),
-    answer: () => send('answer', latest.current.draft.trim()),
+    // A draft loaded back from a turn already sent goes out as the contract's
+    // correction, so the server rereads that turn instead of stacking a second
+    // answer on top of it.
+    answer: () => send(latest.current.correcting ? 'correct' : 'answer', latest.current.draft.trim()),
     skip: () => send('skip', ''),
     cancel: () => send('cancel', ''),
     confirm: () => {
@@ -87,6 +89,6 @@ export function useBriefingConversation(client: ConversationClient, runId: strin
     },
     setDraft: (value) => dispatch({ type: 'draft', value }),
     setSummary: (value) => dispatch({ type: 'summaryDraft', value }),
-    correct: (turn) => dispatch({ type: 'draft', value: turn.message }),
+    correct: (turn) => dispatch({ type: 'correct', value: turn.message }),
   }), [run, runId, send, state]);
 }

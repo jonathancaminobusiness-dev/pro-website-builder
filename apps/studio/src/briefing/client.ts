@@ -1,13 +1,15 @@
 /**
- * The one place the Studio speaks to the conversation endpoints. Like every
- * other module here it reads the wire shapes from the local mirror
- * `./contract.js`, so adopting the shared package the server slice publishes is
- * contained to that module rather than to this one.
+ * The one place the Studio speaks to the conversation endpoints. The paths, the
+ * request bodies and the snapshot it parses all come from the shared contract
+ * through `./contract.js`, so this module knows how to make a call and nothing
+ * about what the wire looks like.
  */
 import { requestJson, RequestError } from '../request.js';
 import {
+  conversationConfirmBody,
   conversationConfirmPath,
   conversationPath,
+  conversationSendBody,
   parseConversationSnapshot,
   type ConversationConfirmRequest,
   type ConversationSendRequest,
@@ -40,8 +42,8 @@ export function createConversationClient(apiOrigin: string, request: JsonRequest
         throw cause;
       }
     },
-    send: (runId, body) => call(conversationPath(runId), { method: 'POST', body: JSON.stringify(body) }),
-    confirm: (runId, body) => call(conversationConfirmPath(runId), { method: 'POST', body: JSON.stringify(body) }),
+    send: (runId, body) => call(conversationPath(runId), { method: 'POST', body: JSON.stringify(conversationSendBody(body)) }),
+    confirm: (runId, body) => call(conversationConfirmPath(runId), { method: 'POST', body: JSON.stringify(conversationConfirmBody(body)) }),
   };
 }
 

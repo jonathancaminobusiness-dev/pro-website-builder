@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RequestError } from '../request.js';
 import { createConversationClient, newIdempotencyKey } from './client.js';
 import { ConversationContractError } from './contract.js';
-import { CONSOLIDATED_SUMMARY, conversationSnapshot, entryTurn, recommendationTurn } from './conversation-fixture.js';
+import { afterFirstReading, CONSOLIDATED_SUMMARY, FIRST_TEXT, withOpenQuestion, wireSnapshot } from './conversation-fixture.js';
 
 function recorder(answer: (url: string, init?: RequestInit) => unknown) {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
@@ -17,7 +17,7 @@ function recorder(answer: (url: string, init?: RequestInit) => unknown) {
 
 describe('conversation client', () => {
   it('reads the persisted conversation back from the resume endpoint', async () => {
-    const { calls, request } = recorder(() => conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 }));
+    const { calls, request } = recorder(() => wireSnapshot({ state: 'recommendation', originalText: FIRST_TEXT, normalizedText: FIRST_TEXT, messages: afterFirstReading() }));
     const snapshot = await createConversationClient('http://127.0.0.1:4310', request).resume('identity-1');
 
     expect(calls[0]).toMatchObject({ url: 'http://127.0.0.1:4310/api/identity/runs/identity-1/conversation', method: 'GET' });
@@ -37,27 +37,35 @@ describe('conversation client', () => {
     await expect(createConversationClient('http://127.0.0.1:4310', request).resume('identity-1')).rejects.toThrow('Execução bloqueada.');
   });
 
-  it('posts the message with the idempotency key the caller chose', async () => {
-    const { calls, request } = recorder(() => conversationSnapshot({ state: 'question', messageCount: 2 }));
-    await createConversationClient('http://127.0.0.1:4310', request).send('identity-1', { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.', questionId: 'question-first-visit' });
+  it('posts the message as the contract\'s action, with the idempotency key the caller chose', async () => {
+    const { calls, request } = recorder(() => wireSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 }));
+    await createConversationClient('http://127.0.0.1:4310', request).send('identity-1', { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' });
 
     expect(calls[0]).toEqual({
       url: 'http://127.0.0.1:4310/api/identity/runs/identity-1/conversation',
       method: 'POST',
-      body: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.', questionId: 'question-first-visit' },
+      body: { action: 'answer', idempotencyKey: 'key-answer', message: 'Segurança clínica.' },
     });
   });
 
   it('closes the briefing through the confirm endpoint with the summary as edited', async () => {
-    const { calls, request } = recorder(() => conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T12:00:00.000Z', messageCount: 4 }));
+    const { calls, request } = recorder(() => wireSnapshot({
+      state: 'final',
+      summary: CONSOLIDATED_SUMMARY,
+      confirmations: [{ revision: 1, briefing: CONSOLIDATED_SUMMARY, openGaps: [], confirmedAt: '2026-09-11T12:00:00.000Z', messageCount: 5 }],
+    }));
     const snapshot = await createConversationClient('http://127.0.0.1:4310', request).confirm('identity-1', { idempotencyKey: 'key-confirm', summary: CONSOLIDATED_SUMMARY });
 
-    expect(calls[0]).toMatchObject({ url: 'http://127.0.0.1:4310/api/identity/runs/identity-1/conversation/confirm', method: 'POST', body: { summary: CONSOLIDATED_SUMMARY } });
-    expect(snapshot.closedAt).toBe('2026-09-11T12:00:00.000Z');
+    expect(calls[0]).toEqual({
+      url: 'http://127.0.0.1:4310/api/identity/runs/identity-1/conversation/confirm',
+      method: 'POST',
+      body: { briefing: CONSOLIDATED_SUMMARY, idempotencyKey: 'key-confirm' },
+    });
+    expect(snapshot.closed).toBe(true);
   });
 
   it('refuses a response that does not match the contract', async () => {
-    const { request } = recorder(() => ({ runId: 'identity-1', state: 'entry' }));
+    const { request } = recorder(() => ({ state: 'entry', messages: 'nenhuma' }));
 
     await expect(createConversationClient('http://127.0.0.1:4310', request).send('identity-1', { idempotencyKey: 'k', intent: 'entry', message: 'texto' })).rejects.toThrow(ConversationContractError);
   });

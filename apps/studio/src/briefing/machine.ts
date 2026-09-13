@@ -13,6 +13,8 @@ import { RequestError } from '../request.js';
 import {
   ConversationContractError,
   briefingClosed,
+  canConfirmBriefing,
+  canSendBriefingMessage,
   limitReached,
   type ConversationConfirmRequest,
   type ConversationSendRequest,
@@ -38,6 +40,12 @@ export interface ConversationUiState {
   snapshot: ConversationSnapshot | null;
   /** The initial text or the answer being typed. Never cleared by a failure. */
   draft: string;
+  /**
+   * The draft was loaded back from a turn the captain already sent, so the next
+   * send is the contract's `correct` rather than a new answer. Editing it keeps
+   * the flag: a correction being reworded is still a correction.
+   */
+  correcting: boolean;
   /** The consolidated summary as the captain is editing it. */
   summaryDraft: string;
   pending: PendingIntent | null;
@@ -48,6 +56,7 @@ export type ConversationAction =
   | { type: 'reset' }
   | { type: 'resumed'; snapshot: null }
   | { type: 'draft'; value: string }
+  | { type: 'correct'; value: string }
   | { type: 'summaryDraft'; value: string }
   | { type: 'begin'; intent: PendingIntent }
   | { type: 'discard' }
@@ -65,18 +74,18 @@ function summarySeed(snapshot: ConversationSnapshot): string {
 }
 
 /**
- * The request holds text the screen is still showing: the entry, an answer, or
- * the edited summary of a close. A skip, a cancel and a read carry none, so a
- * failure has nothing of theirs to hold on to.
+ * The request holds text the screen is still showing: the entry, an answer, a
+ * correction, or the edited summary of a close. A skip, a cancel and a read
+ * carry none, so a failure has nothing of theirs to hold on to.
  */
 function holdsEditableBody(intent: PendingIntent | null): boolean {
   if (intent === null) return false;
   if (intent.kind === 'confirm') return true;
-  return intent.kind === 'send' && (intent.request.intent === 'entry' || intent.request.intent === 'answer');
+  return intent.kind === 'send' && intent.request.intent !== 'skip' && intent.request.intent !== 'cancel';
 }
 
 export function initialConversationState(): ConversationUiState {
-  return { availability: 'unknown', snapshot: null, draft: '', summaryDraft: '', pending: null, failure: null };
+  return { availability: 'unknown', snapshot: null, draft: '', correcting: false, summaryDraft: '', pending: null, failure: null };
 }
 
 export function classifyFailure(cause: unknown): ConversationFailure {
@@ -105,6 +114,8 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
         : { ...state, failure: { message: 'Não foi possível reabrir a conversa desta execução: o servidor não a encontrou. Nada foi fechado e o que já foi lido continua aqui.' } };
     case 'draft':
       return { ...state, draft: action.value };
+    case 'correct':
+      return { ...state, draft: action.value, correcting: true };
     case 'summaryDraft':
       return { ...state, summaryDraft: action.value };
     case 'begin':
@@ -124,6 +135,7 @@ export function conversationReducer(state: ConversationUiState, action: Conversa
         snapshot: action.snapshot,
         summaryDraft: edited ? state.summaryDraft : summarySeed(action.snapshot),
         draft: clearsDraft ? '' : state.draft,
+        correcting: clearsDraft ? false : state.correcting,
         pending: null,
         failure: null,
       };
@@ -168,6 +180,7 @@ export function progressLabel(state: ConversationUiState): string | null {
       switch (state.pending.request.intent) {
         case 'entry': return 'Lendo o texto do briefing…';
         case 'answer': return 'Registrando a resposta…';
+        case 'correct': return 'Registrando a correção…';
         case 'skip': return 'Pulando a pergunta…';
         case 'cancel': return 'Cancelando a conversa…';
       }
@@ -186,23 +199,30 @@ export interface ConversationAffordances {
    * discards it, so a retry can never re-send text the screen has replaced.
    */
   locked: boolean;
-  /** The initial-text composer is on screen: the same condition that decides whether it can be sent. */
+  /**
+   * The free composer is on screen: the same condition that decides whether it
+   * can be sent. It is open in every state the contract still takes a message
+   * from and no question is open — the first text, and anything the captain
+   * wants to add to a reading or to a proposed summary.
+   */
+  composerOpen: boolean;
+  /** The composer is the very first text of the conversation, which is what its label says. */
   entryOpen: boolean;
-  canSendEntry: boolean;
-  canAnswer: boolean;
+  /** The field on screen — the composer or the answer to the open question — has text that can be sent. */
+  canSend: boolean;
   canSkip: boolean;
   canCancel: boolean;
   canConfirm: boolean;
   /** A question is open: the same condition that decides whether it can be answered or skipped. */
   asking: boolean;
   /**
-   * The editable summary and its manual close are the way out. Every state that
-   * stopped asking and did not close the briefing offers them — a consolidated
-   * summary, a reached ceiling, a cancelled conversation, a failed one — so no
-   * state leaves the captain without a “Fechar briefing”.
+   * The editable summary and its manual close are the way out. Every state the
+   * contract lets a captain close a briefing from offers them — a consolidated
+   * summary, a reached ceiling, a conversation the model could not finish — so
+   * no such state leaves the captain without a “Fechar briefing”.
    */
   summaryOpen: boolean;
-  /** A ceiling was reached: the panel stops asking and offers the editable summary and a manual close. */
+  /** The ceiling was reached: the panel stops asking and offers the editable summary and a manual close. */
   atLimit: boolean;
   closed: boolean;
   /**
@@ -228,40 +248,24 @@ export interface ConversationAffordances {
 export function correctableTurnId(state: ConversationUiState, can: ConversationAffordances): string | null {
   const snapshot = state.snapshot;
   if (snapshot === null) return null;
+  if (!can.asking && !can.composerOpen) return null;
+  // The transcript is in order, so the entry that asked the open question is
+  // the boundary: only a captain turn after it answered *this* question, and an
+  // answer to a question already left behind is not the open field's to edit.
   const openQuestionId = can.asking ? snapshot.question?.id : undefined;
-  if (!can.asking && !can.entryOpen) return null;
+  const askedAt = openQuestionId === undefined ? -1 : snapshot.turns.findIndex((turn) => turn.question?.id === openQuestionId);
   for (let index = snapshot.turns.length - 1; index >= 0; index -= 1) {
     const turn = snapshot.turns[index];
     if (turn === undefined || turn.role !== 'captain') continue;
-    if (openQuestionId === undefined) {
-      if (turn.intent === 'entry') return turn.id;
-    } else if (turn.intent === 'answer' && turn.question?.id === openQuestionId) {
-      return turn.id;
-    }
+    // A captain turn is labelled by the state it was written in, which is the
+    // field it came from: the composer takes back only what the composer sent.
+    if (!can.asking) return turn.state === 'question' ? null : turn.id;
+    return turn.state === 'question' && index > askedAt ? turn.id : null;
   }
   return null;
 }
 
-/** The longest wait `setTimeout` can hold: beyond it the callback fires at once. */
-const MAX_TIMEOUT_MS = 2_147_483_647;
-
-/**
- * How long until the time ceiling changes what the panel may offer. The screen
- * reads it to wake itself at `expiresAt`, so the limit state arrives at the
- * ceiling instead of at whatever re-render happens to come next. A conversation
- * with no ceiling, or one already past it, schedules nothing.
- */
-export function limitRefreshDelayMs(state: ConversationUiState, now: Date): number | null {
-  const expiresAt = state.snapshot?.limits.expiresAt;
-  if (expiresAt === undefined) return null;
-  const delay = Date.parse(expiresAt) - now.getTime();
-  if (!(delay > 0)) return null;
-  // A wait longer than `setTimeout` can hold overflows into an immediate wake,
-  // so a distant ceiling is waited for in bounded steps instead.
-  return Math.min(delay, MAX_TIMEOUT_MS);
-}
-
-export function affordances(state: ConversationUiState, now: Date): ConversationAffordances {
+export function affordances(state: ConversationUiState): ConversationAffordances {
   const snapshot = state.snapshot;
   const busy = state.pending !== null && state.failure === null;
   const locked = busy || holdsEditableBody(state.pending);
@@ -270,27 +274,25 @@ export function affordances(state: ConversationUiState, now: Date): Conversation
   const canDiscard = canRetry && holdsEditableBody(state.pending);
   const ready = state.availability === 'available' && snapshot !== null;
   if (!ready || snapshot === null) {
-    return { ready: false, busy, locked, entryOpen: false, canSendEntry: false, canAnswer: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry, canDiscard };
+    return { ready: false, busy, locked, composerOpen: false, entryOpen: false, canSend: false, canSkip: false, canCancel: false, canConfirm: false, asking: false, summaryOpen: false, atLimit: false, closed: false, canRetry, canDiscard };
   }
   const closed = briefingClosed(snapshot);
   const halted = snapshot.state === 'cancelled' || snapshot.state === 'failed';
-  const atLimit = limitReached(snapshot, now) && !closed && !halted;
+  const atLimit = limitReached(snapshot) && !closed && !halted;
   const typed = state.draft.trim() !== '';
   const asking = !closed && snapshot.state === 'question' && snapshot.question !== undefined && !atLimit;
-  const entryOpen = !closed && !atLimit && snapshot.state === 'entry';
-  // Nothing to close a briefing with is not an exit: a halted conversation with
-  // no persisted text says so rather than offering an empty close.
+  const composerOpen = !closed && !atLimit && !asking && canSendBriefingMessage(snapshot.state);
+  // Nothing to close a briefing with is not an exit: a conversation with no
+  // persisted text says so rather than offering an empty close.
   const closable = snapshot.summary !== '' || snapshot.briefing !== '';
-  // A `final` snapshot the server did not stamp `closedAt` on is a summary that
-  // was consolidated and not yet confirmed, so it closes the same way.
-  const summaryOpen = !closed && closable && (snapshot.state === 'confirmation' || snapshot.state === 'final' || atLimit || halted);
+  const summaryOpen = !closed && closable && canConfirmBriefing(snapshot.state);
   return {
     ready: true,
     busy,
     locked,
-    entryOpen,
-    canSendEntry: !locked && entryOpen && typed,
-    canAnswer: !locked && asking && typed,
+    composerOpen,
+    entryOpen: composerOpen && snapshot.state === 'entry',
+    canSend: !locked && (composerOpen || asking) && typed,
     canSkip: !locked && asking,
     canCancel: !locked && !closed && !halted,
     canConfirm: !locked && summaryOpen && state.summaryDraft.trim() !== '',

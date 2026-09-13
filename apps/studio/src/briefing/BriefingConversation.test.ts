@@ -1,15 +1,31 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { BRIEFING_CONVERSATION_MAX_QUESTIONS, BRIEFING_SUMMARY_MAX_LENGTH, type BriefingConversationSnapshot } from '@pwb/domain/conversation';
 import { RequestError } from '../request.js';
 import BriefingConversation from './BriefingConversation.js';
 import { ConversationContractError, type ConversationSnapshot } from './contract.js';
-import { answerTurn, clarifyingQuestion, CONSOLIDATED_SUMMARY, conceptualDirections, confirmationTurn, conversationSnapshot, entryTurn, followUpQuestion, followUpQuestionTurn, questionTurn, recommendationTurn } from './conversation-fixture.js';
+import {
+  afterFirstReading,
+  clarifyingQuestion,
+  conceptualDirections,
+  confirmationTurn,
+  CONSOLIDATED_SUMMARY,
+  conversationSnapshot,
+  FIRST_TEXT,
+  followUpQuestion,
+  message,
+  questionTurn,
+  withOpenQuestion,
+} from './conversation-fixture.js';
 import { classifyFailure, conversationReducer, initialConversationState, type ConversationAction, type ConversationUiState } from './machine.js';
 
-const NOW = new Date('2026-09-11T10:00:00.000Z');
 /** Copy that belongs to the visual stage; the chat must never say it. */
 const VISUAL_STAGE_COPY = ['ver proposta', 'gerar identidade', 'abrir preview'];
+const LIMIT = BRIEFING_CONVERSATION_MAX_QUESTIONS;
+const MAX_LENGTH = BRIEFING_SUMMARY_MAX_LENGTH;
+
+const closedBriefing = { revision: 1, briefing: CONSOLIDATED_SUMMARY, openGaps: [], confirmedAt: '2026-09-11T09:00:00.000Z', messageCount: 5 };
 
 function state(snapshot: ConversationSnapshot | null, ...actions: ConversationAction[]): ConversationUiState {
   const opened = snapshot === null
@@ -23,10 +39,14 @@ function turnBlocks(markup: string): string[] {
   return markup.split('<li class="chat-turn').slice(1);
 }
 
+/** An answer already given to the open question, so a correction has something to load. */
+function answered(): BriefingConversationSnapshot['messages'] {
+  return [...withOpenQuestion(), message(3, { author: 'captain', text: 'Carinho no atendimento.', state: 'question' })];
+}
+
 function render(next: ConversationUiState): string {
   return renderToStaticMarkup(createElement(BriefingConversation, {
     state: next,
-    now: NOW,
     onDraftChange: () => undefined,
     onSummaryChange: () => undefined,
     onSendEntry: () => undefined,
@@ -47,32 +67,33 @@ describe('briefing conversation panel', () => {
 
     expect(markup).toContain('Conte sobre o negócio');
     expect(markup).toContain('id="briefing-chat-entry"');
-    expect(markup).toContain('maxLength="8000"');
-    expect(markup).toContain('18/8000 caracteres');
-    expect(markup).toContain('0/6 mensagens');
+    expect(markup).toContain(`maxLength="${MAX_LENGTH}"`);
+    expect(markup).toContain(`18/${MAX_LENGTH} caracteres`);
+    expect(markup).toContain(`0/${LIMIT} perguntas`);
     expect(markup).toContain('Enviar para leitura');
   });
 
-  it('takes the counter and the ceiling from the snapshot, not from a constant in the interface', () => {
-    const markup = render(state(conversationSnapshot({ messageCount: 3, limits: { messageLimit: 11, briefingMaxLength: 2400 } })));
+  it('takes the counter and the ceiling from the contract, not from a constant in the interface', () => {
+    const markup = render(state(conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 3 })));
 
-    expect(markup).toContain('3/11 mensagens');
-    expect(markup).toContain('maxLength="2400"');
-    expect(markup).not.toContain('/6 mensagens');
+    expect(markup).toContain(`3/${LIMIT} perguntas`);
+    expect(markup).toContain(`maxLength="${MAX_LENGTH}"`);
   });
 
   it('shows the first reading with fact, hypothesis and unknown kept apart', () => {
-    const markup = render(state(conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 })));
+    const markup = render(state(conversationSnapshot({ state: 'recommendation', originalText: FIRST_TEXT, messages: afterFirstReading() })));
 
     expect(markup).toContain('Fatos que você disse');
     expect(markup).toContain('Hipóteses do Studio');
     expect(markup).toContain('Ainda desconhecido');
     expect(markup).toContain('A prevenção é o serviço central.');
     expect(markup).toContain('Qual é o receio que impede a primeira visita.');
+    // A gap is read with what it would change, which is the reason it is asked.
+    expect(markup).toContain('Decide o que a marca precisa desarmar logo na primeira tela.');
   });
 
   it('asks one question at a time, says why it matters and offers its options', () => {
-    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 })));
+    const markup = render(state(conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 })));
 
     expect(markup.match(/id="briefing-chat-question"/g)).toHaveLength(1);
     expect(markup).toContain('Por que isso muda a identidade.');
@@ -83,11 +104,11 @@ describe('briefing conversation panel', () => {
   });
 
   it('keeps the history readable and corrects only the turn the open field holds', () => {
-    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion())], question: clarifyingQuestion(), messageCount: 3 })));
+    const markup = render(state(conversationSnapshot({ state: 'question', originalText: FIRST_TEXT, messages: answered(), questionCount: 1 })));
 
     expect(markup).toContain('role="log"');
     expect(markup).toContain('aria-label="Histórico da conversa de briefing"');
-    expect(markup).toContain('Somos uma clínica de bairro.');
+    expect(markup).toContain(FIRST_TEXT);
     // One control, and it belongs to the answer the question field holds: the
     // entry text is not correctable here, so a correction can never post the
     // business description as the answer to the open question.
@@ -95,15 +116,16 @@ describe('briefing conversation panel', () => {
     const withControl = turnBlocks(markup).filter((block) => block.includes('Corrigir esta resposta'));
     expect(withControl).toHaveLength(1);
     expect(withControl[0]).toContain('Carinho no atendimento.');
-    expect(withControl[0]).not.toContain('Somos uma clínica de bairro.');
+    expect(withControl[0]).not.toContain(FIRST_TEXT);
   });
 
   it('offers no correction of an answer the conversation has already moved past', () => {
+    const follow = questionTurn(followUpQuestion());
     const markup = render(state(conversationSnapshot({
       state: 'question',
-      turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn(), answerTurn('Carinho no atendimento.', clarifyingQuestion()), followUpQuestionTurn()],
-      question: followUpQuestion(),
-      messageCount: 4,
+      originalText: FIRST_TEXT,
+      messages: [...answered(), message(4, { author: 'studio', text: follow.message, state: 'question', turn: follow })],
+      questionCount: 2,
     })));
 
     expect(markup).toContain('Qual prova de acompanhamento');
@@ -111,27 +133,27 @@ describe('briefing conversation panel', () => {
   });
 
   it('offers no correction over an open question the captain has not answered yet', () => {
-    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 })));
+    const markup = render(state(conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 })));
 
     expect(markup).toContain('id="briefing-chat-answer"');
     expect(markup).not.toContain('Corrigir esta resposta');
   });
 
-  it('corrects the entry text while the entry composer is the field on screen', () => {
-    const markup = render(state(conversationSnapshot({ state: 'entry', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 })));
+  it('corrects the last text the composer sent while the composer is the field on screen', () => {
+    const markup = render(state(conversationSnapshot({ state: 'recommendation', originalText: FIRST_TEXT, messages: afterFirstReading() })));
 
     const withControl = turnBlocks(markup).filter((block) => block.includes('Corrigir esta resposta'));
     expect(withControl).toHaveLength(1);
-    expect(withControl[0]).toContain('Somos uma clínica de bairro.');
+    expect(withControl[0]).toContain(FIRST_TEXT);
   });
 
   it('keeps the history while a send is in flight, names the step and disables a second send', () => {
-    const sending = state(conversationSnapshot({ turns: [entryTurn('Somos uma clínica de bairro.')] }), { type: 'draft', value: 'Somos uma clínica de bairro.' }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-entry', intent: 'entry', message: 'Somos uma clínica de bairro.' } } });
+    const sending = state(conversationSnapshot({ messages: [message(0, { author: 'captain', text: FIRST_TEXT, state: 'entry' })] }), { type: 'draft', value: FIRST_TEXT }, { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-entry', intent: 'entry', message: FIRST_TEXT } } });
     const markup = render(sending);
 
     expect(markup).toContain('Lendo o texto do briefing…');
     expect(markup).toContain('chat-pending');
-    expect(markup).toContain('Somos uma clínica de bairro.');
+    expect(markup).toContain(FIRST_TEXT);
     expect(markup).toContain('<button class="primary" disabled="">Enviar para leitura</button>');
   });
 
@@ -146,7 +168,7 @@ describe('briefing conversation panel', () => {
   });
 
   it('explains an off-contract response and offers another attempt', () => {
-    const markup = render(state(conversationSnapshot(), { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'k', intent: 'entry', message: 'texto' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) }));
+    const markup = render(state(conversationSnapshot(), { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'k', intent: 'entry', message: 'texto' } } }, { type: 'failed', failure: classifyFailure(new ConversationContractError('messages')) }));
 
     expect(markup).toContain('não seguiu o contrato');
     expect(markup).toContain('Tente novamente.');
@@ -170,7 +192,7 @@ describe('briefing conversation panel', () => {
 
   it('never leaves a failure with words but no action, and names only the action it renders', () => {
     const markup = render(state(
-      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), questionTurn()], question: clarifyingQuestion(), messageCount: 2 }),
+      conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 }),
       { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } },
       { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
       { type: 'draft', value: 'Segurança clínica.' },
@@ -184,7 +206,8 @@ describe('briefing conversation panel', () => {
   });
 
   it('shows the editable summary and closes the briefing with the plan’s wording', () => {
-    const markup = render(state(conversationSnapshot({ state: 'confirmation', turns: [confirmationTurn()], summary: CONSOLIDATED_SUMMARY, messageCount: 3 })));
+    const confirmation = confirmationTurn();
+    const markup = render(state(conversationSnapshot({ state: 'confirmation', messages: [message(0, { author: 'studio', text: confirmation.message, state: 'confirmation', turn: confirmation })], summary: CONSOLIDATED_SUMMARY })));
 
     expect(markup).toContain('id="briefing-chat-summary"');
     expect(markup).toContain(CONSOLIDATED_SUMMARY);
@@ -192,7 +215,7 @@ describe('briefing conversation panel', () => {
   });
 
   it('offers the editable summary and a manual close once the ceiling is reached', () => {
-    const markup = render(state(conversationSnapshot({ state: 'question', question: clarifyingQuestion(), summary: CONSOLIDATED_SUMMARY, messageCount: 6 })));
+    const markup = render(state(conversationSnapshot({ state: 'confirmation', messages: withOpenQuestion(), summary: CONSOLIDATED_SUMMARY, questionCount: LIMIT, limitReached: true })));
 
     expect(markup).toContain('limite atingido');
     expect(markup).toContain('o fechamento agora é manual');
@@ -201,26 +224,17 @@ describe('briefing conversation panel', () => {
   });
 
   it('offers an exit from a state that shows no composer at all', () => {
-    const markup = render(state(conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 })));
+    const markup = render(state(conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 })));
 
     expect(markup).toContain('Cancelar conversa');
-    expect(markup).toContain('Reabrir do ponto salvo');
     expect(markup).not.toContain('disabled="">Cancelar conversa');
-  });
-
-  it('names no cancel where its own copy says a new execution is the only way forward', () => {
-    const markup = render(state(conversationSnapshot({ state: 'entry', messageCount: 0, limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T09:00:00.000Z' } })));
-
-    expect(markup).toContain('criar uma nova execução');
-    expect(markup).not.toContain('Cancelar conversa');
-    expect(markup).not.toContain('Reabrir do ponto salvo');
   });
 
   it('reopens the question after a failed skip, which took no field with it', () => {
     const markup = render(state(
-      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), questionTurn()], question: clarifyingQuestion(), messageCount: 2 }),
+      conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 }),
       { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-skip', intent: 'skip', message: '' } } },
-      { type: 'failed', failure: classifyFailure(new ConversationContractError('turns')) },
+      { type: 'failed', failure: classifyFailure(new ConversationContractError('messages')) },
     ));
 
     expect(markup).toContain('não seguiu o contrato');
@@ -231,8 +245,8 @@ describe('briefing conversation panel', () => {
     expect(markup).not.toContain('readOnly=""');
   });
 
-  it('offers a failed conversation the close it can still do, and no cancel it cannot', () => {
-    const markup = render(state(conversationSnapshot({ state: 'failed', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], error: 'o modelo não respondeu', messageCount: 1 })));
+  it('offers a conversation the model could not finish the close it can still do, and no cancel it cannot', () => {
+    const markup = render(state(conversationSnapshot({ state: 'failed', originalText: FIRST_TEXT, messages: afterFirstReading(), error: { code: 'CONVERSATION_NO_ANSWER', message: 'o modelo não respondeu' }, fallback: true })));
 
     expect(markup).toContain('A conversa parou');
     expect(markup).toContain('não continua nesta execução');
@@ -245,70 +259,44 @@ describe('briefing conversation panel', () => {
   it('offers a single way out of the conversation, wherever it stands', () => {
     for (const snapshot of [
       conversationSnapshot(),
-      conversationSnapshot({ state: 'question', question: clarifyingQuestion(), messageCount: 2 }),
-      conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
+      conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 }),
+      conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY }),
     ]) {
       expect(render(state(snapshot)).match(/Cancelar conversa/g)).toHaveLength(1);
     }
   });
 
-  it('hides the correction control where no field would receive the corrected text', () => {
-    const markup = render(state(conversationSnapshot({ state: 'confirmation', turns: [entryTurn('Somos uma clínica de bairro.'), confirmationTurn()], summary: CONSOLIDATED_SUMMARY, messageCount: 3 })));
-
-    expect(markup).toContain('id="briefing-chat-summary"');
-    expect(markup).not.toContain('Corrigir esta resposta');
-  });
-
   it('shows the open question without inventing an ordinal the counter cannot give', () => {
-    const markup = render(state(conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn(), questionTurn()], question: clarifyingQuestion(), messageCount: 2 })));
+    const markup = render(state(conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 })));
 
-    expect(markup).toContain('2/6 mensagens');
+    expect(markup).toContain(`1/${LIMIT} perguntas`);
     expect(markup).not.toContain('de no máximo');
     expect(markup).not.toContain('Pergunta 3');
   });
 
-  it('says plainly that a cancelled conversation sent nothing to the curator, and offers the close it can still do', () => {
-    const markup = render(state(conversationSnapshot({ state: 'cancelled', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.')], messageCount: 1 })));
+  it('says plainly that a cancelled conversation sent nothing to the curator, and names the one way forward', () => {
+    const markup = render(state(conversationSnapshot({ state: 'cancelled', originalText: FIRST_TEXT, messages: afterFirstReading() })));
 
     expect(markup).toContain('Nada foi enviado ao curador');
     expect(markup).toContain('não volta a abrir nesta execução');
+    expect(markup).toContain('criar uma nova execução');
     expect(markup).not.toContain('Reabrir do ponto salvo');
     expect(markup).not.toContain('Cancelar conversa');
-    expect(markup).toContain('id="briefing-chat-summary"');
-    expect(markup).toContain('Fechar briefing');
-    expect(markup).not.toContain('disabled="">Fechar briefing');
-  });
-
-  it('offers a halted conversation with nothing to close no control it could never use', () => {
-    const markup = render(state(conversationSnapshot({ state: 'cancelled', messageCount: 1 })));
-
-    expect(markup).toContain('Nada foi enviado ao curador');
-    expect(markup).toContain('criar uma nova execução');
-    expect(markup).not.toContain('Cancelar conversa');
+    expect(markup).not.toContain('id="briefing-chat-summary"');
     expect(markup).not.toContain('Fechar briefing');
-    expect(markup).not.toContain('<button');
   });
 
-  it('never blames a ceiling for a close the captain made manual by cancelling', () => {
-    const markup = render(state(conversationSnapshot({ state: 'cancelled', briefing: 'Somos uma clínica de bairro.', messageCount: 6 })));
+  it('never blames a ceiling for a close the captain reached without one', () => {
+    const markup = render(state(conversationSnapshot({ state: 'confirmation', originalText: FIRST_TEXT, summary: CONSOLIDATED_SUMMARY })));
 
     expect(markup).toContain('id="briefing-chat-summary"');
     expect(markup).toContain('Corrija o que estiver errado antes de fechar.');
     expect(markup).not.toContain('limite');
   });
 
-  it('sends a cancelled conversation with no persisted text to a new execution instead of an empty close', () => {
-    const markup = render(state(conversationSnapshot({ state: 'cancelled', messageCount: 0 })));
-
-    expect(markup).toContain('criar uma nova execução');
-    expect(markup).not.toContain('id="briefing-chat-summary"');
-    expect(markup).not.toContain('Fechar briefing');
-    expect(markup).not.toContain('Reabrir do ponto salvo');
-  });
-
   it('never offers to reopen the conversation over a field the captain is editing', () => {
-    const summaryVisible = render(state(conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 })));
-    const answerVisible = render(state(conversationSnapshot({ state: 'question', question: clarifyingQuestion(), messageCount: 2 })));
+    const summaryVisible = render(state(conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY })));
+    const answerVisible = render(state(conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 })));
 
     expect(summaryVisible).toContain('id="briefing-chat-summary"');
     expect(summaryVisible).not.toContain('Reabrir do ponto salvo');
@@ -318,7 +306,7 @@ describe('briefing conversation panel', () => {
 
   it('freezes the field a failed request came from and offers to edit it instead of replaying it', () => {
     const failed = state(
-      conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 }),
+      conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY }),
       { type: 'begin', intent: { kind: 'confirm', request: { idempotencyKey: 'key-confirm', summary: CONSOLIDATED_SUMMARY } } },
       { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
     );
@@ -333,7 +321,7 @@ describe('briefing conversation panel', () => {
 
   it('freezes every writer of a locked field, not just the keyboard', () => {
     const failed = state(
-      conversationSnapshot({ state: 'question', turns: [entryTurn('Somos uma clínica de bairro.'), answerTurn('Carinho no atendimento.', clarifyingQuestion())], question: clarifyingQuestion(), messageCount: 2 }),
+      conversationSnapshot({ state: 'question', originalText: FIRST_TEXT, messages: answered(), questionCount: 1 }),
       { type: 'draft', value: 'Segurança clínica.' },
       { type: 'begin', intent: { kind: 'send', request: { idempotencyKey: 'key-answer', intent: 'answer', message: 'Segurança clínica.' } } },
       { type: 'failed', failure: classifyFailure(new RequestError('O servidor local não respondeu.')) },
@@ -351,8 +339,7 @@ describe('briefing conversation panel', () => {
   });
 
   it('names a new execution when a ceiling arrives before any text was saved', () => {
-    const expired = state(conversationSnapshot({ limits: { messageLimit: 6, briefingMaxLength: 8000, expiresAt: '2026-09-11T09:00:00.000Z' } }));
-    const markup = render(expired);
+    const markup = render(state(conversationSnapshot({ state: 'entry', questionCount: LIMIT, limitReached: true })));
 
     expect(markup).toContain('antes de qualquer texto ser salvo');
     expect(markup).toContain('criar uma nova execução');
@@ -363,7 +350,7 @@ describe('briefing conversation panel', () => {
   });
 
   it('keeps the ceiling wording pointed at a summary that is really there', () => {
-    const markup = render(state(conversationSnapshot({ state: 'question', question: clarifyingQuestion(), summary: CONSOLIDATED_SUMMARY, messageCount: 6 })));
+    const markup = render(state(conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, questionCount: LIMIT, limitReached: true })));
 
     expect(markup).toContain('revise o resumo');
     expect(markup).toContain('id="briefing-chat-summary"');
@@ -399,19 +386,20 @@ describe('briefing conversation panel', () => {
 
   it('keeps the way out of the conversation live when a read failed', () => {
     const markup = render(state(
-      conversationSnapshot({ state: 'recommendation', briefing: 'Somos uma clínica de bairro.', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 }),
+      conversationSnapshot({ state: 'question', originalText: FIRST_TEXT, messages: withOpenQuestion(), questionCount: 1 }),
       { type: 'begin', intent: { kind: 'resume' } },
       { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
     ));
 
     expect(markup).toContain('Cancelar conversa');
-    expect(markup).not.toContain('disabled=""');
+    expect(markup).not.toContain('disabled="">Cancelar conversa');
+    expect(markup).not.toContain('readOnly=""');
     expect(markup).toContain('Tentar novamente');
   });
 
   it('offers only a replay when the failed request was a read of the conversation', () => {
     const markup = render(state(
-      conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 }),
+      conversationSnapshot({ state: 'recommendation', originalText: FIRST_TEXT, messages: afterFirstReading() }),
       { type: 'begin', intent: { kind: 'resume' } },
       { type: 'failed', failure: classifyFailure(new RequestError('Falha ao ler a conversa.', 500)) },
     ));
@@ -422,19 +410,19 @@ describe('briefing conversation panel', () => {
 
   it('keeps the conversation on screen when a reopen finds no conversation on the server', () => {
     const markup = render(state(
-      conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], messageCount: 1 }),
+      conversationSnapshot({ state: 'recommendation', originalText: FIRST_TEXT, messages: afterFirstReading() }),
       { type: 'begin', intent: { kind: 'resume' } },
       { type: 'resumed', snapshot: null },
     ));
 
-    expect(markup).toContain('Somos uma clínica de bairro.');
+    expect(markup).toContain(FIRST_TEXT);
     expect(markup).toContain('não a encontrou');
     expect(markup).toContain('Tentar novamente');
     expect(markup).not.toContain('Briefing fechado');
   });
 
-  it('stops offering the entry composer once a ceiling was reached', () => {
-    const markup = render(state(conversationSnapshot({ state: 'entry', briefing: 'Somos uma clínica de bairro.', messageCount: 6 })));
+  it('stops offering the composer once a ceiling was reached', () => {
+    const markup = render(state(conversationSnapshot({ state: 'confirmation', originalText: FIRST_TEXT, summary: CONSOLIDATED_SUMMARY, questionCount: LIMIT, limitReached: true })));
 
     expect(markup).toContain('limite atingido');
     expect(markup).not.toContain('id="briefing-chat-entry"');
@@ -443,7 +431,7 @@ describe('briefing conversation panel', () => {
   });
 
   it('shows no question block while the conversation is not asking one', () => {
-    const markup = render(state(conversationSnapshot({ state: 'recommendation', turns: [entryTurn('Somos uma clínica de bairro.'), recommendationTurn()], question: clarifyingQuestion(), messageCount: 1 })));
+    const markup = render(state(conversationSnapshot({ state: 'recommendation', originalText: FIRST_TEXT, messages: withOpenQuestion(), questionCount: 1 })));
 
     expect(markup).not.toContain('id="briefing-chat-question"');
     expect(markup).not.toContain('Responder');
@@ -451,7 +439,7 @@ describe('briefing conversation panel', () => {
   });
 
   it('offers the close for a consolidated summary the server has not confirmed', () => {
-    const markup = render(state(conversationSnapshot({ state: 'final', briefing: 'texto original', summary: CONSOLIDATED_SUMMARY, messageCount: 4 })));
+    const markup = render(state(conversationSnapshot({ state: 'final', originalText: FIRST_TEXT, summary: CONSOLIDATED_SUMMARY })));
 
     expect(markup).toContain('id="briefing-chat-summary"');
     expect(markup).toContain(CONSOLIDATED_SUMMARY);
@@ -461,10 +449,11 @@ describe('briefing conversation panel', () => {
   });
 
   it('shows the three directions as text and marks each as having no preview', () => {
-    const markup = render(state(conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T09:00:00.000Z', directions: conceptualDirections(), messageCount: 4 })));
+    const markup = render(state(conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, briefing: CONSOLIDATED_SUMMARY, confirmations: [closedBriefing], directions: conceptualDirections() })));
 
     expect(markup).toContain('Briefing fechado');
     expect(markup).toContain('Clareza clínica');
+    expect(markup).toContain('Paleta descrita');
     expect(markup.match(/conceito descrito · sem preview/g)).toHaveLength(3);
     expect(markup).not.toContain('<iframe');
     expect(markup).not.toContain('<img');
@@ -472,9 +461,9 @@ describe('briefing conversation panel', () => {
 
   it.each([
     ['entry', conversationSnapshot()],
-    ['question', conversationSnapshot({ state: 'question', question: clarifyingQuestion(), messageCount: 2 })],
-    ['confirmation', conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY, messageCount: 3 })],
-    ['final', conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, closedAt: '2026-09-11T09:00:00.000Z', directions: conceptualDirections(), messageCount: 4 })],
+    ['question', conversationSnapshot({ state: 'question', messages: withOpenQuestion(), questionCount: 1 })],
+    ['confirmation', conversationSnapshot({ state: 'confirmation', summary: CONSOLIDATED_SUMMARY })],
+    ['final', conversationSnapshot({ state: 'final', summary: CONSOLIDATED_SUMMARY, briefing: CONSOLIDATED_SUMMARY, confirmations: [closedBriefing], directions: conceptualDirections() })],
   ])('never borrows the visual stage copy in the %s state', (_label, snapshot) => {
     const markup = render(state(snapshot)).toLowerCase();
 
