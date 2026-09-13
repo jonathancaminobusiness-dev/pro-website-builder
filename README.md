@@ -240,14 +240,13 @@ run never contends with the studio on `5173`, the preview on `4311`, or another
 worktree; `PWB_RELEASE_PORT` pins the release harness to a fixed port instead —
 leave it unset unless something outside the run has to reach that origin, since
 several checkouts share one machine — and the harness publishes whichever origin
-it bound through `PWB_RELEASE_ORIGIN`. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site
-name the canonical URLs, the sitemap and Open Graph use — every compile site
-reads them, so the gate credits the digest the runners measured;
-`PWB_RELEASE_ROOT`,
-`PWB_EVIDENCE_DIR` and `PWB_FONTS_DIR` move the bundle, the artifacts and the
-fonts. Preparing a release writes
-the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and every
-runner reads it back from there. With no run to read, the fixture stands in.
+it bound through `PWB_RELEASE_ORIGIN`. `PWB_SITE_URL` and `PWB_SITE_NAME` set the
+origin and site name the canonical URLs, the sitemap and Open Graph use — every
+compile site reads them, so the gate credits the digest the runners measured;
+`PWB_RELEASE_ROOT`, `PWB_EVIDENCE_DIR` and `PWB_FONTS_DIR` move the bundle, the
+artifacts and the fonts. Preparing a release writes the document it compiled to
+`<PWB_EVIDENCE_DIR>/release-document.json`, and every runner reads it back from
+there. With no run to read, the fixture stands in.
 
 **One document, one publish, gates in order.** Gate 3 refuses to prepare or
 publish until the captain has approved identity and prototype on that run and the
@@ -268,8 +267,8 @@ record and the single bundle root, and it claims the gate before its first
 await, so two publishes that race cannot both close it. Preparing claims the
 gate the same way: a second preparation that arrives while one is in flight
 answers `409` instead of compiling the same gate twice and leaving the snapshot
-naming one execution's digest while holding the other's bytes. A closed gate does not
-reopen either: once the bundle is published the run has finished, so preparing
+naming one execution's digest while holding the other's bytes. A closed gate does
+not reopen either: once the bundle is published the run has finished, so preparing
 again is refused rather than moving a finished run's document.
 
 Only the captain may accept an open escalation in writing. A scripted run —
