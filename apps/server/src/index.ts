@@ -12,6 +12,8 @@ import { IdentityRun } from './identity-run.js';
 import { createPreviewServer } from './preview.js';
 import { createIdentityProvider, createModelProvider, createRasterProvider, modelAlias, modelProviderName } from './provider.js';
 import { PrototypeRunRegistry } from './prototype-api.js';
+import type { ReleaseRunOptions } from './release-run.js';
+import { siteFromEnvironment } from './site-environment.js';
 import { identityDeadlinesFromEnvironment, identityProviderTimeoutMs } from './identity-deadlines.js';
 
 export async function startServer(options: { dbPath?: string; renderCacheDir?: string; releaseRoot?: string; evidenceDir?: string; fontsDir?: string; apiPort?: number; previewPort?: number; modelProvider?: string; identityDeadlines?: Partial<IdentityStageDeadlines> } = {}): Promise<{ api: ReturnType<typeof createApiServer>; preview: ReturnType<typeof createPreviewServer>; close: () => Promise<void> }> {
@@ -66,16 +68,17 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   prototypes = registry;
   // A review the captain already paid minutes of browser time for survives a restart.
   await registry.restore();
-  const siteUrl = process.env.PWB_SITE_URL ?? 'https://site.invalid';
-  const siteName = process.env.PWB_SITE_NAME ?? 'pro-website-builder';
+  const { siteUrl, siteName } = siteFromEnvironment();
   const releaseRoot = options.releaseRoot ?? process.env.PWB_RELEASE_ROOT ?? join(root, 'releases');
   const evidenceDir = options.evidenceDir ?? process.env.PWB_EVIDENCE_DIR ?? join(root, 'artifacts', 'release');
   await mkdir(releaseRoot, { recursive: true });
   // Gate 3 compares the faces the captain was actually served against the ones
-  // the bundle ships, so the preview is read when a release is prepared.
-  const release = {
+  // the bundle ships, so the preview is read when a release is prepared, and
+  // only for the version being released: a run whose preview the captain never
+  // opened has no faces to compare and says so.
+  const release: ReleaseRunOptions = {
     releaseRoot, evidenceDir, fontsDir, siteUrl, siteName,
-    previewFaces: () => preview.servedFaces(),
+    previewFaces: (version) => preview.servedFaces(version.id),
   };
   const api = createApiServer({
     runs,

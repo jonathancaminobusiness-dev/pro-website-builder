@@ -177,7 +177,6 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   vetoes.push(...colors.vetoes);
 
   const metadata = routeMetadata(ir, siteUrl);
-  const csp = planCsp();
 
   // First pass: strip inline styles so the release can ship `style-src 'self'`.
   const extractions = new Map<string, { html: string; styles: ExtractedStyle[] }>();
@@ -191,6 +190,12 @@ export function compileRelease(rendered: RenderedDocument, ir: DesignIR, options
   const allRules = ir.pages.routes.flatMap((page) => styleRules(extractions.get(page.route)?.styles ?? [])).filter((rule) => rule !== '');
   const stylesheet = [colors.css, fontPlan.css, allRules.join('\n')].filter((part) => part.trim() !== '').join('\n\n').concat('\n');
   const stylesheetPath = `assets/site.${sha256(stylesheet).slice(0, 12)}.css`;
+
+  // The policy is read from the bytes the bundle ships, which is why it is
+  // planned here: the documents and the stylesheet exist, so a release with no
+  // face and no embedded image states `font-src 'none'` and an `img-src` without
+  // `data:` rather than permitting a load it could never make.
+  const csp = planCsp({ fonts: fontPlan.decisions, documents: [...[...extractions.values()].map((extraction) => extraction.html), stylesheet] });
 
   // Second pass: write the head each route needs and point it at the stylesheet.
   const files: Array<{ path: string; contents: string | Uint8Array }> = [];

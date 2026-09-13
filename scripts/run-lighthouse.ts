@@ -11,6 +11,7 @@
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
+import { siteFromEnvironment } from '../apps/server/src/site-environment.js';
 import { compileRelease, loadFontSources } from '../packages/export/src/index.js';
 import { renderDesign } from '../packages/renderer/src/index.js';
 import { artifactHash, createReleaseHarness, loadReleaseDocument, writeEvidenceArtifact } from '../packages/stage-finalization/src/index.js';
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
   const ir = await loadReleaseDocument(evidenceDir);
   const rendered = renderDesign(ir);
   const fonts = await loadFontSources(fontsDir);
-  const compiled = compileRelease(rendered, ir, { siteUrl: process.env.PWB_SITE_URL ?? 'https://site.invalid', siteName: process.env.PWB_SITE_NAME ?? 'pro-website-builder', ...(fonts.length > 0 ? { fonts } : {}) });
+  const compiled = compileRelease(rendered, ir, { ...siteFromEnvironment(), ...(fonts.length > 0 ? { fonts } : {}) });
   const harness = createReleaseHarness(compiled, rendered, 0);
   const origin = await harness.start();
   const debuggingPort = await freePort();

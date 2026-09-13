@@ -469,14 +469,40 @@ describe('the licence inventory names only the bytes the bundle ships', () => {
 });
 
 describe('the published policy allows only what the bundle can load', () => {
+  /** Both copies of the policy, since the meta tag and the headers file must agree. */
+  function policies(compiled: CompiledSite): string[] {
+    return [compiled.csp, (JSON.parse(fileText(compiled, 'headers.json')) as Record<string, Record<string, string>>)['/*']!['Content-Security-Policy']!];
+  }
+
   it('states an image policy no declared origin can widen', () => {
     const compiled = compileFixture((ir) => {
       ir.assets.items[0] = { ...ir.assets.items[0]!, uri: 'https://provider.example/hero.png', status: 'placeholder' };
     });
-    const delivered = (JSON.parse(fileText(compiled, 'headers.json')) as Record<string, Record<string, string>>)['/*']!['Content-Security-Policy']!;
-    expect(policyDirective(compiled.csp, 'img-src')).toBe("'self' data:");
-    expect(policyDirective(delivered, 'img-src')).toBe("'self' data:");
+    for (const policy of policies(compiled)) expect(policyDirective(policy, 'img-src')).toBe("'self'");
     expect(fileText(compiled, 'index.html')).not.toContain('provider.example');
+  });
+
+  it('allows data: images only for a bundle that embeds one', () => {
+    const withImage = compileFixture(withInlinedMark);
+    expect(fileText(withImage, 'index.html')).toContain('src="data:');
+    for (const policy of policies(withImage)) expect(policyDirective(policy, 'img-src')).toBe("'self' data:");
+
+    // The same document without the image: the bundle carries no data: URI, so
+    // the policy stops permitting one.
+    const withoutImage = compileFixture();
+    for (const policy of policies(withoutImage)) expect(policyDirective(policy, 'img-src')).toBe("'self'");
+  });
+
+  it('allows a font origin only for a bundle that ships a face', () => {
+    for (const policy of policies(compileFixture())) expect(policyDirective(policy, 'font-src')).toBe("'none'");
+
+    const ir = createFixtureIR();
+    const withFace = compileRelease(renderDesign(ir), ir, {
+      ...OPTIONS,
+      fonts: [{ family: 'Fraunces', weight: '400', style: 'normal', format: 'woff2', bytes: new Uint8Array([119, 79, 70, 50, 1, 2, 3, 4]), license: 'OFL-1.1', source: 'https://fonts.example/fraunces', author: 'a', date: '2026-09-05' }],
+    });
+    expect(withFace.fonts.some((decision) => decision.selfHosted)).toBe(true);
+    for (const policy of policies(withFace)) expect(policyDirective(policy, 'font-src')).toBe("'self'");
   });
 });
 
@@ -533,13 +559,21 @@ describe('immutable content-addressed bundle', () => {
     const root = await mkdtemp(join(tmpdir(), 'pwb-release-'));
     try {
       await writeReleaseBundle(compiled, root);
-      const entry = { digest: compiled.digest, approvedVersionId: 'v-approved', releasedVersionId: 'v-refined', irHash: compiled.irHash, approverRole: 'captain', rationale: 'Firefox não sobe aqui.', acceptedEscalations: ['Nenhuma execução Playwright em firefox.'] };
+      const entry = { digest: compiled.digest, acceptanceId: 'run-um-finalization', approvedVersionId: 'v-approved', releasedVersionId: 'v-refined', irHash: compiled.irHash, approverRole: 'captain', rationale: 'Firefox não sobe aqui.', acceptedEscalations: ['Nenhuma execução Playwright em firefox.'] };
       await appendReleasePublication(root, entry);
-      await appendReleasePublication(root, { ...entry, releasedVersionId: 'v-refined-again', rationale: 'Republicado com outra proveniência.' });
+      await appendReleasePublication(root, { ...entry, acceptanceId: 'run-dois-finalization', releasedVersionId: 'v-refined-again', rationale: 'Republicado com outra proveniência.' });
       const record = await readReleasePublications(root, compiled.digest);
       expect(record).toHaveLength(2);
       expect(record[0]).toEqual(entry);
       expect(record[1]?.releasedVersionId).toBe('v-refined-again');
+
+      // The record is a projection of the acceptance, so asking for one that is
+      // already there records it once however often the write is retried.
+      await appendReleasePublication(root, entry);
+      await appendReleasePublication(root, { ...entry, rationale: 'Reescrito por engano.' });
+      const retried = await readReleasePublications(root, compiled.digest);
+      expect(retried).toHaveLength(2);
+      expect(retried[0]).toEqual(entry);
       // The record lives beside the bundle, never inside the immutable directory.
       expect(await readdir(join(root, compiled.digest))).not.toContain(`${compiled.digest}.publications.json`);
 
@@ -547,6 +581,17 @@ describe('immutable content-addressed bundle', () => {
       await writeFile(join(root, `${compiled.digest}.publications.json`), '[{"digest":', 'utf8');
       await expect(appendReleasePublication(root, entry)).rejects.toThrow(/unreadable/);
       await expect(readReleasePublications(root, compiled.digest)).rejects.toThrow(/unreadable/);
+
+      // Valid JSON that is not a list of publications is just as damaged: it is
+      // parsed, never cast, so nothing is appended to it and nothing carries its
+      // garbage forward.
+      const recordPath = join(root, `${compiled.digest}.publications.json`);
+      for (const damaged of ['{}', '[1,2]', '[{"digest":"abc"}]', JSON.stringify([{ ...entry, acceptedEscalations: 'nenhuma' }])]) {
+        await writeFile(recordPath, damaged, 'utf8');
+        await expect(readReleasePublications(root, compiled.digest)).rejects.toThrow(/unreadable/);
+        await expect(appendReleasePublication(root, entry)).rejects.toThrow(/unreadable/);
+        expect(await readFile(recordPath, 'utf8')).toBe(damaged);
+      }
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

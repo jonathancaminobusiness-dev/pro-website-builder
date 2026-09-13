@@ -116,7 +116,7 @@ describe('phase 0 fixture run', () => {
     const events = await repository.listEvents('run-events');
     expect(events.length).toBeGreaterThan(0);
     expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(['run.created', 'run.started', 'task.queued', 'task.started', 'task.succeeded', 'patch.applied', 'version.created', 'approval.recorded', 'release.published', 'run.finished']));
-    expect(events.at(-1)?.type).toBe('run.finished');
+    expect(events.at(-1)?.type).toBe('release.published');
     expect(events.filter((event) => event.type === 'approval.recorded')).toHaveLength(3);
     db.sqlite.close();
   });

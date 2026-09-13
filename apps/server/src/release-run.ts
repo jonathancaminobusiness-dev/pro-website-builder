@@ -1,9 +1,11 @@
+import { rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ReleaseGateReport } from '@pwb/domain';
-import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type FontDecision, type ReleaseManifest } from '@pwb/export';
+import { appendReleasePublication, loadFontSources, ReleaseVetoError, writeReleaseBundle, type CompiledSite, type ReleaseManifest, type ReleasePublication, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { ClaudeJsonRunner, CodexJsonRunner } from '@pwb/providers';
 import { modelAlias, modelProviderName, type ModelProviderName } from './provider.js';
+import { siteFromEnvironment } from './site-environment.js';
 import {
   ClaudeReleaseCriticProvider, ClaudeReleaseRefiner, ClaudeReleaseSummarizer, DeterministicReleaseSummarizer,
   FakeReleaseCriticProvider, FakeReleaseRefiner, FinalizationStage, PatchRefiner, readEvidence, writeReleaseDocument,
@@ -19,12 +21,13 @@ export interface ReleaseRunOptions {
   /** Where the project keeps the faces it may self-host; no manifest means none. */
   fontsDir?: string;
   /**
-   * The faces the preview origin served the captain, read when the release is
-   * prepared. Gate 3 compares them against the compiled bundle, so a face
-   * replaced after the captain looked at it is a divergence and not an
-   * identical route. A run with no preview leaves this out.
+   * The faces the preview origin served, asked for the very version Gate 3 is
+   * about to compile so a script can serve that document before answering.
+   * Gate 3 compares them against the compiled bundle, so a face replaced after
+   * the captain looked at it is a divergence and not an identical route. A run
+   * with no preview leaves this out.
    */
-  previewFaces?: () => FontDecision[] | undefined;
+  previewFaces?: (version: VersionRecord) => Promise<ServedFace[] | undefined> | ServedFace[] | undefined;
 }
 
 /**
@@ -39,8 +42,13 @@ export interface ReleaseContext {
   applier: Applier;
   adopt(version: VersionRecord): Promise<void>;
   record(type: string, payload: Record<string, unknown>): Promise<void>;
-  /** Publishing the bundle is what closes the finalization gate; there is no second approval. */
-  approveFinalization(approverRole: ReleaseApprover, rationale: string, manifest: ReleaseManifest): Promise<void>;
+  /**
+   * Publishing the bundle is what closes the finalization gate; there is no
+   * second approval. The acceptance carries the publication it is about, so the
+   * log this writes is what the release record beside the bundle is rebuilt
+   * from when the entry itself never landed.
+   */
+  approveFinalization(approverRole: ReleaseApprover, rationale: string, manifest: ReleaseManifest, publication: ReleasePublication): Promise<void>;
 }
 
 /**
@@ -49,6 +57,29 @@ export interface ReleaseContext {
  * nothing to accept, so no script ever signs for the captain.
  */
 export type ReleaseApprover = 'captain' | 'fixture';
+
+/**
+ * A release already being prepared in this run. Preparing twice at once would
+ * interleave two compilations into one snapshot — and propose the same refiner
+ * patch twice — so the second caller is refused the way a taken run id is.
+ */
+export class ReleasePrepareConflictError extends Error {
+  constructor(runId: string) { super(`O release do run ${runId} já está sendo preparado.`); this.name = 'ReleasePrepareConflictError'; }
+}
+
+/**
+ * A publish the release itself refuses: the bundle the captain approved is not
+ * the one this run now holds, a veto still stands, an open point was never
+ * accepted in writing, or nothing was prepared at all.
+ *
+ * None of these is a server failure — the state moved, or never allowed the
+ * publish — so the API answers them the way it already answers a blocked
+ * prepare, and the Studio can tell "the release changed" from "the server
+ * broke" instead of reading 500 for both.
+ */
+export class ReleasePublishRefusedError extends Error {
+  constructor(message: string) { super(message); this.name = 'ReleasePublishRefusedError'; }
+}
 
 export interface ReleaseSnapshot {
   runId: string;
@@ -86,12 +117,31 @@ export class ReleaseRun {
   private snapshotValue: ReleaseSnapshot | undefined;
   private compiled: CompiledSite | undefined;
   private context: ReleaseContext | undefined;
+  private preparing = false;
 
   constructor(private readonly runId: string, private readonly options: ReleaseRunOptions) {}
 
+  /**
+   * Compiles, critiques and evaluates Gate 3, and holds the report.
+   *
+   * The gate is claimed before the first await, as publishing claims it: two
+   * preparations that raced would each run a full stage and then interleave the
+   * three assignments this method ends with, so the report could name one
+   * execution's digest while the bytes held for publishing came from the other,
+   * and both would propose the refiner's patch under the same idempotency key —
+   * the loser turning into an escalation the captain never caused.
+   */
   async prepare(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
+    if (this.preparing) throw new ReleasePrepareConflictError(this.runId);
+    this.preparing = true;
+    try { return await this.prepareClaimed(context, signal); }
+    finally { this.preparing = false; }
+  }
+
+  private async prepareClaimed(context: ReleaseContext, signal?: AbortSignal): Promise<ReleaseSnapshot> {
     const name = modelProviderName(this.options.modelProvider);
     const chosen = providers(name);
+    const site = siteFromEnvironment();
     const fonts = await loadFontSources(this.options.fontsDir);
     const stage = new FinalizationStage({
       criticProvider: chosen.critic,
@@ -100,13 +150,13 @@ export class ReleaseRun {
       // The critics and the refiner record the provider that actually answered;
       // `idempotencyKey` hashes the alias, so it may not name Claude under Codex.
       modelAlias: modelAlias(name),
-      compilerOptions: { siteUrl: this.options.siteUrl ?? 'https://site.invalid', siteName: this.options.siteName ?? 'pro-website-builder', ...(fonts.length > 0 ? { fonts } : {}) },
+      compilerOptions: { siteUrl: this.options.siteUrl ?? site.siteUrl, siteName: this.options.siteName ?? site.siteName, ...(fonts.length > 0 ? { fonts } : {}) },
     });
     // The evidence runners compile the document the gate compiles, so they can
     // stamp their artifacts with the release they actually measured.
     await writeReleaseDocument(this.options.evidenceDir, context.current.ir);
     const evidence = await readEvidence(this.options.evidenceDir);
-    const previewFaces = this.options.previewFaces?.();
+    const previewFaces = await this.options.previewFaces?.(context.current);
     const result = await stage.run({
       runId: this.runId,
       version: context.current,
@@ -137,30 +187,50 @@ export class ReleaseRun {
   async publish(approverRole: string, digest: string, rationale?: string): Promise<ReleaseManifest> {
     if (approverRole !== 'captain' && approverRole !== 'fixture') throw new Error('Só o capitão aprova o gate de release.');
     const current = this.snapshotValue;
-    if (!current || !this.compiled || !this.context) throw new Error('O release ainda não foi preparado nesta execução.');
-    if (digest !== current.digest) throw new Error(`O capitão aprovou o bundle ${digest}, e o release atual é ${current.digest}.`);
+    if (!current || !this.compiled || !this.context) throw new ReleasePublishRefusedError('O release ainda não foi preparado nesta execução.');
+    if (digest !== current.digest) throw new ReleasePublishRefusedError(`O capitão aprovou o bundle ${digest}, e o release atual é ${current.digest}.`);
     if (current.report.blocked) throw new ReleaseVetoError(current.report.vetoes);
     const escalations = current.report.escalations;
     const reason = rationale?.trim() ?? '';
     if (escalations.length > 0 && approverRole !== 'captain') {
-      throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que só o capitão pode aceitar por escrito: ${escalations.join(' ')}`);
+      throw new ReleasePublishRefusedError(`O release tem ${escalations.length} ponto(s) em aberto que só o capitão pode aceitar por escrito: ${escalations.join(' ')}`);
     }
     if (escalations.length > 0 && reason === '') {
-      throw new Error(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
+      throw new ReleasePublishRefusedError(`O release tem ${escalations.length} ponto(s) em aberto que o capitão precisa aceitar por escrito: ${escalations.join(' ')}`);
     }
+    // A bundle on disk is a published release, so it never outlives the
+    // acceptance of it: the bytes are written first, the acceptance commits
+    // next — the approval and the events that describe it, the publication
+    // among them — and only then is the entry written into the release record
+    // beside the bundle. A publish that does not reach that commit takes its
+    // bytes back and records nothing. Past it the release is accepted, and the
+    // record is a projection of the ledger that accepted it: an entry that
+    // never landed is written by the next restore of this run, and asking for
+    // the same acceptance twice records it once. A bundle that was already
+    // there — the same bytes published before — is never touched: its own
+    // record is what stands for it.
+    const directory = join(this.options.releaseRoot, current.digest);
+    const preexisting = await stat(directory).then(() => true, () => false);
     const manifest = await writeReleaseBundle(this.compiled, this.options.releaseRoot);
-    await appendReleasePublication(this.options.releaseRoot, {
+    const entry: ReleasePublication = {
       digest: manifest.digest,
+      acceptanceId: `${this.runId}-finalization`,
       approvedVersionId: current.report.approvedVersionId,
       releasedVersionId: current.versionId,
       irHash: current.report.irHash,
       approverRole,
       rationale: reason,
       acceptedEscalations: escalations,
-    });
+    };
+    try {
+      await this.context.approveFinalization(approverRole, reason, manifest, entry);
+    } catch (error) {
+      if (!preexisting) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+    await appendReleasePublication(this.options.releaseRoot, entry);
     await this.context.record('release.published', { digest: manifest.digest, versionId: current.versionId, approverRole, rationale: reason, escalations });
-    await this.context.approveFinalization(approverRole, reason, manifest);
-    this.snapshotValue = { ...current, published: { directory: join(this.options.releaseRoot, manifest.digest), digest: manifest.digest } };
+    this.snapshotValue = { ...current, published: { directory, digest: manifest.digest } };
     return manifest;
   }
 }

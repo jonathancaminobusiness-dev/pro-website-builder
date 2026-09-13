@@ -1,15 +1,16 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFixtureIR } from '@pwb/domain';
-import { compileRelease, readReleasePublications } from '@pwb/export';
+import { compileRelease, readReleasePublications, type FontDecision, type ServedFace } from '@pwb/export';
 import { FakeModelProvider, type ModelProvider } from '@pwb/providers';
 import { renderDesign } from '@pwb/renderer';
 import { writeEvidenceArtifact } from '@pwb/stage-finalization';
 import { createApiServer } from './api.js';
 import { openDatabase, ProjectRepository } from './db/repository.js';
 import { FixtureRun } from './fixture-run.js';
+import { startServedPreview } from './preview.js';
 
 const studio = { origin: 'http://127.0.0.1:5173', 'content-type': 'application/json' };
 const cleanups: Array<() => Promise<void>> = [];
@@ -19,9 +20,9 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(
 interface ReleaseSnapshot {
   digest: string;
   versionId: string;
-  report: { blocked: boolean; bundleDigest: string; irHash: string; approvedVersionId: string; releasedVersionId: string; vetoes: Array<{ id: string }>; rubric: Array<{ dimension: string }>; parity: { matched: boolean }; evidence: unknown[]; escalations: string[]; refinementCycles: number; summary?: { gateAuthority: string } };
+  report: { blocked: boolean; bundleDigest: string; irHash: string; approvedVersionId: string; releasedVersionId: string; vetoes: Array<{ id: string }>; rubric: Array<{ dimension: string }>; parity: { matched: boolean; routes: Array<{ route: string; differences: string[] }> }; evidence: unknown[]; escalations: string[]; refinementCycles: number; summary?: { gateAuthority: string } };
   catalog: Array<{ id: string }>;
-  published?: { directory: string };
+  published?: { directory: string; digest: string };
 }
 
 type EvidenceInput = Omit<Parameters<typeof writeEvidenceArtifact>[1], 'releaseDigest' | 'irHash'> & Partial<Pick<Parameters<typeof writeEvidenceArtifact>[1], 'releaseDigest' | 'irHash'>>;
@@ -44,7 +45,7 @@ function pageEditingProvider(text: string): ModelProvider {
   };
 }
 
-async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string } = {}) {
+async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boolean; provider?: ModelProvider; fontsDir?: string; previewFaces?: (version: { id: string }) => ServedFace[] | undefined } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-release-api-'));
   const evidenceDir = join(dir, 'evidence');
   const releaseRoot = join(dir, 'releases');
@@ -53,7 +54,7 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs,
-    createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository, provider: options.provider ?? new FakeModelProvider(), release: { releaseRoot, evidenceDir, ...SITE, ...(options.fontsDir ? { fontsDir: options.fontsDir } : {}), ...(options.previewFaces ? { previewFaces: options.previewFaces } : {}) } }); await run.initialize(id); runs.set(id, run); return run; },
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -83,7 +84,8 @@ async function harness(options: { evidence?: EvidenceInput[]; approveGates?: boo
     }
   }
   const events = (id: string) => repository.listEvents(id);
-  return { origin, runId: created.runId, run, releaseRoot, evidenceDir, stageVersionId, events };
+  const releaseOptions = { releaseRoot, evidenceDir, ...SITE };
+  return { origin, runId: created.runId, run, releaseRoot, evidenceDir, stageVersionId, events, repository, db, releaseOptions };
 }
 
 describe('Gate 3 over the local API', () => {
@@ -108,7 +110,7 @@ describe('Gate 3 over the local API', () => {
     // The evidence is incomplete, so the captain accepts the gap in writing and
     // the run records what they accepted.
     const withoutReason = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest }) });
-    expect(withoutReason.status).toBe(500);
+    expect(withoutReason.status).toBe(409);
     expect((await withoutReason.json() as { error: string }).error).toMatch(/aceitar por escrito/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
 
@@ -126,6 +128,7 @@ describe('Gate 3 over the local API', () => {
     expect(recorded[0]!.payload.escalations).toEqual(prepared.report.escalations);
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toEqual([{
       digest: prepared.digest,
+      acceptanceId: `${runId}-finalization`,
       approvedVersionId: prepared.report.approvedVersionId,
       releasedVersionId: prepared.versionId,
       irHash: prepared.report.irHash,
@@ -147,6 +150,23 @@ describe('Gate 3 over the local API', () => {
     expect(run.snapshot().currentVersion.id).toBe(prepared.versionId);
     expect((await readdir(releaseRoot)).filter((entry) => !entry.endsWith('.json'))).toEqual([prepared.digest]);
     expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
+  });
+
+  it('refuses a second preparation while one is still in flight', async () => {
+    const { origin, runId, run } = await harness();
+    // The claim is taken before the first await, so the route sees it while the
+    // first preparation is still compiling: two of them would interleave the
+    // snapshot, the compiled bytes and the refiner's idempotency key.
+    const inFlight = run.prepareRelease();
+    const refused = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: string }).error).toMatch(/já está sendo preparado/);
+
+    const prepared = await inFlight;
+    expect(run.releaseSnapshot()?.digest).toBe(prepared.digest);
+    // The claim is released with the preparation, so the gate still prepares.
+    const again = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
+    expect(again.status).toBe(200);
   });
 
   it('ships the faces the project offers, and the release record carries their terms', async () => {
@@ -200,6 +220,68 @@ describe('Gate 3 over the local API', () => {
     expect(unhostedRow?.licenseUrl).toBeUndefined();
     const publicArtifacts = `${await readFile(join(bundle, 'licenses.json'), 'utf8')}${await readFile(join(bundle, 'manifest.json'), 'utf8')}`;
     expect(publicArtifacts).not.toContain('invoice 42');
+  });
+
+  it('compares the faces a preview really served, so a scripted run has nothing open about them', async () => {
+    const bytes = Buffer.from([119, 79, 70, 50, 5, 5, 5, 5]);
+    const fontsDir = await mkdtemp(join(tmpdir(), 'pwb-run-served-fonts-'));
+    cleanups.push(async () => { await rm(fontsDir, { recursive: true, force: true }); });
+    await writeFile(join(fontsDir, 'fixture-sans-400.woff2'), bytes);
+    await writeFile(join(fontsDir, 'foundry-grotesk-400.woff2'), Buffer.from([119, 79, 70, 50, 6, 6, 6, 6]));
+    // The second face may not be redistributed, so neither view declares it and
+    // both fall back to the same stack: it is not a divergence.
+    await writeFile(join(fontsDir, 'manifest.json'), JSON.stringify({
+      faces: [
+        { family: 'Fixture Sans', weight: '400', style: 'normal', format: 'woff2', file: 'fixture-sans-400.woff2', license: 'ofl-1.1', source: 'https://fonts.example/fixture-sans', author: 'Fixture Foundry', date: '2026-09-07' },
+        { family: 'Foundry Grotesk', weight: '400', style: 'normal', format: 'woff2', file: 'foundry-grotesk-400.woff2', license: 'Foundry desktop licence', source: 'https://fonts.example/foundry-grotesk', author: 'Foundry', date: '2026-09-07' },
+      ],
+    }), 'utf8');
+
+    // Nothing served the document: the bundle self-hosts a face the gate cannot
+    // speak for, which is what every command line run used to report as parity.
+    const silent = await harness({ fontsDir });
+    const unreviewed = await fetch(`${silent.origin}/api/runs/${silent.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(unreviewed.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
+
+    // The same run behind the preview origin `run:release` and `run:fixture` now
+    // start: the faces the gate compares are the ones that origin's document
+    // declared, read back out of the bytes it served.
+    const preview = await startServedPreview(fontsDir);
+    cleanups.push(async () => { await preview.close(); });
+    // A route the origin does not have serves nothing, so it answers for no face.
+    expect((await fetch(`${preview.origin}/preview/v0/`)).status).toBe(404);
+    expect(preview.servedFaces('v0')).toBeUndefined();
+
+    const declared = await preview.serve('v0', renderDesign(createFixtureIR()));
+    expect(declared.map((face) => face.family)).toEqual(['Fixture Sans']);
+    expect(preview.servedFaces('v0')).toEqual(declared);
+
+    const served = await harness({ fontsDir, previewFaces: () => declared });
+    const compared = await fetch(`${served.origin}/api/runs/${served.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(compared.report.parity.matched).toBe(true);
+    expect(compared.report.parity.routes.flatMap((route) => route.differences)).toEqual([]);
+    expect(compared.report.escalations.join(' ')).not.toMatch(/Fixture Sans|Foundry Grotesk/);
+
+    // One studio origin serves many runs: the faces are recorded per version, so
+    // a run whose preview the captain never opened has nothing to compare and
+    // the gate says so instead of borrowing another run's document.
+    const unopened = await harness({ fontsDir, previewFaces: (version) => preview.servedFaces(version.id) });
+    const borrowed = await fetch(`${unopened.origin}/api/runs/${unopened.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(borrowed.report.escalations.join(' ')).toMatch(/Fixture Sans 400 normal/);
+
+    // The same run once its own document really left the origin.
+    const opened = await harness({ fontsDir, previewFaces: (version) => preview.servedFaces(version.id) });
+    await preview.serve(opened.stageVersionId, renderDesign(opened.run.releaseContext().current.ir));
+    const reviewed = await fetch(`${opened.origin}/api/runs/${opened.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(reviewed.report.parity.matched).toBe(true);
+    expect(reviewed.report.escalations.join(' ')).not.toMatch(/Fixture Sans/);
+
+    // The same served document against a release that ships no face at all: the
+    // comparison has two independent sides, so it says the face moved.
+    const diverged = await harness({ previewFaces: () => declared });
+    const flagged = await fetch(`${diverged.origin}/api/runs/${diverged.runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    expect(flagged.report.parity.matched).toBe(false);
+    expect(flagged.report.parity.routes.flatMap((route) => route.differences)).toContain('A face Fixture Sans 400 normal está no preview e não no release.');
   });
 
   it('refuses Gate 3 until the captain has approved identity and prototype', async () => {
@@ -269,7 +351,7 @@ describe('Gate 3 over the local API', () => {
     const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
     expect(prepared.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
     const blocked = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest }) });
-    expect(blocked.status).toBe(500);
+    expect(blocked.status).toBe(409);
 
     const approve = await fetch(`${origin}/api/runs/${runId}/approve`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', stage: 'finalization' }) });
     expect(approve.status).toBe(409);
@@ -331,7 +413,7 @@ describe('Gate 3 over the local API', () => {
     expect(run.snapshot().currentVersion.id).not.toBe(prepared.versionId);
 
     const stale = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
-    expect(stale.status).toBe(500);
+    expect(stale.status).toBe(409);
     expect((await stale.json() as { error: string }).error).toMatch(/prepare o release novamente/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
     expect(run.snapshot().status).toBe('needs_review');
@@ -375,7 +457,7 @@ describe('Gate 3 over the local API', () => {
     const { origin, runId, releaseRoot } = await harness();
     await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio });
     const stale = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: 'a-digest-from-an-older-report' }) });
-    expect(stale.status).toBe(500);
+    expect(stale.status).toBe(409);
     expect((await stale.json() as { error: string }).error).toMatch(/aprovou o bundle/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
   });
@@ -388,9 +470,86 @@ describe('Gate 3 over the local API', () => {
     expect(prepared.report.blocked).toBe(true);
     expect(prepared.report.vetoes.map((veto) => veto.id)).toContain('CRITICAL_AA_REGRESSION');
     const blocked = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest }) });
-    expect(blocked.status).toBe(500);
+    expect(blocked.status).toBe(409);
     expect((await blocked.json() as { error: string }).error).toMatch(/CRITICAL_AA_REGRESSION/);
     await expect(readdir(releaseRoot)).rejects.toThrow();
+  });
+
+  it('leaves no bundle and no publication when the acceptance does not commit', async () => {
+    const { origin, runId, releaseRoot, run, repository, db } = await harness();
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    // The acceptance commits the approval and the events that describe it
+    // together, and the release record is only written after it. Here the event
+    // log refuses the event that says the run finished, so nothing is accepted:
+    // the bytes go away again and no publication was ever recorded.
+    db.sqlite.exec("CREATE TRIGGER refuse_finish BEFORE INSERT ON events WHEN NEW.type = 'run.finished' BEGIN SELECT RAISE(ABORT, 'the event log is unavailable'); END;");
+    const refused = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(refused.status).toBe(500);
+    expect((await refused.json() as { error: string }).error).toMatch(/event log is unavailable/);
+    expect(await readdir(releaseRoot)).toEqual([]);
+    expect(await readReleasePublications(releaseRoot, prepared.digest)).toEqual([]);
+    expect(run.snapshot().status).toBe('needs_review');
+    expect(run.snapshot().exportManifest).toBeUndefined();
+    expect(await repository.listApprovals(runId)).toHaveLength(2);
+    expect(run.releaseSnapshot()?.published).toBeUndefined();
+
+    // A server restarted here reads the same run the live one reports: still at
+    // Gate 3, with no release behind it.
+    const restored = new FixtureRun({ modelProvider: 'fake', repository, provider: new FakeModelProvider() });
+    expect(await restored.restore(runId)).toBe(true);
+    expect(restored.snapshot().status).not.toBe('succeeded');
+    expect(restored.snapshot().exportManifest).toBeUndefined();
+
+    // With the log writable again the same bundle publishes, bytes, acceptance
+    // and record together.
+    db.sqlite.exec('DROP TRIGGER refuse_finish');
+    const published = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(published.status).toBe(200);
+    expect(run.snapshot().status).toBe('succeeded');
+    expect(await readdir(join(releaseRoot, prepared.digest))).toContain('manifest.json');
+    expect(await readReleasePublications(releaseRoot, prepared.digest)).toHaveLength(1);
+  });
+
+  it('records the publication of an accepted release whose entry never landed, once', async () => {
+    const { origin, runId, releaseRoot, run, repository, releaseOptions } = await harness();
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    // The record beside the bundle cannot be written — the path is taken by a
+    // directory — so the publish stops after the acceptance committed. That is
+    // the window a killed process leaves behind: a release the ledger knows
+    // about and the record does not.
+    const recordPath = join(releaseRoot, `${prepared.digest}.publications.json`);
+    await mkdir(recordPath, { recursive: true });
+    const owed = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(owed.status).toBe(500);
+    expect(run.snapshot().status).toBe('succeeded');
+    expect(await readdir(join(releaseRoot, prepared.digest))).toContain('manifest.json');
+    expect(await readdir(recordPath)).toEqual([]);
+
+    // Restarting the server writes what the ledger says was accepted, and says
+    // it once however many times the run is restored.
+    await rm(recordPath, { recursive: true, force: true });
+    const restored = new FixtureRun({ modelProvider: 'fake', repository, provider: new FakeModelProvider(), release: releaseOptions });
+    expect(await restored.restore(runId)).toBe(true);
+    expect(restored.snapshot().status).toBe('succeeded');
+    const recorded = await readReleasePublications(releaseRoot, prepared.digest);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ digest: prepared.digest, approverRole: 'captain', rationale: 'Aceito os pontos em aberto.', releasedVersionId: prepared.versionId });
+    const again = new FixtureRun({ modelProvider: 'fake', repository, provider: new FakeModelProvider(), release: releaseOptions });
+    expect(await again.restore(runId)).toBe(true);
+    expect(await readReleasePublications(releaseRoot, prepared.digest)).toEqual(recorded);
+  });
+
+  it('refuses a publish whose document the linter rejects, and says so as a conflict', async () => {
+    const { origin, runId, run } = await harness();
+    const prepared = await fetch(`${origin}/api/runs/${runId}/release`, { method: 'POST', headers: studio }).then((response) => response.json() as Promise<ReleaseSnapshot>);
+    // The document at the gate stops passing the linter: a node takes a raw
+    // visual value instead of a token. No gate closes over that, and the Studio
+    // reads it as the state conflict it is rather than as a broken server.
+    run.releaseContext().current.ir.pages.routes[0]!.nodes[0]!.props.color = '#ff00ff';
+    const refused = await fetch(`${origin}/api/runs/${runId}/release/publish`, { method: 'POST', headers: studio, body: JSON.stringify({ approverRole: 'captain', digest: prepared.digest, rationale: 'Aceito os pontos em aberto.' }) });
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: string }).error).toMatch(/lint error/);
+    expect(run.snapshot().status).toBe('needs_review');
   });
 
   it('has no release routes when the server does not serve the finalization stage', async () => {

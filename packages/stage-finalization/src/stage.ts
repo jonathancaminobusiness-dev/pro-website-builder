@@ -1,5 +1,5 @@
 import { hashJson, stageRoles, type AgentTask, type DesignIR, type EvidenceArtifact, type ReleaseCritique, type ReleaseFinding, type ReleaseGateReport, type ReleaseSummary } from '@pwb/domain';
-import { compileRelease, type CompiledSite, type FontDecision, type ReleaseCompilerOptions } from '@pwb/export';
+import { compileRelease, type CompiledSite, type ReleaseCompilerOptions, type ServedFace } from '@pwb/export';
 import type { Applier, VersionRecord } from '@pwb/orchestrator';
 import { Scheduler } from '@pwb/orchestrator';
 import { renderDesign } from '@pwb/renderer';
@@ -7,9 +7,9 @@ import { criticTasks, type CriticTaskContext } from './critics.js';
 import type { ReleaseCriticProvider } from './critic-provider.js';
 import { partitionEvidence } from './evidence.js';
 import { evaluateReleaseGate } from './gate.js';
-import { checkPreviewReleaseParity } from './parity.js';
+import { checkPreviewReleaseParity, unreviewedFaces } from './parity.js';
 import { PatchRefiner } from './refiner.js';
-import { DeterministicReleaseSummarizer, type ReleaseSummarizerProvider } from './summarizer.js';
+import { DeterministicReleaseSummarizer, sealSummary, type ReleaseSummarizerProvider } from './summarizer.js';
 
 export interface FinalizationStageOptions {
   criticProvider: ReleaseCriticProvider;
@@ -36,7 +36,7 @@ export interface FinalizationStageInput {
    * The faces the preview origin served the captain. Absent when no preview
    * served this document, and then the parity check says nothing about faces.
    */
-  previewFaces?: FontDecision[];
+  previewFaces?: ServedFace[];
   applier: Applier;
   signal?: AbortSignal;
   onEvent?: (type: string, payload: Record<string, unknown>) => void | Promise<void>;
@@ -142,6 +142,11 @@ export class FinalizationStage {
     }
 
     const parity = checkPreviewReleaseParity(renderDesign(version.ir), compiled, new Map(version.ir.pages.routes.map((page) => [page.route, page.id])), input.previewFaces);
+    // Parity can only speak for faces a preview actually served. When none did,
+    // the faces the bundle self-hosts are coverage the gate does not have, and
+    // the captain is told which ones rather than reading silence as a match.
+    const unreviewed = unreviewedFaces(compiled, input.previewFaces);
+    if (unreviewed.length > 0) escalations.push(`Nenhum preview serviu este documento, então a paridade não comparou nenhuma face: o release publica ${unreviewed.join(', ')} sem que o capitão as tenha visto.`);
     const draft = evaluateReleaseGate({
       compiled,
       evidence: input.evidence,
@@ -154,9 +159,14 @@ export class FinalizationStage {
     });
     // The summarizer has no gate authority, so its failure cannot cost the
     // captain the report either: it escalates and the report goes out unsummarized.
+    //
+    // And the stage seals what it gets back, rather than trusting each provider
+    // to have sealed itself: `ReleaseSummarizerProvider` is a public interface,
+    // so an implementation nobody here wrote could otherwise put a false
+    // `vetoCount` — or a claimed gate authority — into the captain's report.
     let summary: ReleaseSummary | undefined;
     try {
-      summary = await this.summarizer.summarize({ bundleDigest: compiled.digest, vetoes: draft.vetoes, critiques, escalations: draft.escalations }, input.signal);
+      summary = sealSummary(await this.summarizer.summarize({ bundleDigest: compiled.digest, vetoes: draft.vetoes, critiques, escalations: draft.escalations }, input.signal), draft.vetoes);
     } catch (error) {
       if (input.signal?.aborted) throw error;
       const reason = error instanceof Error ? error.message : 'O release-summarizer falhou sem mensagem.';

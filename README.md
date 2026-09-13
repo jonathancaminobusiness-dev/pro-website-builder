@@ -97,6 +97,9 @@ one: `corepack pnpm typecheck` is the static check over the source, and
 `packages/linter` lints the generated *document* — the rules the stages and the
 gates block on — not the source that produces it.
 
+Chromium is what the Fase 0 suite measures; the release evidence needs Firefox
+and WebKit too, and the finalization section below names the command.
+
 Playwright ships no browser of its own and `pnpm install` does not fetch one. Every measured path opens its browser through `RenderHub`, which refuses without that binary and names the command that installs it — the server, the fixture CLI and the e2e harnesses all get the same sentence.
 
 Run the deterministic fixture without starting the UI:
@@ -219,10 +222,28 @@ corepack pnpm test:e2e:release     # only the browser evidence
 corepack pnpm run:lighthouse       # only the Lighthouse artifacts
 ```
 
+`run:evidence` and `test:e2e:release` measure the release on all three engines,
+and the quickstart installs only Chromium, so install the other two before the
+first evidence run:
+
+```bash
+corepack pnpm exec playwright install chromium firefox webkit
+```
+
+All three always run. An engine that cannot launch on the host leaves no
+artifact at all, and Gate 3 reports the gap as missing evidence the captain
+accepts in writing — never as a pass — so a checkout with one browser never
+reaches a clean report.
+
 Everything binds an ephemeral port the operating system chooses, so an evidence
 run never contends with the studio on `5173`, the preview on `4311`, or another
-worktree. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site name the
-canonical URLs, the sitemap and Open Graph use; `PWB_RELEASE_ROOT`,
+worktree; `PWB_RELEASE_PORT` pins the release harness to a fixed port instead —
+leave it unset unless something outside the run has to reach that origin, since
+several checkouts share one machine — and the harness publishes whichever origin
+it bound through `PWB_RELEASE_ORIGIN`. `PWB_SITE_URL` and `PWB_SITE_NAME` set the origin and site
+name the canonical URLs, the sitemap and Open Graph use — every compile site
+reads them, so the gate credits the digest the runners measured;
+`PWB_RELEASE_ROOT`,
 `PWB_EVIDENCE_DIR` and `PWB_FONTS_DIR` move the bundle, the artifacts and the
 fonts. Preparing a release writes
 the document it compiled to `<PWB_EVIDENCE_DIR>/release-document.json`, and every
@@ -244,9 +265,29 @@ with the gate's open points unaccepted. The approve route refuses `finalization`
 and the studio's finalization row points at the Gate 3 panel. One code path owns
 the vetoes, the written acceptance, the `release.published` event, the release
 record and the single bundle root, and it claims the gate before its first
-await, so two publishes that race cannot both close it. A closed gate does not
+await, so two publishes that race cannot both close it. Preparing claims the
+gate the same way: a second preparation that arrives while one is in flight
+answers `409` instead of compiling the same gate twice and leaving the snapshot
+naming one execution's digest while holding the other's bytes. A closed gate does not
 reopen either: once the bundle is published the run has finished, so preparing
 again is refused rather than moving a finished run's document.
+
+A publish the release refuses answers `409` with its own reason, never `500`:
+nothing prepared in this execution, a digest the run no longer holds, a bundle
+prepared for another proposal, a document the linter rejects, a veto still
+standing, or an open point never accepted in writing. The studio can tell the
+release having moved from the server having broken. And the bytes never outlive
+the acceptance of them: the bundle is written first, the acceptance commits next
+— the finalization approval and the events that describe it, the publication
+among them — and only then is that publication written into the release record
+beside the bundle. A publish that does not reach the commit takes its bytes back
+and records nothing, so a restarted server reads the run exactly as the live one
+does: still at the gate, with no release behind it. Past the commit the release
+is accepted, and the record is a projection of the ledger that accepted it —
+never the other way round — so an entry that never landed is written by the next
+restore of that run, and asking for the same acceptance again records it once. A
+bundle that was already there — the same bytes published before — is never
+touched, because its own record stands for it.
 
 Only the captain may accept an open escalation in writing. A scripted run —
 `run:fixture` and `run:release` alike — goes through that same publish path
@@ -304,11 +345,16 @@ runners measure the bundle the gate credits. The preview serves those same faces
 from its own origin under `font-src 'self'`, reading them again whenever the
 manifest or any file it declares changes rather than once at start, so a face
 added or re-exported while the studio runs reaches the captain's iframe and an
-unreadable manifest fails that request rather than the studio. Gate 3 then
-compares the faces the preview actually served against the ones the bundle ships,
-so a face replaced after the captain looked at it is a divergence and not an
+unreadable manifest fails that request rather than the studio — and leaves the
+origin vouching for no face at all rather than for a plan it no longer serves.
+Gate 3 then compares the faces the preview actually served — read back out of the
+`@font-face` rules that document declared, never from the fonts directory, which
+would compare the plan against itself — against the ones the bundle ships, so a
+face replaced after the captain looked at it is a divergence and not an
 identical route, and `tests/release/parity.spec.ts` asks both sides what they
-actually loaded rather than comparing two fallbacks.
+actually loaded rather than comparing two fallbacks. A release no preview served
+has nothing to compare, so its self-hosted faces escalate to the captain by name
+instead of reporting a parity nobody checked.
 
 So that this last check measures a face instead of an empty `document.fonts`,
 installing seeds `fonts/` with one real face — Fraunces 400 normal, under the
@@ -346,8 +392,9 @@ files. `evidenceVetoes` derives every veto the evidence can raise from what the
 runners measured — axe's raw violation counts, a failed Vitest or Playwright run
 — and never from a field a runner chose to set, because an artifact has no such
 field to set; and
-`sealSummary` overwrites the summarizer's veto count with the authoritative one,
-so no summary can hide a veto. What the gate did — each refinement cycle, a
+the stage seals whatever summarizer answered — `sealSummary` overwrites the
+veto count with the authoritative one and strips any claimed gate authority — so
+no summary can hide a veto, whoever wrote it. What the gate did — each refinement cycle, a
 critic or a model session that failed, the verdict itself — is written to the
 run's event log as it happens, so a blocked Gate 3 leaves a durable trace. A runner that did not run leaves no artifact, and
 the gate reports the gap as an escalation instead of treating silence as a pass.
@@ -365,10 +412,13 @@ The observed release-engine evidence is recorded in [Verified runs](docs/verifie
 Publishing over an open escalation takes a written reason from the captain, recorded in the run's log as `release.published` and in the release record beside the bundle. The manifest inside the bundle is a pure
 function of the compiled bytes and the toolchain — it names no document, no
 version, no publication and no path on the machine that compiled it — so writing
-the same bytes again is an idempotent success that appends a second entry to
-`<digest>.publications.json`, where the approved version, the released version,
-the document hash and the acceptance live. That record is the only durable home
-for them, so a damaged one refuses the next append instead of being replaced.
+the same bytes again is an idempotent success, and what tells two publications
+of one bundle apart lives beside it in `<digest>.publications.json`: the approved
+version, the released version, the document hash and the acceptance. One
+acceptance is one entry there, and another run accepting the same bytes is a
+second one. That record is the only durable home for them, so a damaged one —
+unparseable, or parseable into something that is not a list of publications —
+refuses the next append instead of being replaced.
 
 Lighthouse is a laboratory run. It measures one machine and one network, does
 not observe a visitor, and does not measure INP without interaction; the
