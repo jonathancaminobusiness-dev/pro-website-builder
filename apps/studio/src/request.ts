@@ -38,3 +38,11 @@ export function isMissing(cause: unknown): boolean {
 export function failureMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : 'Erro desconhecido.';
 }
+
+/**
+ * How many consecutive failed reads a screen may spend before it stops
+ * following a run. Every screen that polls shares the budget, so a server that
+ * went away ends every loop the same way instead of being read in silence for
+ * the rest of the session.
+ */
+export const POLL_MAX_FAILURES = 10;

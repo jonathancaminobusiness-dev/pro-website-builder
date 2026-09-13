@@ -1,4 +1,5 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { failureMessage, isMissing, requestJson } from './request.js';
 import './gate3.css';
 
 interface Veto { id: string; detector: string; where: string; detail: string }
@@ -29,13 +30,6 @@ const DIMENSIONS: Record<string, string> = {
   'provenance-security': 'Proveniência, licença e segurança',
 };
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
-  const payload = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error ?? 'Não foi possível concluir a ação.');
-  return payload;
-}
-
 /**
  * Gate 3. It shows the release exactly as the report describes it: the vetoes
  * that block it, the rubric each critic gave, the parity with the preview, and
@@ -58,16 +52,29 @@ export default function Gate3Panel({ runId, apiOrigin, onPublished }: { runId: s
   const act = useCallback(async (action: () => Promise<ReleaseSnapshot>) => {
     setBusy(true); setError('');
     try { setSnapshot(await action()); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Erro desconhecido.'); }
+    catch (cause) { setError(failureMessage(cause)); }
     finally { setBusy(false); }
   }, []);
 
-  const prepare = (): void => { if (runId) void act(() => request<ReleaseSnapshot>(`${apiOrigin}/api/runs/${runId}/release`, { method: 'POST' })); };
+  // A report the run already holds is read, never re-prepared: the five critics
+  // were spent once, and a tab switch unmounts this panel. A run with no report
+  // yet answers 404, which is the empty panel and not a failure.
+  useEffect(() => {
+    if (!runId) { setSnapshot(null); return; }
+    let live = true;
+    void requestJson<ReleaseSnapshot>(`${apiOrigin}/api/runs/${encodeURIComponent(runId)}/release`).then(
+      (next) => { if (live) setSnapshot((current) => current ?? next); },
+      (cause: unknown) => { if (live && !isMissing(cause)) setError(failureMessage(cause)); },
+    );
+    return () => { live = false; };
+  }, [apiOrigin, runId]);
+
+  const prepare = (): void => { if (runId) void act(() => requestJson<ReleaseSnapshot>(`${apiOrigin}/api/runs/${runId}/release`, { method: 'POST' })); };
   const publish = (): void => {
     if (!runId || !snapshot) return;
     void act(async () => {
       // Publishing closes the finalization gate, so the pipeline above is told.
-      const published = await request<{ snapshot: ReleaseSnapshot; run: unknown }>(`${apiOrigin}/api/runs/${runId}/release/publish`, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', digest: snapshot.digest, rationale }) });
+      const published = await requestJson<{ snapshot: ReleaseSnapshot; run: unknown }>(`${apiOrigin}/api/runs/${runId}/release/publish`, { method: 'POST', body: JSON.stringify({ approverRole: 'captain', digest: snapshot.digest, rationale }) });
       onPublished(published.run);
       return published.snapshot;
     });
