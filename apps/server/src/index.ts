@@ -26,7 +26,7 @@ export async function startServer(options: { dbPath?: string; renderCacheDir?: s
   const provider = createModelProvider(providerName);
   const identityDeadlines = options.identityDeadlines ?? identityDeadlinesFromEnvironment();
   const identityProvider = createIdentityProvider(providerName, { timeoutMs: identityProviderTimeoutMs(identityDeadlines) });
-  const raster = createRasterProvider();
+  const raster = createRasterProvider(process.env, identityDeadlines);
   const database = openDatabase(dbPath);
   const repository = new ProjectRepository(database);
   const runs = new Map<string, FixtureRun>();

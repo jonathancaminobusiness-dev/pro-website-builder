@@ -241,7 +241,10 @@ describe('five read-only release critics', () => {
     const critique = await new ClaudeReleaseCriticProvider(runner).critique(entry.task, entry.definition);
     expect(critique).toMatchObject({ taskId: entry.task.id, dimension: 'accessibility', verdict: 'pass' });
     expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain('Correct the previous schema violation');
+    // The correction names what actually went wrong; an answer that was not JSON at all says that,
+    // rather than sending the critic looking for a schema violation it never committed.
+    expect(prompts[1]).toContain('did not match the supplied schema');
+    expect(prompts[1]).toContain('could not be read as the requested JSON');
   });
 
   it('reports what the evidence shows and stays silent about what it does not', async () => {

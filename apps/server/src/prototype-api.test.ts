@@ -26,16 +26,27 @@ function createOffRhythmControlIR(): DesignIR {
   return ir;
 }
 
-async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSource } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; close: () => Promise<void> }> {
+/**
+ * A revision the prototype linter refuses on its own terms: the content contract forbids a word the
+ * identity's own message carries, so the copy every composer writes trips `COPY-110`, severity error.
+ */
+function createForbiddenCopyIR(): DesignIR {
+  const ir = createFixtureIR();
+  ir.identity.content = { ...ir.identity.content, forbiddenTerms: [...ir.identity.content.forbiddenTerms, 'motivo'] };
+  return ir;
+}
+
+async function harness(options: { seed?: () => DesignIR; evidence?: EvidenceSource; decorate?: (repository: ProjectRepository) => ProjectRepository } = {}): Promise<{ origin: string; registry: PrototypeRunRegistry; close: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), 'pwb-gate2-'));
   const db = openDatabase(join(dir, 'gate2.sqlite'));
-  const repository = new ProjectRepository(db);
+  const stored = new ProjectRepository(db);
+  const repository = options.decorate ? options.decorate(stored) : stored;
   // Synthesized evidence keeps these unit tests browserless; the server itself only ever measures.
   const registry = new PrototypeRunRegistry({ repository, evidence: options.evidence ?? new DerivedEvidenceSource(), ...(options.seed ? { seed: options.seed } : {}) });
   const runs = new Map<string, FixtureRun>();
   const server = createApiServer({
     runs, prototypes: registry,
-    createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository, provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
+    createRun: async (id) => { const run = new FixtureRun({ modelProvider: 'fake', repository: stored, provider: new FakeModelProvider() }); await run.initialize(id); runs.set(id, run); return run; },
   });
   // Port 0 keeps parallel checkouts off each other's fixed developer ports.
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -154,6 +165,34 @@ describe('Gate 2 API', () => {
     } finally { await api.close(); }
   });
 
+  it('fails the run whose execution threw and keeps the lane serving the ones behind it', async () => {
+    // A repository that throws where the caller expected a rejected promise: the `.catch()` guarding
+    // that write never sees it, so it escapes `execute` and reaches the lane itself. Before the lane
+    // was guarded, that left an unhandled rejection and every later run queued forever.
+    const faulty = (repository: ProjectRepository): ProjectRepository => new Proxy(repository, {
+      get(target, property, receiver) {
+        if (property !== 'appendEvent') return Reflect.get(target, property, receiver) as unknown;
+        return (event: Parameters<ProjectRepository['appendEvent']>[0]) => {
+          if (event.type === 'prototype.run.started' && event.runId === 'gate2-doomed') throw new Error('o repositório recusou o evento de início');
+          return target.appendEvent(event);
+        };
+      },
+    }) as ProjectRepository;
+    const api = await harness({ decorate: faulty });
+    try {
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-doomed' });
+      const failed = await settled(api.origin, 'gate2-doomed');
+      expect(failed.status).toBe('failed');
+      expect(failed.error).toContain('o repositório recusou o evento de início');
+
+      // The lane is still a lane: the next run measures and settles behind the one that blew up.
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-after' });
+      const next = await settled(api.origin, 'gate2-after');
+      expect(next.status).toBe('settled');
+      expect(next.result?.gate).toBe('needs_review');
+    } finally { await api.close(); }
+  });
+
   it('serves both sides of the comparison from the isolated preview origin', async () => {
     const api = await harness();
     try {
@@ -198,6 +237,38 @@ describe('Gate 2 API', () => {
       const approved = await post(api.origin, path, { approverRole: 'captain', decision: 'approved', rationale: 'Hierarquia e caráter aprovados.' });
       expect(approved.status).toBe(200);
       expect(approved.payload.result!.approval).toMatchObject({ decision: 'approved', versionId: created.result!.after.versionId, approverRole: 'captain', stage: 'prototype' });
+    } finally { await api.close(); }
+  });
+
+  it('refuses to approve a revision the prototype linter rejects, and still lets the captain reject it', async () => {
+    const api = await harness({ seed: createForbiddenCopyIR });
+    try {
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-lint' });
+      const review = await settled(api.origin, 'gate2-lint');
+      expect(review.result!.lint.some((finding) => finding.id === 'COPY-110' && finding.severity === 'error')).toBe(true);
+
+      // Every other gate refuses to close over a document the linter rejects; Gate 2 no longer is the exception.
+      const refused = await post(api.origin, '/api/prototype/runs/gate2-lint/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Parece bom.' });
+      expect(refused.status).toBe(409);
+      expect(refused.payload.error).toContain('COPY-110');
+      expect(api.registry.get('gate2-lint')!.result!.approval).toBeUndefined();
+
+      // Sending it back is exactly what a captain should be able to do with it.
+      const rejected = await post(api.origin, '/api/prototype/runs/gate2-lint/gate', { approverRole: 'captain', decision: 'rejected', rationale: 'A cópia usa um termo proibido.' });
+      expect(rejected.status).toBe(200);
+      expect(rejected.payload.result!.approval).toMatchObject({ decision: 'rejected' });
+    } finally { await api.close(); }
+  });
+
+  it('approves a revision the prototype linter passes', async () => {
+    const api = await harness();
+    try {
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-clean' });
+      const review = await settled(api.origin, 'gate2-clean');
+      expect(review.result!.lint.filter((finding) => finding.severity === 'error')).toEqual([]);
+      const approved = await post(api.origin, '/api/prototype/runs/gate2-clean/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Revisado e aprovado.' });
+      expect(approved.status).toBe(200);
+      expect(approved.payload.result!.approval).toMatchObject({ decision: 'approved', approverRole: 'captain' });
     } finally { await api.close(); }
   });
 

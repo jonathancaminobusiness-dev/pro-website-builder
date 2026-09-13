@@ -3,10 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { ZodError } from 'zod';
 import { agentResultSchema, documentPathSchemas, documentRules, idempotencyKey, stageResultJsonSchemas, visualPropKeys, type AgentResult, type AgentTask } from '@pwb/domain';
+import { claudeModelFlags } from './claude-model.js';
 import type { ClaudeExecutor, ClaudeRunnerOptions, ModelProvider } from './model.js';
 
 const execFileAsync = promisify(execFile);
-const deniedTools = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
+/** The Claude worker boundary: no filesystem, no network, no sub-agent. A worker never reads, so `Read` is denied too. */
+export const CLAUDE_RUNNER_DENIED_TOOLS = 'Bash Read Write Edit Glob Grep WebFetch WebSearch Task TodoWrite NotebookEdit';
 export const CLAUDE_RUNNER_TIMEOUT_MS = 7 * 60_000;
 
 export const execFileExecutor = (maxBuffer: number): ClaudeExecutor => async (executable, args, options) => {
@@ -46,7 +48,8 @@ export class ClaudeRunner implements ModelProvider {
         const { stdout } = await this.options.execute(this.options.executable, [
           '-p', prompt, '--output-format', 'json', '--json-schema', JSON.stringify(stageResultJsonSchemas[task.stage]),
           '--session-id', randomUUID(), '--no-session-persistence', '--max-turns', String(this.options.maxTurns),
-          '--disallowed-tools', deniedTools,
+          '--disallowed-tools', CLAUDE_RUNNER_DENIED_TOOLS,
+          ...claudeModelFlags(),
         ], { timeoutMs: this.options.timeoutMs, ...(signal ? { signal } : {}) });
         const raw: unknown = JSON.parse(stdout);
         const structured = raw && typeof raw === 'object' && 'structured_output' in raw ? (raw as { structured_output: unknown }).structured_output : raw;

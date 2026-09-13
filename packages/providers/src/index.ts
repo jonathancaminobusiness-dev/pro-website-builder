@@ -1,3 +1,4 @@
+export * from './claude-model.js';
 export * from './claude-runner.js';
 export * from './codex-runner.js';
 export * from './fake-model.js';
