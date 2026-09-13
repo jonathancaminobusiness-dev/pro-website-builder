@@ -198,13 +198,13 @@ describe('Gate 2 API', () => {
     }) as ProjectRepository;
     const api = await harness({ decorate: faulty });
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-doomed' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-doomed', identityRunId: 'identity-chain' });
       const failed = await settled(api.origin, 'gate2-doomed');
       expect(failed.status).toBe('failed');
       expect(failed.error).toContain('o repositório recusou o evento de início');
 
       // The lane is still a lane: the next run measures and settles behind the one that blew up.
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-after' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-after', identityRunId: 'identity-chain' });
       const next = await settled(api.origin, 'gate2-after');
       expect(next.status).toBe('settled');
       expect(next.result?.gate).toBe('needs_review');
@@ -261,7 +261,7 @@ describe('Gate 2 API', () => {
   it('refuses to approve a revision the prototype linter rejects, and still lets the captain reject it', async () => {
     const api = await harness({ seed: createForbiddenCopyIR });
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-lint' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-lint', identityRunId: 'identity-chain' });
       const review = await settled(api.origin, 'gate2-lint');
       expect(review.result!.lint.some((finding) => finding.id === 'COPY-110' && finding.severity === 'error')).toBe(true);
 
@@ -281,7 +281,7 @@ describe('Gate 2 API', () => {
   it('approves a revision the prototype linter passes', async () => {
     const api = await harness();
     try {
-      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-clean' });
+      await post(api.origin, '/api/prototype/runs', { approverRole: 'captain', runId: 'gate2-clean', identityRunId: 'identity-chain' });
       const review = await settled(api.origin, 'gate2-clean');
       expect(review.result!.lint.filter((finding) => finding.severity === 'error')).toEqual([]);
       const approved = await post(api.origin, '/api/prototype/runs/gate2-clean/gate', { approverRole: 'captain', decision: 'approved', rationale: 'Revisado e aprovado.' });
@@ -369,7 +369,7 @@ describe('prototype registry provider recognition', () => {
     for (const name of ['Codex', 'codex ', 'claude', '']) {
       // `provider.ts` is the one place a name is recognised; a near miss is an
       // error here, not a silent deterministic run under the wrong alias.
-      expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), modelProvider: name as never }))
+      expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), identity: async () => undefined, modelProvider: name as never }))
         .toThrow(/Unknown model provider/);
     }
   });
@@ -377,16 +377,16 @@ describe('prototype registry provider recognition', () => {
   it('accepts every recognised name, and defaults to the fakes', async () => {
     const repo = await repository();
     for (const name of ['fake', 'claude-code', 'codex'] as const) {
-      expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), modelProvider: name })).not.toThrow();
+      expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), identity: async () => undefined, modelProvider: name })).not.toThrow();
     }
-    expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource() })).not.toThrow();
+    expect(() => new PrototypeRunRegistry({ repository: repo, evidence: new DerivedEvidenceSource(), identity: async () => undefined })).not.toThrow();
   });
 });
 
 describe('Gate 2 runs on the identity Gate 1 approved', () => {
   /** A Gate 1 execution over one ledger, with whatever raster provider the host has. */
   async function decidedIdentity(repository: ProjectRepository, runId: string, raster: HiggsfieldMcpProvider): Promise<IdentityRun> {
-    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), raster });
+    const run = new IdentityRun({ runId, repository, provider: new FakeIdentityProvider(), raster, modelAlias: 'fake' });
     await run.initialize();
     await run.start();
     await run.approve({ directionId: 'modular-technical', approverRole: 'captain', rationale: 'Aprovada.' });
@@ -532,7 +532,7 @@ describe('Gate 2 runs on the identity Gate 1 approved', () => {
 
     // Another process reads the same ledger: what was in flight is settled as
     // what became of it, so no revision is ever seeded from an image in limbo.
-    const restored = new IdentityRun({ runId: 'identity-restart', repository, provider: new FakeIdentityProvider() });
+    const restored = new IdentityRun({ runId: 'identity-restart', repository, provider: new FakeIdentityProvider(), modelAlias: 'fake' });
     expect(await restored.restore()).toBe(true);
     expect(restored.snapshot().assets.map((asset) => asset.status)).toEqual(['failed']);
 

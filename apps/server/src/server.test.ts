@@ -155,6 +155,10 @@ describe('local API', () => {
     expect(resumed.status).toBe(200);
     expect(((await resumed.json()) as { status: string }).status).toBe('needs_review');
     expect(await read()).toBe('needs_review');
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    db.sqlite.close();
+  });
+
   it('refuses the chain gates of an identity execution the captain has not started yet', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-api-chain-open-'));
     const db = openDatabase(join(dir, 'chain.sqlite'));
@@ -168,7 +172,7 @@ describe('local API', () => {
     await repository.saveVersion({ id: ir.meta.versionId, projectId: ir.meta.projectId, hash: 'h-identity', ir });
 
     const runs = new Map<string, FixtureRun>();
-    const build = async (): Promise<FixtureRun> => new FixtureRun({ repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
+    const build = async (): Promise<FixtureRun> => new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'exports')), provider: new FakeModelProvider() });
     const server = createApiServer({
       runs,
       createRun: async (id) => { if (await repository.getRun(id)) throw new RunConflictError(id); const run = await build(); await run.initialize(id); runs.set(id, run); return run; },

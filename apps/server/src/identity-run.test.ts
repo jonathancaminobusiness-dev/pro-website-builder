@@ -1274,6 +1274,9 @@ describe('identity api', () => {
       const finished = await settled(origin, 'immediate-start');
       expect(finished.status).toBe('needs_review');
       expect(finished.directions).toHaveLength(3);
+    });
+  });
+
   it('refuses to seed a prototype from a version two executions approved', async () => {
     await withServer(async (origin) => {
       const handoffs: string[] = [];

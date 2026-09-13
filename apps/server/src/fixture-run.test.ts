@@ -538,7 +538,7 @@ describe('the release gate reads the gates this document actually passed', () =>
     const dbPath = join(dir, 'ancestry.sqlite');
     const first = openDatabase(dbPath);
     const repository = new ProjectRepository(first);
-    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    const run = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     await run.initialize('run-ancestry');
     const root = run.snapshot().currentVersion;
     await run.runNext();
@@ -558,7 +558,7 @@ describe('the release gate reads the gates this document actually passed', () =>
     first.sqlite.close();
 
     const second = openDatabase(dbPath);
-    const restored = new FixtureRun({ repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    const restored = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(second), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     expect(await restored.restore('run-ancestry')).toBe(true);
     // The run stands on the branch the prototype gate was decided on, and that
     // branch descends from no approved identity, so the chain is open at the
@@ -575,7 +575,7 @@ describe('the release gate reads the gates this document actually passed', () =>
   it('opens the gate for a bundle that descends from both decided versions', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pwb-ancestry-ok-'));
     const db = openDatabase(join(dir, 'ancestry.sqlite'));
-    const run = new FixtureRun({ repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    const run = new FixtureRun({ modelProvider: 'fake', repository: new ProjectRepository(db), release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     await run.initialize('run-ancestry-ok');
     await atFinalizationGate(run);
     const approved = run.snapshot().approvals.map((entry) => entry.versionId);
@@ -614,7 +614,7 @@ describe('a run of the identity chain', () => {
     await repository.appendEvent({ id: 'event-gate1', runId: 'identity-chain', type: 'identity.gate.approved', payload: { versionId: identity.meta.versionId } });
     await repository.createApproval({ id: 'identity-chain-identity-approval-0', runId: 'identity-chain', projectId: identity.meta.projectId, stage: 'identity', approverRole: 'captain', versionId: identity.meta.versionId, versionHash: 'h-identity', decision: 'approved', rationale: 'Gate 1 decidido.' });
 
-    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    const run = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     expect(await run.restore('identity-chain')).toBe(true);
     // The prototype is measured by the run seeded from this identity, so the
     // generic stage neither produces it nor closes its gate here.
@@ -634,7 +634,7 @@ describe('a run of the identity chain', () => {
     // was still holding the pre-decision snapshot.
     await repository.createApproval({ id: 'gate2-run-prototype-1-rejected', runId: 'identity-chain', projectId: createFixtureIR().meta.projectId, stage: 'prototype', approverRole: 'captain', versionId: prototypeVersionId, versionHash: 'h-prototype', decision: 'rejected', rationale: 'Devolvido para revisão.' });
 
-    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    const run = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     expect(await run.restore('identity-chain')).toBe(true);
     expect(run.releaseBlocker()).toMatch(/devolvida para revisão/);
     // And the screen reads the same verdict: nothing credits Gate 2 here.
@@ -656,7 +656,7 @@ describe('a run of the identity chain', () => {
     await repository.saveVersion({ id: 'v-prototype-b', projectId: sibling.meta.projectId, parentId: identityVersionId, hash: 'h-prototype-b', ir: sibling });
     await repository.createApproval({ id: 'gate2-run-b-prototype-0-rejected', runId: 'identity-chain', projectId: sibling.meta.projectId, stage: 'prototype', approverRole: 'captain', versionId: 'v-prototype-b', versionHash: 'h-prototype-b', decision: 'rejected', rationale: 'Esta revisão volta para o protótipo.' });
 
-    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    const run = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     expect(await run.restore('identity-chain')).toBe(true);
     // The verdict the screen reads credits the approved revision and says nothing
     // about the sibling, so the finalization stage is offered rather than locked.
@@ -677,7 +677,7 @@ describe('a run of the identity chain', () => {
     const repository = new ProjectRepository(db);
     const { identityVersionId, prototypeVersionId } = await seedChain(repository);
 
-    const run = new FixtureRun({ repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
+    const run = new FixtureRun({ modelProvider: 'fake', repository, release: releaseOptions(join(dir, 'releases')), provider: new FakeModelProvider() });
     expect(await run.restore('identity-chain')).toBe(true);
     const finalized = await run.runNext();
     expect(finalized.currentStage).toBe('finalization');
