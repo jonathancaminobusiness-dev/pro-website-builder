@@ -34,10 +34,35 @@ async function serveSeededRun(page: Page): Promise<() => Promise<void>> {
   // The run always starts from an identity Gate 1 approved; here that identity is
   // the revision with the defect, handed over exactly as the server hands one on.
   const approved = createOffRhythmControlIR();
+  const approvedAt = new Date().toISOString();
   const registry = new PrototypeRunRegistry({
     repository: new ProjectRepository(database),
     evidence: new DerivedEvidenceSource(),
-    identity: async () => ({ identityRunId: 'gate1-seeded', projectId: approved.meta.projectId, versionId: approved.meta.versionId, identityHash: identityHash(approved), approvedAt: new Date().toISOString(), stale: false, ir: approved, assets: [] }),
+    identity: async () => ({ identityRunId: 'gate1-seeded', projectId: approved.meta.projectId, versionId: approved.meta.versionId, identityHash: identityHash(approved), approvedAt, stale: false, ir: approved, assets: [] }),
+  });
+
+  // The screen starts a run on the Gate 1 execution this browser last decided,
+  // exactly as the captain's own does, so the browser arrives holding that id and
+  // the server answers for it. Forget either half and the Studio drops the run it
+  // cannot find, and Gate 2 is left with no identity to measure.
+  // A serialized browser function is transpiled here, so the script travels as source.
+  await page.addInitScript({ content: `try { window.localStorage.setItem('pwb.gate1.runId', 'gate1-seeded'); } catch { /* an origin without storage decides nothing */ }` });
+
+  await page.route('**/api/identity/runs/**', async (route) => {
+    const decided = {
+      runId: 'gate1-seeded', status: 'approved', baseVersionId: approved.meta.versionId, briefing: 'Briefing aprovado.',
+      directions: [], setCritique: { scores: [], rubricGaps: [], unscoredDimensions: [], blocking: [], abstained: false },
+      gate: { state: 'closed', record: { directionId: 'modular-technical', versionId: approved.meta.versionId, identityHash: identityHash(approved), rationale: 'Aprovada.', approvedAt } },
+      approvals: [{ stage: 'identity', decision: 'approved', versionId: approved.meta.versionId, rationale: 'Aprovada.' }],
+      assets: [], failures: [],
+      handoff: { directionId: 'modular-technical', versionId: approved.meta.versionId, identityHash: identityHash(approved), approvedAt, stale: false },
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+      headers: { 'access-control-allow-origin': new URL(page.url()).origin },
+      body: JSON.stringify(decided),
+    });
   });
 
   await page.route('**/api/prototype/**', async (route) => {
